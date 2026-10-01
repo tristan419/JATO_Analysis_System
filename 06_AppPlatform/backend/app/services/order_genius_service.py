@@ -39,28 +39,8 @@ from app.services.powertrain_normalizer import normalize_powertrain
 
 
 def _extract_canonical_pt(sku: object) -> str:
-    """Extract canonical powertrain from SKU data — model name is authoritative over DB field."""
-    raw_pt = str(getattr(sku, "powertrain", "") or "").upper()
-    model = str(getattr(sku, "model_name", "") or "").upper()
-    combined = f"{model} {raw_pt}"
-    # Order: PHEV/SHS before HEV, BEV before EV
-    if "PHEV" in combined or "SHS" in combined or "PLUG" in combined:
-        return "PHEV"
-    if "MHEV" in combined or "MILD HYBRID" in combined:
-        return "MHEV"
-    if "REEV" in combined or "EREV" in combined or "RANGE EXTEND" in combined:
-        return "REEV"
-    if "FCEV" in combined or "FCV" in combined or "FUEL CELL" in combined:
-        return "FCV"
-    if "HEV" in combined or "HYBRID ELECTRIC" in combined:
-        return "HEV"
-    if "BEV" in combined or "BATTERY ELECTRIC" in combined:
-        return "BEV"
-    if "EV" in combined or "ELECTRIC" in combined:
-        return "BEV"
-    if "ICE" in combined or "PETROL" in combined or "DIESEL" in combined or "LPG" in combined:
-        return "ICE"
-    return normalize_powertrain(raw_pt) if raw_pt else "Other"
+    """Share BOM's saved-powertrain precedence with Matrix and option filters."""
+    return repo._extract_canonical_powertrain(sku)
 
 
 def _effective_colour_tier(sku: object) -> str | None:
@@ -753,9 +733,13 @@ def _build_matrix_for_country(
                 repo.list_country_template_fob_periods(session, country_code, sku.bom_template),
                 repo.has_country_template_fob_periods(session, country_code, sku.bom_template),
             )
+    # Load saved records before hiding unpriced materials; history is not a quote.
+    all_quantities = repo.list_quantities_for_country_year(session, country_code, year)
+    quantity_codes = {quantity.material_code for quantity in all_quantities}
     skus_with_fob = [
         sku for sku in active_skus
         if sku.material_code in fob_map
+        or sku.material_code in quantity_codes
         or sku.material_code in conflict_codes
         or dated_fob_by_material[sku.material_code][2] is not None
         or schedules[sku.bom_template][1]
@@ -766,9 +750,6 @@ def _build_matrix_for_country(
     ]
 
     # Get quantities for this country+year
-    all_quantities = repo.list_quantities_for_country_year(
-        session, country_code, year
-    )
     qty_map: dict[tuple[str, int], OrderQuantityCell] = {}
     for q in all_quantities:
         qty_map[(q.material_code, q.order_month)] = q

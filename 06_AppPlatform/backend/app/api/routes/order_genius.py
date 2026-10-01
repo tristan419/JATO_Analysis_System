@@ -125,16 +125,7 @@ def _parse_lifecycle_date(
 
 
 def _country_template_fob_period_payload(row: CountryTemplateFobPeriod) -> dict:
-    return {
-        "periodId": str(row.country_template_fob_period_id),
-        "countryCode": row.country_code,
-        "bomTemplate": row.bom_template,
-        "validFrom": row.valid_from.isoformat(),
-        "validTo": row.valid_to.isoformat() if row.valid_to else None,
-        "baseFobEur": float(row.base_fob_eur),
-        "remark": row.remark,
-        "rowVersion": row.row_version,
-    }
+    return repo.country_template_fob_period_payload(row)
 
 
 def _export_filter_params(body: dict) -> dict:
@@ -1084,28 +1075,6 @@ def get_bom_template_fob_periods(
             "usesPeriods": repo.has_country_template_fob_periods(session, country, template)}
 
 
-@router.post("/bom-templates/fob-periods/restore-default")
-def restore_bom_template_default_fob(body: dict, session: Session = Depends(get_db_session), user=Depends(require_min_role("editor"))) -> dict:
-    country = clean_text(body.get("countryCode")).upper()
-    template = clean_text(body.get("bomTemplate")).upper()
-    preview_only = body.get("previewOnly") is True
-    if not country or not template or (not preview_only and body.get("confirmed") is not True):
-        raise HTTPException(status_code=400, detail="Confirm country, template and restoring undated default FOB")
-    validate_country_access(session, user.name, user.role, country)
-    try:
-        base = repo.restore_country_template_default_fob(
-            session, country, template, user.name, preview_only=preview_only,
-            expected_base=body.get("expectedBaseFobEur"),
-        )
-        if preview_only:
-            return {"restored": False, "baseFobEur": base}
-        session.commit()
-        return {"restored": True, "baseFobEur": base}
-    except (ValueError, LookupError) as exc:
-        session.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
 @router.get("/bom-templates/lifecycle-review")
 def get_bom_template_lifecycle_review(
     warning_days: int = Query(default=60, alias="warningDays", ge=0, le=365),
@@ -1184,6 +1153,8 @@ def put_bom_template_fob_period(
 def delete_bom_template_fob_period(
     period_id: UUID,
     row_version: int = Query(alias="rowVersion"),
+    preview_only: bool = Query(default=False, alias="previewOnly"),
+    fingerprint: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
@@ -1192,13 +1163,18 @@ def delete_bom_template_fob_period(
         raise HTTPException(status_code=404, detail="FOB period not found")
     validate_country_access(session, user.name, user.role, row.country_code)
     try:
+        preview = repo.preview_country_template_fob_period_deletion(session, period_id, row_version)
+        if preview_only:
+            return {"deleted": False, "periodId": str(period_id), **preview}
+        if fingerprint != preview["fingerprint"]:
+            raise RuntimeError("FOB schedule or default base changed; preview and confirm again / 期间或长期基准已变化，请重新预览确认")
         repo.delete_country_template_fob_period(session, period_id, row_version)
         session.commit()
-        return {"deleted": True, "periodId": str(period_id)}
+        return {"deleted": True, "periodId": str(period_id), **preview}
     except LookupError as exc:
         session.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -2040,7 +2016,7 @@ def patch_sku_metadata(
     material_code: str,
     body: dict,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Update shared product metadata for one or more material SKUs."""
     material_codes_raw = body.get("materialCodes")
@@ -2077,18 +2053,38 @@ def patch_sku_metadata(
             detail=f"Blank metadata fields: {', '.join(blank_fields)}",
         )
 
-    updated = repo.update_sku_metadata(
-        session,
-        material_codes,
-        brand=values["brand"],
-        model_name=values["model_name"],
-        version=values["version"],
-        powertrain=values["powertrain"],
-    )
-    if updated == 0:
-        raise HTTPException(status_code=404, detail="SKU not found")
-    session.commit()
-    return {"materialCodes": material_codes, "updated": updated}
+    try:
+        if "remark" in body:
+            versions = body.get("rowVersions")
+            if not isinstance(versions, dict):
+                raise HTTPException(status_code=400, detail="rowVersions are required when saving remarks")
+            remark = clean_text(body.get("remark"))
+            for code in material_codes:
+                sku = repo.get_sku_by_material_code(session, code)
+                if sku is None:
+                    raise HTTPException(status_code=404, detail="SKU not found")
+                if clean_text(sku.remark) == remark:
+                    continue
+                expected_version = versions.get(code)
+                if not isinstance(expected_version, int):
+                    raise HTTPException(status_code=409, detail="Product remark changed; refresh before saving")
+                update_remark(session, code, remark, user.name, expected_version)
+        updated = repo.update_sku_metadata(session, material_codes, **values)
+        if updated == 0:
+            raise HTTPException(status_code=404, detail="SKU not found")
+        sku = repo.get_sku_by_material_code(session, base_code)
+        product_fields = {
+            "brand": sku.brand, "modelName": sku.model_name,
+            "version": sku.version, "powertrain": repo._extract_canonical_powertrain(sku),
+        }
+        session.commit()
+        return {"materialCodes": material_codes, "updated": updated, "productFields": product_fields}
+    except HTTPException:
+        session.rollback()
+        raise
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/bom-admin")
@@ -2109,7 +2105,8 @@ def get_bom_admin(
     )
     return {
         "items": items,
-        "countries": countries,
+        "countries": list(dict.fromkeys(["NL", country.upper()])) if country else countries,
+        "activeFobCountries": countries,
         "fobConflicts": fob_conflicts,
     }
 

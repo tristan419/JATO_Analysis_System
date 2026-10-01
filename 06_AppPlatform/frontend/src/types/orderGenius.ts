@@ -106,6 +106,14 @@ export interface CountryTemplateFobPeriod {
   rowVersion: number;
 }
 
+export interface FobPeriodDeletionPreview {
+  deleted: boolean;
+  periodId: string;
+  fingerprint: string;
+  lastPeriod: boolean;
+  defaultBaseFobEur: number | null;
+}
+
 export interface BomTemplateLifecycleUpdateRequest {
   lifecycleStatus: "active" | "phase_out" | "historical";
   effectiveFrom?: string | null;

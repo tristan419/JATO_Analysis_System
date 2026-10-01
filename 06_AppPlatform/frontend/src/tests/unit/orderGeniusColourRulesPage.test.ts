@@ -47,8 +47,8 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("requestedSearch === undefined");
     expect(pageSource).toContain("latestLoadKeyRef.current = loadKey;");
     expect(pageSource).toContain("pendingLoadKeyRef.current = loadKey;");
-    expect(pageSource).toContain("if (latestLoadKeyRef.current !== loadKey) return;");
-    expect(pageSource).toContain("void load(pendingLoadKey);");
+    expect(pageSource.includes("if (latestLoadKeyRef.current === loadKey) {")).toBe(true);
+    expect(pageSource.includes("loaded = await load(pendingLoadKey);")).toBe(true);
     expect(pageSource).toContain("void load(nextSearch);");
     expect(pageSource).toContain("await load(\"\");");
     expect(pageSource).toContain("load(debouncedSearch);");

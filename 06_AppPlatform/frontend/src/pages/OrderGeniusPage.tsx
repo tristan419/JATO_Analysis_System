@@ -62,6 +62,7 @@ import type {
   CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
   CountryTemplateFobPeriod,
+  FobPeriodDeletionPreview,
   MaterialSkuMatrixRow,
   MaterialUploadPreview,
   MatrixResponse,
@@ -322,10 +323,11 @@ function quantityCellKey(
   countryCode: string | null | undefined,
   materialCode: string,
   month: number,
+  year: number,
 ): string {
   const country = String(countryCode || "").trim().toUpperCase();
   const material = String(materialCode || "").trim().toUpperCase();
-  return `${country}|${material}|${month}`;
+  return `${year}|${country}|${material}|${month}`;
 }
 
 function patchMatrixQuantityCell(
@@ -382,6 +384,10 @@ function suggestedOrderingAccountCode(countries: string[]): string {
 }
 
 type MatrixRowWithCountry = MaterialSkuMatrixRow & { _countryCode?: string; sheet_name?: string | null };
+function matrixDisplayFob(row: MaterialSkuMatrixRow, month: number | null): number | null {
+  const cell = month == null ? undefined : row.months[String(month)];
+  return cell && Object.prototype.hasOwnProperty.call(cell, "fobEur") ? cell.fobEur ?? null : row.fobEur ?? null;
+}
 type ProductGroupEntry = [string, MatrixRowWithCountry[]];
 
 interface PiBatchForm {
@@ -917,9 +923,6 @@ export function OrderGeniusPage() {
   // ── Load options (use primary country for filter dropdowns) ────────
   useEffect(() => {
     if (!primaryCountry) return;
-    setLoading(true);
-    setError("");
-    setMatrixConflictNotice([]);
     api
       .getOrderGeniusOptions({
         country: primaryCountry,
@@ -930,20 +933,20 @@ export function OrderGeniusPage() {
         colour: colourFilter || undefined,
       })
       .then(setOptions)
-      .catch((e: unknown) => setError(getErrorMessage(e)))
-      .finally(() => setLoading(false));
+      .catch((e: unknown) => setError(getErrorMessage(e)));
   }, [primaryCountry, brandFilter, modelFilter, powertrainFilter, versionFilter, colourFilter]);
 
   // ── Load matrices for all selected countries ────────────────────────
-  const loadMatrices = useCallback(() => {
+  const loadMatrices = useCallback((): Promise<boolean> => {
     const requestId = matrixRequestIdRef.current + 1;
     matrixRequestIdRef.current = requestId;
     if (selectedCountries.length === 0) {
       setMatrices({});
       setLoading(false);
-      return;
+      return Promise.resolve(true);
     }
     setLoading(true);
+    setPiPlanLoading(true);
     setError("");
     const params = {
       year: selectedYear,
@@ -956,10 +959,10 @@ export function OrderGeniusPage() {
       selectionDate: selectionDate || undefined,
       includeHistorical,
     };
-    void api
+    return api
       .getOrderGeniusMatrixBatch({ countries: selectedCountries, ...params })
       .then((response) => {
-        if (requestId !== matrixRequestIdRef.current) return;
+        if (requestId !== matrixRequestIdRef.current) return false;
         const next: Record<string, MatrixResponse> = {};
         for (const country of selectedCountries) {
           const matrix = response.matrices[country];
@@ -969,16 +972,19 @@ export function OrderGeniusPage() {
         setMatrixConflictNotice(
           Object.values(response.matrices).flatMap((matrix) => matrix.fobConflicts || []),
         );
-        if (Object.keys(next).length === 0) {
-          const firstError = Object.values(response.errors)[0];
-          if (firstError) setError(firstError);
-        }
+        const firstError = Object.values(response.errors)[0];
+        if (firstError) setError(firstError);
+        return !firstError;
       })
       .catch((e: unknown) => {
         if (requestId === matrixRequestIdRef.current) setError(getErrorMessage(e));
+        return false;
       })
       .finally(() => {
-        if (requestId === matrixRequestIdRef.current) setLoading(false);
+        if (requestId === matrixRequestIdRef.current) {
+          setLoading(false);
+          setPiBatchRefreshKey((key) => key + 1);
+        }
       });
   }, [
     selectedCountries, selectedYear, brandFilter, modelFilter,
@@ -1022,8 +1028,18 @@ export function OrderGeniusPage() {
 
   // ── Grid data + cell editing ──────────────────────────────────────
 
+  const visibleMatrixRows = useMemo(() => combinedMatrix.rows.filter((row) => {
+    if (selectedMonth == null || row.months?.[String(selectedMonth)]?.isEditable !== false) return true;
+    if (row.fobConflict || /^(Missing|Conflicting)/.test(row.months[String(selectedMonth)]?.reason || "")) return true;
+    const key = quantityCellKey(row._countryCode, row.materialCode, selectedMonth, selectedYear);
+    if ((row.months[String(selectedMonth)]?.quantity ?? 0) > 0 || Object.prototype.hasOwnProperty.call(quantityDrafts, key)) return true;
+    const plan = piAllocationPlans[row._countryCode || primaryCountry];
+    return plan?.year === selectedYear && plan.month === selectedMonth
+      && plan.existingLines.some((line) => line.materialCode === row.materialCode);
+  }), [combinedMatrix.rows, piAllocationPlans, primaryCountry, quantityDrafts, selectedMonth, selectedYear]);
+
   const flatRows = useMemo<OrderGeniusGridRow[]>(() => {
-    const remarkByTemplate = buildMaterialTemplateRemarkMap(combinedMatrix.rows);
+    const remarkByTemplate = buildMaterialTemplateRemarkMap(visibleMatrixRows);
 
     const bomTemplateForRow = (row: MatrixRowWithCountry): string => materialTemplateForRow(row);
 
@@ -1041,7 +1057,7 @@ export function OrderGeniusPage() {
     };
 
     const getEffectiveQuantity = (r: MatrixRowWithCountry, month: number): number => {
-      const stateKey = quantityCellKey(r._countryCode, r.materialCode, month);
+      const stateKey = quantityCellKey(r._countryCode, r.materialCode, month, selectedYear);
       if (Object.prototype.hasOwnProperty.call(quantityDrafts, stateKey)) {
         return quantityDrafts[stateKey] ?? 0;
       }
@@ -1059,8 +1075,7 @@ export function OrderGeniusPage() {
         colourTier: r.colourTier,
         colourHex: r.colourHex,
         interiorColorName: r.interiorColorName,
-        fobEur: selectedMonth && Object.prototype.hasOwnProperty.call(r.months[String(selectedMonth)] || {}, "fobEur")
-          ? (r.months[String(selectedMonth)]?.fobEur ?? null) : r.fobEur ?? null,
+        fobEur: matrixDisplayFob(r, selectedMonth),
         _months: r.months,
         lifecycleStatus: r.lifecycleStatus,
         editable: r.editable,
@@ -1079,7 +1094,7 @@ export function OrderGeniusPage() {
       for (let m = 1; m <= 12; m++) {
         const monthKey = `month_${m}` as `month_${number}`;
         const md = months[String(m)];
-        const stateKey = quantityCellKey(r._countryCode, r.materialCode, m);
+        const stateKey = quantityCellKey(r._countryCode, r.materialCode, m, selectedYear);
         const quantity = getEffectiveQuantity(r, m);
         const amount = quantity * (md?.fobEur ?? (md?.isEditable === false ? 0 : r.fobEur ?? 0));
         row[monthKey] = quantity;
@@ -1093,26 +1108,13 @@ export function OrderGeniusPage() {
       return row;
     };
 
-    // Extract canonical powertrain: model name is the authoritative source (DB field may be stale)
+    // The saved product field is authoritative; names only fill legacy missing values.
     const canonPt = (row: MatrixRowWithCountry): string => {
-      const rawPt = (row.powertrain || "").toUpperCase();
-      const model = (row.modelName || "").toUpperCase();
-      const sheet = (row.sheet_name || "").toUpperCase();
-      const combined = `${sheet} ${model} ${rawPt}`;
-      // Order matters: PHEV/SHS before HEV, BEV before EV
-      if (combined.includes("PHEV") || combined.includes("SHS") || combined.includes("PLUG")) return "PHEV";
-      if (combined.includes("MHEV") || combined.includes("MILD HYBRID")) return "MHEV";
-      if (combined.includes("REEV") || combined.includes("EREV") || combined.includes("RANGE EXTEND")) return "REEV";
-      if (combined.includes("FCEV") || combined.includes("FCV") || combined.includes("FUEL CELL")) return "FCV";
-      if (combined.includes("HEV") || combined.includes("HYBRID ELECTRIC")) return "HEV";
-      if (combined.includes("BEV") || combined.includes("BATTERY ELECTRIC")) return "BEV";
-      if (combined.includes("EV") || combined.includes("ELECTRIC")) return "BEV";
-      if (combined.includes("ICE") || combined.includes("PETROL") || combined.includes("DIESEL") || combined.includes("GASOLINE") || combined.includes("LPG") || combined.includes("COMBUSTION")) return "ICE";
-      return rawPt || "Other";
+      return getBomAdminPowertrainGroup(row.modelName, row.powertrain);
     };
 
     if (!groupByProduct) {
-      return combinedMatrix.rows.map((row) => makeRow(row));
+      return visibleMatrixRows.map((row) => makeRow(row));
     }
 
     const aggregateRows = (rows: MatrixRowWithCountry[]) => {
@@ -1132,8 +1134,9 @@ export function OrderGeniusPage() {
           ttl += quantity;
           ttlAmount += amount;
         }
-        if (fob > 0 && (floorFob === null || fob < floorFob)) {
-          floorFob = fob;
+        const displayFob = matrixDisplayFob(row, selectedMonth);
+        if (displayFob != null && displayFob > 0 && (floorFob === null || displayFob < floorFob)) {
+          floorFob = displayFob;
         }
       }
       return { ttl, ttlAmount, floorFob, monthlySums, monthlyAmounts };
@@ -1289,7 +1292,7 @@ export function OrderGeniusPage() {
     // Deduplicate by full row identity
     const seen = new Set<string>();
     const deduped: MatrixRowWithCountry[] = [];
-    for (const r of combinedMatrix.rows) {
+    for (const r of visibleMatrixRows) {
       const dk = `${r._countryCode || ""}|${r.materialCode}|${r.lifecycleStatus}|${r.modelName}|${r.version}|${r.colour}|${r.interiorColorName || ""}`;
       if (!seen.has(dk)) { seen.add(dk); deduped.push(r); }
     }
@@ -1339,7 +1342,7 @@ export function OrderGeniusPage() {
       }
     }
     return result;
-  }, [cellErrors, combinedMatrix.rows, consolidatedView, expandedProductGroups, groupByProduct, quantityDrafts, savingCells, selectedCountries.length, selectedMonth]);
+  }, [cellErrors, visibleMatrixRows, consolidatedView, expandedProductGroups, groupByProduct, quantityDrafts, savingCells, selectedCountries.length, selectedMonth, selectedYear]);
 
   // Stable refs so callback identity doesn't change on re-render (prevents grid flash)
   const selCountriesRef = useRef(selectedCountries); selCountriesRef.current = selectedCountries;
@@ -1356,27 +1359,23 @@ export function OrderGeniusPage() {
     });
   }, []);
 
-  const handleCellValueChanged = useCallback(
-    async (event: CellValueChangedEvent<OrderGeniusGridRow>) => {
-      const { data, colDef, newValue } = event;
-      const field = colDef.field as string;
-      if (!field?.startsWith("month_") || !data) return;
+  const saveQuantityCell = useCallback(
+    async (data: OrderGeniusGridRow, month: number, newValue: unknown, oldValue: unknown) => {
       if (data.__type === "groupHeader") return;
-      const monthField = field as `month_${number}`;
-
-      const month = parseInt(field.replace("month_", ""), 10);
+      const monthField = `month_${month}` as `month_${number}`;
+      const year = selYearRef.current;
       const countryCode = data._countryCode || selCountriesRef.current[0] || "SE";
-      const key = quantityCellKey(countryCode, data.materialCode, month);
-      const oldRowVersion = quantityVersionRef.current[key] ?? data._versions[field] ?? 0;
-      const oldQuantityRaw = Number(event.oldValue);
-      const oldQuantity = Number.isFinite(oldQuantityRaw) ? oldQuantityRaw : null;
+      const key = quantityCellKey(countryCode, data.materialCode, month, year);
+      const oldRowVersion = quantityVersionRef.current[key] ?? data._versions[monthField] ?? 0;
+      const oldQuantityRaw = Number(oldValue);
+      const oldQuantity = oldValue != null && Number.isFinite(oldQuantityRaw) ? oldQuantityRaw : null;
       const nextQuantityRaw = Number(newValue);
       const qty = Number.isFinite(nextQuantityRaw) ? Math.max(0, nextQuantityRaw) : 0;
       if (oldQuantity != null && qty === oldQuantity) return;
 
       const clearDraft = () => {
         setQuantityDrafts((prev) => {
-          if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
+          if (prev[key] !== qty) return prev;
           const next = { ...prev };
           delete next[key];
           return next;
@@ -1385,6 +1384,7 @@ export function OrderGeniusPage() {
 
       setQuantityDrafts((prev) => ({ ...prev, [key]: qty }));
       setSavingCells((prev) => new Set(prev).add(key));
+      setPiPlanLoading(true);
       setCellErrors((prev) => {
         const next = { ...prev };
         delete next[key];
@@ -1398,7 +1398,7 @@ export function OrderGeniusPage() {
 
       const payload: QuantityCellUpdate = {
         countryCode,
-        orderYear: selYearRef.current,
+        orderYear: year,
         orderMonth: month,
         materialCode: data.materialCode,
         quantity: qty,
@@ -1411,7 +1411,7 @@ export function OrderGeniusPage() {
         data[monthField] = result.quantity;
         data._versions[monthField] = result.rowVersion;
         quantityVersionRef.current[key] = result.rowVersion;
-        setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
+        if (selYearRef.current === year) setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
           quantity: result.quantity,
           isEditable: true,
           rowVersion: result.rowVersion,
@@ -1428,7 +1428,7 @@ export function OrderGeniusPage() {
           try {
             const latestMatrix = await api.getOrderGeniusMatrix({
               country: countryCode,
-              year: selYearRef.current,
+              year,
               materialCodeSearch: data.materialCode,
               selectionDate: selectionDateRef.current || undefined,
             });
@@ -1448,7 +1448,7 @@ export function OrderGeniusPage() {
             data[monthField] = retryResult.quantity;
             data._versions[monthField] = retryResult.rowVersion;
             quantityVersionRef.current[key] = retryResult.rowVersion;
-            setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
+            if (selYearRef.current === year) setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
               quantity: retryResult.quantity,
               isEditable: true,
               rowVersion: retryResult.rowVersion,
@@ -1471,6 +1471,7 @@ export function OrderGeniusPage() {
           setCellErrors((prev) => ({ ...prev, [key]: msg }));
         }
       } finally {
+        setPiBatchRefreshKey((current) => current + 1);
         setSavingCells((prev) => {
           const next = new Set(prev);
           next.delete(key);
@@ -1480,6 +1481,12 @@ export function OrderGeniusPage() {
     },
     [], // stable — all dynamic values via refs
   );
+
+  const handleCellValueChanged = useCallback((event: CellValueChangedEvent<OrderGeniusGridRow>) => {
+    const field = event.colDef.field;
+    if (!event.data || !field?.startsWith("month_")) return;
+    return saveQuantityCell(event.data, Number(field.slice(6)), event.newValue, event.oldValue);
+  }, [saveQuantityCell]);
 
   // ── Consolidated planning view (multi-country) ──────────────────
   const displayRows = useMemo(() => {
@@ -1566,7 +1573,7 @@ export function OrderGeniusPage() {
       const rowKey = `${row._countryCode || ""}|${row.materialCode}|${row.lifecycleStatus}|${row.modelName}|${row.version}|${row.colour}|${row.interiorColorName || ""}`;
       if (seen.has(rowKey)) continue;
       seen.add(rowKey);
-      const stateKey = quantityCellKey(row._countryCode, row.materialCode, selectedMonth);
+      const stateKey = quantityCellKey(row._countryCode, row.materialCode, selectedMonth, selectedYear);
       const quantity = Object.prototype.hasOwnProperty.call(quantityDrafts, stateKey)
         ? quantityDrafts[stateKey] ?? 0
         : row.months?.[String(selectedMonth)]?.quantity ?? 0;
@@ -1580,9 +1587,13 @@ export function OrderGeniusPage() {
         colourTier: row.colourTier,
         colourHex: row.colourHex,
         interiorColorName: row.interiorColorName,
-        fobEur: row.fobEur ?? null,
+        fobEur: matrixDisplayFob(row, selectedMonth),
+        _months: row.months,
         lifecycleStatus: row.lifecycleStatus,
         editable: row.editable,
+        historicalBackfill: row.historicalBackfill,
+        priceSource: row.priceSource,
+        historicalSurchargeReview: row.historicalSurchargeReview,
         remark: remarkByTemplate.get(materialTemplateForRow(row)) ?? row.remark ?? undefined,
         _countryCode: row._countryCode,
         _versions: {},
@@ -1590,18 +1601,25 @@ export function OrderGeniusPage() {
         _saving: new Set(),
       };
       candidateRow[`month_${selectedMonth}`] = quantity;
+      candidateRow._versions[`month_${selectedMonth}`] = row.months?.[String(selectedMonth)]?.rowVersion ?? 0;
       result.push(candidateRow);
     }
     return result;
-  }, [combinedMatrix.rows, quantityDrafts, selectedMonth]);
+  }, [combinedMatrix.rows, quantityDrafts, selectedMonth, selectedYear]);
+
+  const currentQuantityKeys = piCandidateRows.map((row) => quantityCellKey(row._countryCode, row.materialCode, selectedMonth ?? 0, selectedYear));
+  const quantitySaving = currentQuantityKeys.some((key) => savingCells.has(key));
+  const quantityError = currentQuantityKeys.map((key) => cellErrors[key]).find(Boolean);
 
   useEffect(() => {
     if (selectedMonth == null || selectedCountries.length === 0) {
       setPiAllocationPlans({});
       setPiExistingBatches([]);
       setPiPlanError("");
+      setPiPlanLoading(false);
       return;
     }
+    if (quantitySaving) return;
     let cancelled = false;
     setPiPlanLoading(true);
     setPiPlanError("");
@@ -1654,7 +1672,13 @@ export function OrderGeniusPage() {
     return () => {
       cancelled = true;
     };
-  }, [piBatchRefreshKey, selectedCountries, selectedMonth, selectedYear]);
+  }, [piBatchRefreshKey, selectedCountries, selectedMonth, selectedYear, quantitySaving]);
+
+  const piReady = selectedMonth != null && !loading && !error && !quantitySaving && !quantityError && !piPlanLoading && !piPlanError
+    && selectedCountries.length > 0 && selectedCountries.every((country) => {
+      const plan = piAllocationPlans[country];
+      return plan?.countryCode === country && plan.year === selectedYear && plan.month === selectedMonth;
+    });
 
   const piPlanLinesByCountryMaterial = useMemo(() => {
     const result = new Map<string, VehicleAllocationPlanLine>();
@@ -1682,17 +1706,18 @@ export function OrderGeniusPage() {
     return result;
   }, [piAllocationPlans]);
 
-  const piPlanTotals = useMemo(() => Object.values(piAllocationPlans).reduce((totals, plan) => ({
-    selectedQuantity: totals.selectedQuantity + plan.totals.selectedQuantity,
-    generatedQuantity: totals.generatedQuantity + plan.totals.generatedQuantity,
-    remainingQuantity: totals.remainingQuantity + plan.totals.remainingQuantity,
-    overGeneratedQuantity: totals.overGeneratedQuantity + plan.totals.overGeneratedQuantity,
-  }), {
-    selectedQuantity: 0,
-    generatedQuantity: 0,
-    remainingQuantity: 0,
-    overGeneratedQuantity: 0,
-  }), [piAllocationPlans]);
+  const piPlanTotals = useMemo(() => {
+    const totals = { selectedQuantity: 0, generatedQuantity: 0, remainingQuantity: 0, overGeneratedQuantity: 0 };
+    for (const row of piCandidateRows) {
+      const line = piPlanLinesByCountryMaterial.get(`${row._countryCode || primaryCountry}|${row.materialCode}`);
+      if (!line) continue;
+      totals.selectedQuantity += line.selectedQuantity;
+      totals.generatedQuantity += line.generatedQuantity;
+      totals.remainingQuantity += line.remainingQuantity;
+      totals.overGeneratedQuantity += line.overGeneratedQuantity;
+    }
+    return totals;
+  }, [piCandidateRows, piPlanLinesByCountryMaterial, primaryCountry]);
 
   const remainingPiQuantity = useCallback((row: OrderGeniusGridRow): number => {
     const countryCode = row._countryCode || primaryCountry;
@@ -1707,6 +1732,8 @@ export function OrderGeniusPage() {
       && row.__type !== "consolidated_parent"
       && (row.lifecycleStatus !== "historical" || (includeHistorical && row.historicalBackfill === true))
       && (row[monthField] || 0) > 0
+      && (row.fobEur ?? 0) > 0
+      && row._months?.[String(selectedMonth)]?.isEditable !== false
       && remainingPiQuantity(row) > 0,
     );
   }, [includeHistorical, piCandidateRows, remainingPiQuantity, selectedMonth]);
@@ -1718,6 +1745,26 @@ export function OrderGeniusPage() {
     }
     return result;
   }, [selectablePiRows]);
+
+  const selectablePiRowIds = useMemo(() => new Set(piReady ? selectablePiRowsById.keys() : []), [piReady, selectablePiRowsById]);
+  const availablePiUnits = selectablePiRows.reduce((sum, row) => sum + remainingPiQuantity(row), 0);
+  const piReadinessText = quantitySaving ? "Saving quantity…"
+    : quantityError ? `Quantity not saved: ${quantityError}`
+    : error ? `Price refresh failed: ${error}`
+    : piPlanError ? `PI availability failed: ${piPlanError}`
+    : !piReady ? "Updating PI availability…" : `PI ready · ${availablePiUnits} units available`;
+  const retryPiAvailability = () => {
+    if (quantityError && selectedMonth != null) {
+      for (const row of piCandidateRows) {
+        const key = quantityCellKey(row._countryCode, row.materialCode, selectedMonth, selectedYear);
+        if (cellErrors[key] && quantityDrafts[key] != null) void saveQuantityCell(row, selectedMonth, quantityDrafts[key], null);
+      }
+    } else {
+      setPiPlanLoading(true);
+      if (error) void loadMatrices();
+      else setPiBatchRefreshKey((key) => key + 1);
+    }
+  };
 
   const selectedPiRows = useMemo(() => {
     const result: OrderGeniusGridRow[] = [];
@@ -1789,6 +1836,7 @@ export function OrderGeniusPage() {
   }, [orderingAccountCodeEdited, piBatchMode, selectedPiCountries]);
 
   useEffect(() => {
+    if (!piReady) return;
     setPiSelectedRowIds((current) => {
       const next = new Set<string>();
       current.forEach((rowId) => {
@@ -1796,7 +1844,7 @@ export function OrderGeniusPage() {
       });
       return next.size === current.size ? current : next;
     });
-  }, [selectablePiRowsById]);
+  }, [piReady, selectablePiRowsById]);
 
   // ── Upload handlers ───────────────────────────────────────────────
 
@@ -1974,6 +2022,7 @@ export function OrderGeniusPage() {
 
   const togglePiBatchRow = useCallback((row: OrderGeniusGridRow, selected: boolean): void => {
     const rowId = getOrderGeniusRowId(row);
+    if (!piReady || !selectablePiRowsById.has(rowId)) return;
     const remainingQuantity = remainingPiQuantity(row);
     setPiSelectedRowIds((current) => {
       const next = new Set(current);
@@ -1989,7 +2038,7 @@ export function OrderGeniusPage() {
     });
     setPiBatchNotice("");
     setPiBatchCreatedCodes([]);
-  }, [remainingPiQuantity]);
+  }, [piReady, remainingPiQuantity, selectablePiRowsById]);
 
   const updatePiBatchQuantity = (row: OrderGeniusGridRow, quantity: number): void => {
     const rowId = getOrderGeniusRowId(row);
@@ -2001,6 +2050,7 @@ export function OrderGeniusPage() {
   };
 
   const toggleAllPiBatchRows = useCallback((selected: boolean): void => {
+    if (!piReady) return;
     if (!selected || selectedMonth == null) {
       setPiSelectedRowIds(new Set());
       setPiBatchQuantities({});
@@ -2019,17 +2069,18 @@ export function OrderGeniusPage() {
     setPiBatchQuantities(nextQuantities);
     setPiBatchNotice("");
     setPiBatchCreatedCodes([]);
-  }, [remainingPiQuantity, selectablePiRows, selectedMonth]);
+  }, [piReady, remainingPiQuantity, selectablePiRows, selectedMonth]);
 
   const piSelectionSummary = useMemo(() => ({
     selectedCount: selectedPiRows.length,
-    selectableCount: selectablePiRows.length,
+    selectableCount: piReady ? selectablePiRows.length : 0,
     allSelected: allSelectablePiRowsSelected,
     partialSelected: partialSelectablePiRowsSelected,
     onToggleAll: toggleAllPiBatchRows,
   }), [
     allSelectablePiRowsSelected,
     partialSelectablePiRowsSelected,
+    piReady,
     selectablePiRows.length,
     selectedPiRows.length,
     toggleAllPiBatchRows,
@@ -2049,6 +2100,10 @@ export function OrderGeniusPage() {
   };
 
   const handleCreatePiBatch = async (): Promise<void> => {
+    if (!piReady) {
+      setError(piReadinessText);
+      return;
+    }
     if (selectedMonth == null) {
       setError("Select one month before creating PI");
       return;
@@ -2429,6 +2484,12 @@ export function OrderGeniusPage() {
         <span>{brandFilter || "All brands"}</span>
         <span>{modelFilter || "All models"}</span>
         <span>{powertrainFilter || "All powertrains"}</span>
+        {selectedMonth != null ? (
+          <div className={`og-pi-readiness ${quantityError || piPlanError || error ? "is-error" : piReady ? "is-ready" : "is-pending"}`} role="status" aria-live="polite">
+            {piReadinessText}
+            {quantityError || piPlanError || error ? <button type="button" onClick={retryPiAvailability}>Retry</button> : null}
+          </div>
+        ) : null}
       </div>
       {authFailureNotice ? (
         <div
@@ -2513,6 +2574,22 @@ export function OrderGeniusPage() {
       {controlTab === "filters" ? (
       <div className="order-genius-control-section">
       <div className="order-genius-filter-grid">
+        <div className="og-month-controls">
+          <label>Order month
+            <select aria-label="Order month" value={selectedMonth ?? ""} onChange={(event) => {
+              setSelectedMonth(event.target.value ? Number(event.target.value) : null);
+              setSelectionDate("");
+            }}>
+              <option value="">All months</option>
+              {MONTHS.map((month, index) => <option key={month} value={index + 1}>{month}</option>)}
+            </select>
+          </label>
+          <label>Year
+            <select aria-label="Order year" value={selectedYear} onChange={(event) => { setSelectedYear(Number(event.target.value)); setSelectionDate(""); }}>
+              {[selectedYear - 1, selectedYear, selectedYear + 1].map((year) => <option key={year} value={year}>{year}</option>)}
+            </select>
+          </label>
+        </div>
         <div className="market-scan-field version-comparison-model-picker-field" ref={countryPickerRef} style={{ minWidth: 200 }}>
           <span>Countries{selectedCountries.length > 0 ? ` (${selectedCountries.length})` : ""}</span>
           <div className="version-comparison-model-picker">
@@ -2560,16 +2637,9 @@ export function OrderGeniusPage() {
           </div>
         </div>
 
-        <select
-          value={selectedYear}
-          onChange={(e) => setSelectedYear(Number(e.target.value))}
-          style={{ minWidth: 80 }}
-        >
-          {[selectedYear - 1, selectedYear, selectedYear + 1].map((y) => (
-            <option key={y} value={y}>{y}</option>
-          ))}
-        </select>
-
+        <details className="og-more-filters">
+          <summary>More filters</summary>
+          <div className="order-genius-filter-grid">
         <label
           className="order-genius-historical-toggle"
           title={selectedOrderMonthIsFuture
@@ -2586,24 +2656,13 @@ export function OrderGeniusPage() {
         </label>
 
         <label className="order-genius-date-filter">
-          <span>Selection date</span>
+          <span>Price as of</span>
           <input
             type="date"
             value={selectionDate}
             onChange={(event) => setSelectionDate(event.target.value)}
           />
         </label>
-
-        <select
-          value={selectedMonth ?? ""}
-          onChange={(e) => setSelectedMonth(e.target.value ? Number(e.target.value) : null)}
-          style={{ minWidth: 100 }}
-        >
-          <option value="">All months</option>
-          {MONTHS.map((m, i) => (
-            <option key={m} value={i + 1}>{m}</option>
-          ))}
-        </select>
 
         {options?.brands ? (
           <select
@@ -2674,6 +2733,8 @@ export function OrderGeniusPage() {
           </label>
         )}
 
+          </div>
+        </details>
         <button type="button" className="btn btn-sm btn-primary order-genius-refresh-button" onClick={loadMatrices}>
           Refresh
         </button>
@@ -2807,7 +2868,7 @@ export function OrderGeniusPage() {
               <input
                 type="checkbox"
                 checked={allSelectablePiRowsSelected}
-                disabled={selectablePiRows.length === 0}
+                disabled={!piReady || selectablePiRows.length === 0}
                 onChange={(event) => toggleAllPiBatchRows(event.currentTarget.checked)}
               />
               {partialSelectablePiRowsSelected
@@ -2815,13 +2876,14 @@ export function OrderGeniusPage() {
                 : "Select all"}
             </label>
           </div>
+          {selectedMonth != null ? <div role="status" className="og-pi-panel-readiness">{piReadinessText}</div> : null}
           {selectedMonth ? (
             <div className="og-pi-batch-summary" aria-label="PI month allocation summary">
-              <span><small>Month total</small><strong>{piPlanLoading ? "…" : piPlanTotals.selectedQuantity}</strong></span>
-              <span><small>Already in PI</small><strong>{piPlanLoading ? "…" : piPlanTotals.generatedQuantity}</strong></span>
-              <span><small>Waiting for next batch</small><strong>{piPlanLoading ? "…" : piPlanTotals.remainingQuantity}</strong></span>
+              <span><small>Month total</small><strong>{!piReady ? "—" : piPlanTotals.selectedQuantity}</strong></span>
+              <span><small>Already in PI</small><strong>{!piReady ? "—" : piPlanTotals.generatedQuantity}</strong></span>
+              <span><small>Waiting for next batch</small><strong>{!piReady ? "—" : piPlanTotals.remainingQuantity}</strong></span>
               <span className={piPlanTotals.overGeneratedQuantity > 0 ? "is-warning" : ""}>
-                <small>Over allocated</small><strong>{piPlanLoading ? "…" : piPlanTotals.overGeneratedQuantity}</strong>
+                <small>Over allocated</small><strong>{!piReady ? "—" : piPlanTotals.overGeneratedQuantity}</strong>
               </span>
             </div>
           ) : null}
@@ -2895,12 +2957,12 @@ export function OrderGeniusPage() {
               placeholder="Official PI"
               title="Supplier's official PI number. Can be filled later if not available now."
             />
-            <input
+            <label className="og-pi-order-date">Order date<input
               type="date"
               value={piBatchForm.orderDate}
               onChange={(event) => setPiBatchForm((current) => ({ ...current, orderDate: event.target.value }))}
               title="PI order date"
-            />
+            /></label>
             <input
               value={piBatchForm.shipName}
               onChange={(event) => setPiBatchForm((current) => ({ ...current, shipName: event.target.value }))}
@@ -3054,7 +3116,7 @@ export function OrderGeniusPage() {
             <button
               type="button"
               className="btn btn-sm btn-primary"
-              disabled={creatingPiBatch || selectedMonth == null || selectedPiRows.length === 0}
+              disabled={creatingPiBatch || !piReady || selectedPiRows.length === 0}
               onClick={() => void handleCreatePiBatch()}
               title={piBatchMode === "by_account" ? "Create one PI for the ordering account and keep country allocations on each line" : "Create one PI per selected country"}
             >
@@ -3344,6 +3406,7 @@ export function OrderGeniusPage() {
           rows={displayRows}
           selectedMonth={selectedMonth}
           selectedRowIds={piSelectedRowIds}
+          selectableRowIds={selectablePiRowIds}
           piSelectionSummary={piSelectionSummary}
           canEditQuantities={canFillOrders}
           visibleColumns={visibleColumns}
@@ -3399,9 +3462,9 @@ export function OrderGeniusPage() {
             <BomAdminPanel
               initialCopyTargetCountry={bomAdminCopyTargetCountry}
               onFobCountriesChanged={loadFobCountries}
-              onFobChanged={() => {
-                void loadFobCountries();
-                loadMatrices();
+              onFobChanged={async () => {
+                const [, refreshed] = await Promise.all([loadFobCountries(), loadMatrices()]);
+                if (!refreshed) throw new Error("Saved, but the selection table refresh failed. Refresh to verify.");
               }}
             />
           </div>
@@ -3523,17 +3586,21 @@ type BomAdminModelGroup = {
   versions: Map<string, any[]>;
 };
 
-function getBomAdminPowertrainGroup(modelName: unknown): string {
+function getBomAdminPowertrainGroup(modelName: unknown, powertrain?: unknown): string {
+  const saved = String(powertrain || "").trim().toUpperCase();
+  if (saved === "EV") return "BEV";
+  if (["ICE", "BEV", "HEV", "PHEV", "MHEV", "REEV", "FCEV"].includes(saved)) return saved;
   const normalized = String(modelName || "").toUpperCase();
+  if (normalized.includes("SHS") || normalized.includes("PHEV")) return "PHEV";
+  if (normalized.includes("MHEV")) return "MHEV";
   if (normalized.includes("HEV")) return "HEV";
-  if (normalized.includes("SHS")) return "PHEV";
   if (normalized.includes("BEV") || normalized.includes(" EV")) return "BEV";
   if (normalized.includes("ICE")) return "ICE";
   return "Other";
 }
 
-function getBomAdminModelGroupKey(brand: unknown, modelName: unknown): string {
-  return `${String(brand || "")}|${String(modelName || "")}|${getBomAdminPowertrainGroup(modelName)}`;
+function getBomAdminModelGroupKey(brand: unknown, modelName: unknown, powertrain?: unknown): string {
+  return `${String(brand || "")}|${String(modelName || "")}|${getBomAdminPowertrainGroup(modelName, powertrain)}`;
 }
 
 function getBomTemplateSearchText(bomTemplate: string): string {
@@ -3782,7 +3849,7 @@ interface BomFinanceDrawerScope {
 interface BomAdminPanelProps {
   initialCopyTargetCountry?: string | null;
   onFobCountriesChanged?: () => void;
-  onFobChanged?: () => void;
+  onFobChanged?: () => void | Promise<void>;
 }
 
 type BomFinanceAction = {
@@ -3866,9 +3933,7 @@ export function BomAdminPanel({
   const [debouncedSearch, setDebouncedSearch] = useState(cachedSearchText.trim());
   const [editFob, setEditFob] = useState<BomFobEditor | null>(null);
   const [fobPeriods, setFobPeriods] = useState<CountryTemplateFobPeriod[]>([]);
-  const [usesFobPeriods, setUsesFobPeriods] = useState(false);
-  const [periodDeletePreview, setPeriodDeletePreview] = useState<CountryTemplateFobPeriod | null>(null);
-  const [restoreDefaultPreview, setRestoreDefaultPreview] = useState<number | null>(null);
+  const [periodDeletePreview, setPeriodDeletePreview] = useState<(CountryTemplateFobPeriod & FobPeriodDeletionPreview) | null>(null);
   const [fobPeriodsLoading, setFobPeriodsLoading] = useState(false);
   const [fobPeriodSaving, setFobPeriodSaving] = useState(false);
   const [fobPeriodError, setFobPeriodError] = useState("");
@@ -3981,6 +4046,7 @@ export function BomAdminPanel({
   const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set());
   const pendingDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadRef = useRef(false);  // prevent concurrent loads
+  const loadCompletionRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const currentLoadKeyRef = useRef<string | null>(null);
   const pendingLoadKeyRef = useRef<string | null>(null);
   const latestLoadKeyRef = useRef(cachedSearchText.trim());
@@ -4127,10 +4193,11 @@ export function BomAdminPanel({
     return "";
   };
 
-  const getBomFobSourceMarker = (fobSourceMode?: string | null): string => {
+  const getBomFobSourceMarker = (fobSourceMode?: string | null, sourceCountry?: string | null): string => {
     if (fobSourceMode === "copied_from_country") return "C";
     if (fobSourceMode === "manual_country_adjust") return "B";
-    if (fobSourceMode === "template_base" || fobSourceMode === "template_base_country_adjust") return "T";
+    if (fobSourceMode === "template_base_country_adjust") return "B";
+    if (fobSourceMode === "template_base") return sourceCountry ? "C" : "M";
     if (fobSourceMode === "manual_edit") return "M";
     return "";
   };
@@ -4193,7 +4260,7 @@ export function BomAdminPanel({
     }
   }, []);
 
-  const load = useCallback(async (requestedSearch?: string) => {
+  const load = useCallback(async (requestedSearch?: string): Promise<boolean> => {
     // An omitted search means refresh the currently applied query. An explicit
     // empty string is the Clear action and must remain distinguishable.
     const loadKey = requestedSearch === undefined
@@ -4207,9 +4274,12 @@ export function BomAdminPanel({
       // Keep only the latest user intent. Empty string is meaningful here: it
       // represents an explicit Clear and must not be collapsed into "none".
       pendingLoadKeyRef.current = loadKey;
-      return;
+      return loadCompletionRef.current;
     }
     loadRef.current = true;
+    let complete!: (loaded: boolean) => void;
+    loadCompletionRef.current = new Promise<boolean>((resolve) => { complete = resolve; });
+    let loaded = false;
     currentLoadKeyRef.current = loadKey;
     setLoading(true);
     setBomAdminError("");
@@ -4219,9 +4289,9 @@ export function BomAdminPanel({
       const params: { country?: string; search?: string } = {};
       if (loadKey) {
         if (isCountry) {
+          params.country = normalizedSearch;
           const fobCountries = activeFobCountriesRef.current;
           if (fobCountries.includes(normalizedSearch)) {
-            params.country = normalizedSearch;
             setBomAdminNotice("");
           } else if (fobCountries.length > 0) {
             const sourceCountry = fobCountries.includes("CZ")
@@ -4229,7 +4299,7 @@ export function BomAdminPanel({
               : fobCountries.find((countryCode) => countryCode !== normalizedSearch) || "";
             setToolsFlipped(true);
             setShowAddMaterial(false);
-            setBomAdminNotice(`${normalizedSearch} has no active BOM FOB yet. Showing all BOM templates so you can copy FOB into ${normalizedSearch}.`);
+            setBomAdminNotice(`${normalizedSearch} has no BOM price yet. Clear the country filter to select templates and copy FOB.`);
             setCopyCountryMessage(`Target ${normalizedSearch} has no FOB yet. Choose a source country, then copy FOB.`);
             setCopyCountryForm((current) => ({
               ...current,
@@ -4241,7 +4311,6 @@ export function BomAdminPanel({
               countryCode: current.countryCode || normalizedSearch,
             }));
           } else {
-            params.search = loadKey;
             setBomAdminNotice("");
           }
         } else {
@@ -4252,32 +4321,43 @@ export function BomAdminPanel({
         setBomAdminNotice("");
       }
       const res = await api.getBomAdmin(Object.keys(params).length > 0 ? params : undefined);
-      if (latestLoadKeyRef.current !== loadKey) return;
-      const nextItems = res.items || [];
-      setSkus(nextItems);
-      setOptimisticColourTiers((current) => {
-        const next = { ...current };
-        for (const sku of nextItems) {
-          const materialKey = bomMaterialKey(sku?.materialCode);
-          if (!materialKey || !next[materialKey]) continue;
-          if (inferBomAdminColourTier(sku) === next[materialKey]) {
-            delete next[materialKey];
+      if (latestLoadKeyRef.current === loadKey) {
+        const nextItems = res.items || [];
+        const auditTarget = auditNavigationTargetRef.current;
+        if (auditTarget) {
+          const targetSku = nextItems.find((sku) => bomMaterialKey(sku.bomTemplate) === bomMaterialKey(auditTarget.bomTemplate));
+          if (targetSku) {
+            const groupKey = getBomAdminModelGroupKey(targetSku.brand, targetSku.modelName, targetSku.powertrain);
+            auditTarget.modelGroupKey = groupKey;
+            setExpandedGroups((current) => new Set([...current, groupKey]));
           }
         }
-        return Object.keys(next).length === Object.keys(current).length ? current : next;
-      });
-      const nextCountries = res.countries || [];
-      const conflictCount = Array.isArray(res.fobConflicts) ? res.fobConflicts.length : 0;
-      if (conflictCount > 0) {
-        setBomAdminNotice(
-          `${conflictCount} 个物料／国家的 FOB 基准待确认；正常行仍可编辑，请先在 BOM Admin 保存唯一模板＋国家 Single 基准。`,
-        );
+        setSkus(nextItems);
+        setOptimisticColourTiers((current) => {
+          const next = { ...current };
+          for (const sku of nextItems) {
+            const materialKey = bomMaterialKey(sku?.materialCode);
+            if (!materialKey || !next[materialKey]) continue;
+            if (inferBomAdminColourTier(sku) === next[materialKey]) {
+              delete next[materialKey];
+            }
+          }
+          return Object.keys(next).length === Object.keys(current).length ? current : next;
+        });
+        const nextCountries = res.countries || [];
+        const conflictCount = Array.isArray(res.fobConflicts) ? res.fobConflicts.length : 0;
+        if (conflictCount > 0) {
+          setBomAdminNotice(
+            `${conflictCount} 个物料／国家的 FOB 基准待确认；正常行仍可编辑，请先在 BOM Admin 保存唯一模板＋国家 Single 基准。`,
+          );
+        }
+        const nextActiveFobCountries = res.activeFobCountries || nextCountries;
+        activeFobCountriesRef.current = nextActiveFobCountries;
+        setCountries(nextCountries);
+        setActiveFobCountries(nextActiveFobCountries);
+        setBomAdminError("");
+        loaded = true;
       }
-      const nextActiveFobCountries = res.activeFobCountries || nextCountries;
-      activeFobCountriesRef.current = nextActiveFobCountries;
-      setCountries(nextCountries);
-      setActiveFobCountries(nextActiveFobCountries);
-      setBomAdminError("");
     } catch (e) {
       console.error('[BOM Admin]', e);
       if (latestLoadKeyRef.current === loadKey) {
@@ -4287,13 +4367,16 @@ export function BomAdminPanel({
     finally {
       loadRef.current = false;
       currentLoadKeyRef.current = null;
-      setLoading(false);
       const pendingLoadKey = pendingLoadKeyRef.current;
       pendingLoadKeyRef.current = null;
       if (pendingLoadKey !== null) {
-        void load(pendingLoadKey);
+        loaded = await load(pendingLoadKey);
+      } else {
+        setLoading(false);
       }
+      complete(loaded);
     }
+    return loaded;
   }, []);
 
   const openAuditBomTemplate = useCallback(async (target: BomFobAuditTemplateTarget) => {
@@ -4400,14 +4483,6 @@ export function BomAdminPanel({
     }
     return "";
   }, []);
-
-  const patchBomRemark = useCallback((materialCodes: string[], remark: string) => {
-    patchBomSkus(materialCodes, (sku) => ({
-      ...sku,
-      remark,
-      rowVersion: typeof sku.rowVersion === "number" ? sku.rowVersion + 1 : sku.rowVersion,
-    }));
-  }, [patchBomSkus]);
 
   useEffect(() => { load(initialBomLoadSearchRef.current); }, [load]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
@@ -4727,13 +4802,12 @@ export function BomAdminPanel({
     let cancelled = false;
     setFobPeriods([]);
     setPeriodDeletePreview(null);
-    setRestoreDefaultPreview(null);
     setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
     setFobPeriodsLoading(true);
     setFobPeriodError("");
     void api.listBomTemplateFobPeriods({ bomTemplate, countryCode })
       .then((response) => {
-        if (!cancelled) { setFobPeriods(response.periods); setUsesFobPeriods(response.usesPeriods); }
+        if (!cancelled) setFobPeriods(response.periods);
       })
       .catch((error: unknown) => {
         if (!cancelled) setFobPeriodError(getErrorMessage(error));
@@ -4750,7 +4824,6 @@ export function BomAdminPanel({
     if (!bomTemplate || !countryCode) return;
     const response = await api.listBomTemplateFobPeriods({ bomTemplate, countryCode });
     setFobPeriods(response.periods);
-    setUsesFobPeriods(response.usesPeriods);
   };
 
   const handleFobPeriodSave = async () => {
@@ -4775,7 +4848,8 @@ export function BomAdminPanel({
       });
       setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
       await reloadFobPeriods();
-      onFobChanged?.();
+      if (!await load()) throw new Error("Period saved, but BOM refresh failed. Refresh to verify.");
+      await onFobChanged?.();
     } catch (error: unknown) {
       setFobPeriodError(getErrorMessage(error));
     } finally {
@@ -4783,17 +4857,22 @@ export function BomAdminPanel({
     }
   };
 
-  const handleFobPeriodDelete = async (period: CountryTemplateFobPeriod) => {
+  const handleFobPeriodDelete = async (period: CountryTemplateFobPeriod, fingerprint?: string) => {
     setFobPeriodSaving(true);
     setFobPeriodError("");
     try {
-      await api.deleteBomTemplateFobPeriod(period.periodId, period.rowVersion);
+      const result = await api.deleteBomTemplateFobPeriod(period.periodId, period.rowVersion, fingerprint);
+      if (!result.deleted) {
+        setPeriodDeletePreview({ ...period, ...result });
+        return;
+      }
       if (fobPeriodDraft.periodId === period.periodId) {
         setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
       }
       await reloadFobPeriods();
       setPeriodDeletePreview(null);
-      onFobChanged?.();
+      if (!await load()) throw new Error("Period removed, but BOM refresh failed. Refresh to verify.");
+      await onFobChanged?.();
     } catch (error: unknown) {
       setFobPeriodError(getErrorMessage(error));
     } finally {
@@ -4811,17 +4890,6 @@ export function BomAdminPanel({
       baseFobEur: String(period.baseFobEur),
       remark: period.remark ?? "",
     });
-  };
-
-  const handleRestoreDefault = async (): Promise<void> => {
-    if (!editFob?.bomTemplate) return;
-    setFobPeriodSaving(true); setFobPeriodError("");
-    try {
-      const result = await api.restoreBomTemplateDefaultFob(editFob.bomTemplate, editFob.countryCode, restoreDefaultPreview);
-      if (!result.restored) setRestoreDefaultPreview(result.baseFobEur);
-      else { await reloadFobPeriods(); setRestoreDefaultPreview(null); onFobChanged?.(); }
-    } catch (error: unknown) { setFobPeriodError(getErrorMessage(error)); }
-    finally { setFobPeriodSaving(false); }
   };
 
   const handleFobSave = async () => {
@@ -4994,7 +5062,7 @@ export function BomAdminPanel({
     return collectCountryCodes([
       ...sortedCountries,
       ...Object.keys(draft.fobByCountry || {}).sort(),
-    ]);
+    ]).filter((country) => sortedCountries.includes(country));
   };
 
   const getFilledDraftCountryCodes = (draft: BomCopyDraft): string[] =>
@@ -5056,7 +5124,8 @@ export function BomAdminPanel({
       }));
       return;
     }
-    if (draft.bulkSelectedCountries.length === 0) {
+    const selectedCountries = draft.bulkSelectedCountries.filter((code) => sortedCountries.includes(code));
+    if (selectedCountries.length === 0) {
       setCopyDraftErrors((prev) => ({
         ...prev,
         [draftKey]: "Select at least one country for the FOB delta.",
@@ -5068,7 +5137,7 @@ export function BomAdminPanel({
       ...draft.fobByCountry,
     };
     let changedCountries = 0;
-    for (const code of draft.bulkSelectedCountries) {
+    for (const code of selectedCountries) {
       const currentEntry = nextFobByCountry[code];
       const baseFob = getDraftBaseFob(currentEntry);
       if (baseFob == null) continue;
@@ -5123,7 +5192,7 @@ export function BomAdminPanel({
       ...allSkus.flatMap((sku: any) =>
         Object.keys((sku?.fobByCountry as Record<string, BomDraftFobEntry>) || {}),
       ),
-    ]);
+    ]).filter((country) => sortedCountries.includes(country));
 
   const getFilledBomCountryCodes = (allSkus: any[]): string[] =>
     getBomCountryCodes(allSkus).filter((countryCode) =>
@@ -5138,11 +5207,13 @@ export function BomAdminPanel({
   const getBulkFobEditor = (
     bomKey: string,
     allSkus: any[],
-  ): BomBulkFobEditor =>
-    bulkFobEditors[bomKey] || {
+  ): BomBulkFobEditor => {
+    const current = bulkFobEditors[bomKey] || {
       deltaEur: "",
       selectedCountries: getFilledBomCountryCodes(allSkus),
     };
+    return { ...current, selectedCountries: current.selectedCountries.filter((country) => sortedCountries.includes(country)) };
+  };
 
   const updateBulkFobEditor = (
     bomKey: string,
@@ -6021,6 +6092,7 @@ export function BomAdminPanel({
     const leadCode = materialCodes[0];
     if (!leadCode) return;
     const remark = String(form.get("remark") || "").trim();
+    let refreshedSaveKey = saveKey;
     setSavingProductKey(saveKey);
     setProductSaveMessages((prev) => {
       const next = { ...prev };
@@ -6028,31 +6100,35 @@ export function BomAdminPanel({
       return next;
     });
     try {
-      await api.updateSkuMetadata(leadCode, {
+      const saved = await api.updateSkuMetadata(leadCode, {
         materialCodes,
         brand: String(form.get("brand") || ""),
         modelName: String(form.get("modelName") || ""),
         version: String(form.get("version") || ""),
         powertrain: String(form.get("powertrain") || ""),
+        remark,
+        rowVersions: Object.fromEntries(allSkus.map((sku) => [String(sku.materialCode), Number(sku.rowVersion || 1)])),
       });
-      for (const sku of allSkus) {
-        const materialCode = String(sku?.materialCode || "").trim();
-        if (!materialCode) continue;
-        const currentRemark = String(sku?.remark || "").trim();
-        if (currentRemark === remark) continue;
-        await api.updateSkuRemark(materialCode, {
-          remark,
-          rowVersion: Number(sku?.rowVersion || 1),
-        });
-      }
-      patchBomRemark(materialCodes, remark);
+      if (!await load()) throw new Error("Product fields saved, but refresh failed. Refresh BOM Admin to verify.");
+      const fields = saved.productFields;
+      const groupKey = getBomAdminModelGroupKey(fields.brand, fields.modelName, fields.powertrain);
+      const nextKey = buildBomEditScopeKey(groupKey, fields.version || "Default", String(allSkus[0].bomTemplate));
+      refreshedSaveKey = nextKey;
+      setSavingProductKey(nextKey);
+      setExpandedGroups((current) => new Set([...current, groupKey]));
+      setEditingBoms((current) => {
+        const next = new Set(current);
+        next.delete(saveKey);
+        next.add(nextKey);
+        return next;
+      });
+      await onFobChanged?.();
       setBomAdminError("");
       setBomAdminNotice("Saved product fields.");
       setProductSaveMessages((prev) => ({
         ...prev,
-        [saveKey]: { kind: "success", text: "Saved product fields." },
+        [nextKey]: { kind: "success", text: "Saved product fields." },
       }));
-      load();
     } catch (err) {
       const message = getErrorMessage(err);
       setBomAdminError(message);
@@ -6061,7 +6137,7 @@ export function BomAdminPanel({
         [saveKey]: { kind: "error", text: message },
       }));
     } finally {
-      setSavingProductKey((current) => (current === saveKey ? null : current));
+      setSavingProductKey((current) => (current === saveKey || current === refreshedSaveKey ? null : current));
     }
   };
 
@@ -6442,8 +6518,8 @@ export function BomAdminPanel({
   const modelGroups = useMemo(() => {
     const map = new Map<string, BomAdminModelGroup>();
     for (const s of skus) {
-      const pt = getBomAdminPowertrainGroup(s.modelName);
-      const mk = getBomAdminModelGroupKey(s.brand, s.modelName);
+      const pt = getBomAdminPowertrainGroup(s.modelName, s.powertrain);
+      const mk = getBomAdminModelGroupKey(s.brand, s.modelName, s.powertrain);
       if (!map.has(mk)) map.set(mk, { brand: s.brand, modelName: s.modelName, pt, versions: new Map() });
       const vk = s.version || 'Default';
       if (!map.get(mk)!.versions.has(vk)) map.get(mk)!.versions.set(vk, []);
@@ -6661,6 +6737,7 @@ export function BomAdminPanel({
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: isPhoneToolsLayout ? "flex-start" : "flex-end" }}>
           <div className="bom-fob-audit-legend" aria-label="FOB audit source legend">
             <span><b>C</b> copied FOB</span>
+            <span><b>Pn</b> latest period · n saved periods</span>
             <span><b>B</b> country adjustment</span>
             <span><b>M</b> cell edit</span>
             <span><i className="bom-fob-legend-remark-dot" /> remark</span>
@@ -7971,11 +8048,19 @@ export function BomAdminPanel({
                               </td>
                               {sortedCountries.map(c => {
                                 const fob = ref.fobByCountry?.[c];
+                                const periods: CountryTemplateFobPeriod[] = ref.fobPeriodsByCountry?.[c] ?? [];
+                                const latestPeriod = periods.reduce<CountryTemplateFobPeriod | null>((latest, period) => !latest || period.validFrom > latest.validFrom ? period : latest, null);
                                 const hasConflict = fob?.status === "conflict";
                                 const baseFob = getDraftBaseFob(fob);
-                                const hasFob = !hasConflict && fob != null && baseFob != null && baseFob > 0;
-                                const hasSurcharge = fob?.colourSurchargeEur && fob.colourSurchargeEur > 0;
-                                const sourceMarker = getBomFobSourceMarker(fob?.fobSourceMode);
+                                const displayFob = latestPeriod ? latestPeriod.baseFobEur : baseFob;
+                                const hasFob = displayFob != null;
+                                const sourceMarker = latestPeriod ? `P${periods.length}` : getBomFobSourceMarker(fob?.fobSourceMode, fob?.fobSourceCountryCode);
+                                const periodTooltip = latestPeriod ? [
+                                  `${bomTemplate} / ${c} · Management summary, not a quote for today`,
+                                  ...periods.map((period) => `${period.validFrom} → ${period.validTo || "Open"}: ${period.baseFobEur.toLocaleString()} EUR${period.baseFobEur === 0 ? " · Ordering paused" : ""}`),
+                                  "Outside saved periods: no price; no default fallback.",
+                                  `Undated default: ${baseFob?.toLocaleString() ?? "—"}${hasConflict ? " · requires review" : ""}`,
+                                ].join("\n") : "";
                                 const countryRemark = getBomCountryFobRemark(allSkus, c);
                                 const hasCountryRemark = hasFob && countryRemark.length > 0;
                                 const financeCountries = Array.isArray((ref as { financeCountries?: unknown }).financeCountries)
@@ -7983,9 +8068,9 @@ export function BomAdminPanel({
                                   : [];
                                 const hasFinance = financeCountries.includes(c);
                                 return (
-                                  <td key={c} className="bom-fob-price-cell" title={hasConflict ? "FOB 基准待确认：付款条件记录存在不同价格，先在 BOM Admin 保存模板＋国家 Single 基准" : formatBomFobTooltip(c, baseFob, fob?.colourSurchargeEur, fob?.fobSourceMode, fob?.fobSourceCountryCode, countryRemark)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", cursor: hasConflict ? "not-allowed" : "pointer", padding: "2px 4px" }}
+                                  <td key={c} className="bom-fob-price-cell" title={periodTooltip || (hasConflict ? "FOB 基准待确认：付款条件记录存在不同价格，先在 BOM Admin 保存模板＋国家 Single 基准" : formatBomFobTooltip(c, baseFob, fob?.colourSurchargeEur, fob?.fobSourceMode, fob?.fobSourceCountryCode, countryRemark))} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
                                     onClick={() => {
-                                      if (hasConflict) {
+                                      if (hasConflict && !latestPeriod) {
                                         setBomAdminError(`${bomTemplate} / ${c} 的 FOB 基准待确认；请先保存唯一 Single 基准。`);
                                         return;
                                       }
@@ -8013,9 +8098,8 @@ export function BomAdminPanel({
                                         fobSourceCountryCode: fob?.fobSourceCountryCode ?? null,
                                       });
                                     }}>
-                                    <span className="bom-fob-price-value" style={{ color: hasConflict ? "#b45309" : hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob || hasConflict ? 600 : 400 }}>
-                                      {hasConflict ? "?" : hasFob ? baseFob!.toLocaleString() : "-"}
-                                      {hasSurcharge ? <sup style={{ color: '#d97706', fontSize: 9 }}> +{fob.colourSurchargeEur}</sup> : null}
+                                    <span className="bom-fob-price-value" style={{ color: hasConflict && !latestPeriod ? "#b45309" : hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob || hasConflict ? 600 : 400 }}>
+                                      {hasConflict && !latestPeriod ? "?" : displayFob != null ? displayFob.toLocaleString() : "—"}
                                       {hasFinance ? (
                                         <sup className="bom-finance-source-mark" title={`${c} finance / CBU maintained`}>
                                           %
@@ -8025,7 +8109,7 @@ export function BomAdminPanel({
                                         <sup
                                           className={`bom-fob-source-mark${hasCountryRemark ? " has-remark" : ""}${sourceMarker ? "" : " is-remark-only"}`}
                                           title={[
-                                            sourceMarker ? formatBomFobSourceLabel(fob?.fobSourceMode, fob?.fobSourceCountryCode) : "",
+                                            latestPeriod ? periodTooltip : sourceMarker ? formatBomFobSourceLabel(fob?.fobSourceMode, fob?.fobSourceCountryCode) : "",
                                             hasCountryRemark ? `Remark: ${countryRemark}` : "",
                                           ].filter(Boolean).join(" · ")}
                                         >
@@ -8408,6 +8492,7 @@ export function BomAdminPanel({
                                         <BomTemplateLifecycleEditor
                                           key={`${draftKey}|${ref.rowVersion}`}
                                           materialCode={ref.materialCode}
+                                          bomTemplate={bomTemplate}
                                           status={lifecycleStatus}
                                           effectiveFrom={ref.effectiveFrom || null}
                                           effectiveTo={ref.effectiveTo || null}
@@ -8539,11 +8624,11 @@ export function BomAdminPanel({
               <div>
                 <span className="bom-finance-eyebrow">BOM ADMIN · FOB</span>
                 <h4>{editFob.bomTemplate?.includes("**") ? "Edit template base FOB" : "Edit FOB"}</h4>
-                <p>{editFob.materialCodes.length} material codes</p>
+                <p>{editFob.bomTemplate} · {skus.find((sku) => sku.bomTemplate === editFob.bomTemplate)?.version} · {skus.find((sku) => sku.bomTemplate === editFob.bomTemplate)?.interiorColorName || "—"} · {editFob.countryCode} · {editFob.materialCodes.length} material codes</p>
               </div>
               <div className="bom-fob-edit-source-line">
                 <span className="bom-fob-edit-source-pill">
-                  {getBomFobSourceMarker(editFob.fobSourceMode) || "BASE"}
+                  {getBomFobSourceMarker(editFob.fobSourceMode, editFob.fobSourceCountryCode) || "BASE"}
                 </span>
                 <span>
                   {formatBomFobSourceLabel(editFob.fobSourceMode, editFob.fobSourceCountryCode) || "uploaded/resolved FOB"}
@@ -8606,23 +8691,18 @@ export function BomAdminPanel({
                               type="button"
                               className="btn btn-sm btn-ghost"
                               disabled={fobPeriodSaving}
-                              onClick={() => setPeriodDeletePreview(period)}
+                              onClick={() => void handleFobPeriodDelete(period)}
                             >Delete</button>
                           </div>
                         </div></Fragment>
                       ))}
                     </div>
-                  ) : !fobPeriodsLoading ? <p>{usesFobPeriods ? "All periods removed: no price — ordering unavailable. Restore the default explicitly to resume." : "No periods configured: positive undated default FOB remains available within template dates."}</p> : null}
+                  ) : !fobPeriodsLoading ? <p>No periods configured: positive undated default FOB remains available within template dates.</p> : null}
                   {fobPeriods.length > 0 ? <p>Outside listed periods: no price — ordering unavailable.</p> : null}
                   {periodDeletePreview ? <div role="status">
-                    <p>Remove {periodDeletePreview.validFrom} → {periodDeletePreview.validTo || "Open"}? {fobPeriods.length === 1 ? "This is the last period: ordering will remain unavailable; the default will NOT resume." : "These dates will become a no-price gap."}</p>
-                    <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving} onClick={() => void handleFobPeriodDelete(periodDeletePreview)}>Confirm remove period</button>
+                    <p>Remove {periodDeletePreview.validFrom} → {periodDeletePreview.validTo || "Open"}? {periodDeletePreview.lastPeriod ? periodDeletePreview.defaultBaseFobEur != null ? `The undated Single base ${periodDeletePreview.defaultBaseFobEur.toLocaleString()} EUR will apply within template dates${periodDeletePreview.defaultBaseFobEur === 0 ? "; ordering stays paused" : ""}.` : "No undated default exists: no price after deletion." : "These dates will become a no-price gap; the default will not apply."}</p>
+                    <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving} onClick={() => void handleFobPeriodDelete(periodDeletePreview, periodDeletePreview.fingerprint)}>Confirm remove period</button>
                     <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setPeriodDeletePreview(null)}>Cancel removal</button>
-                  </div> : null}
-                  {!fobPeriodsLoading && usesFobPeriods && fobPeriods.length === 0 ? <div>
-                    {restoreDefaultPreview !== null ? <p>Restore undated Single base {restoreDefaultPreview.toLocaleString()} EUR for {editFob.countryCode}? Ordering resumes only within template dates. Saved tier surcharges still apply.</p> : null}
-                    <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => void handleRestoreDefault()}>{restoreDefaultPreview !== null ? "Confirm restore default FOB" : "Restore undated default FOB"}</button>
-                    {restoreDefaultPreview !== null ? <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setRestoreDefaultPreview(null)}>Cancel restore</button> : null}
                   </div> : null}
                   <div className="bom-fob-period-draft">
                     <label><span>From</span><input type="date" disabled={fobPeriodSaving} value={fobPeriodDraft.validFrom} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validFrom: event.target.value }))} /></label>
