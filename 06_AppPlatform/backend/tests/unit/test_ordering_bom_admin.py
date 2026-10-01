@@ -44,6 +44,11 @@ class _ExecuteResult:
     def all(self) -> list[object]:
         return self._values
 
+    def scalar_one_or_none(self) -> object | None:
+        if len(self._values) > 1:
+            raise ValueError("Expected at most one result")
+        return self._values[0] if self._values else None
+
 
 class _FakeSession:
     def __init__(self, execute_values: list[object] | None = None):
@@ -641,7 +646,7 @@ def test_build_matrix_normalizes_legacy_jaecoo_and_model_powertrain(monkeypatch)
     )
     monkeypatch.setattr(
         order_genius_service.repo,
-        "list_active_skus",
+        "list_skus_including_historical",
         lambda *_args, **_kwargs: [sku],
     )
     monkeypatch.setattr(
@@ -723,7 +728,7 @@ def test_build_matrix_backfills_interior_and_preserves_paint_tier(monkeypatch) -
     )
     monkeypatch.setattr(
         order_genius_service.repo,
-        "list_active_skus",
+        "list_skus_including_historical",
         lambda *_args, **_kwargs: [blank, donor],
     )
     monkeypatch.setattr(
@@ -765,7 +770,7 @@ def test_build_matrix_excludes_cleared_zero_fob(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         order_genius_service.repo,
-        "list_active_skus",
+        "list_skus_including_historical",
         lambda *_args, **_kwargs: [sku],
     )
     monkeypatch.setattr(

@@ -2065,10 +2065,12 @@ class CountryTemplateFobPeriod(TimestampMixin, Base):
 
     __tablename__ = "country_template_fob_period"
     __table_args__ = (
-        UniqueConstraint(
-            "country_code", "bom_template", "valid_from",
-            name="uq_country_template_fob_period_start",
+        Index(
+            "uq_country_template_fob_period_start",
+            "country_code", "bom_template", "valid_from", unique=True,
+            postgresql_where=text("status = 'active'"),
         ),
+        CheckConstraint("status IN ('active', 'deleted', 'default')", name="ck_fob_period_status"),
         CheckConstraint(
             "valid_to IS NULL OR valid_to >= valid_from",
             name="ck_country_template_fob_period_window",
@@ -2096,6 +2098,9 @@ class CountryTemplateFobPeriod(TimestampMixin, Base):
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Retain deleted schedules so clearing the last period cannot silently resume sales.
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default="active")
 
 
 class CountryMaterialFinance(TimestampMixin, Base):

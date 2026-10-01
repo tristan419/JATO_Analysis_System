@@ -13,6 +13,10 @@ export interface MonthCell {
   quantity: number;
   isEditable: boolean;
   rowVersion: number;
+  fobEur?: number | null;
+  reason?: string;
+  availableRanges?: Array<{ from: string; to: string }>;
+  requiresOrderDate?: boolean;
 }
 
 export interface FobConflict {
@@ -127,6 +131,35 @@ export interface BomTemplateLifecycleUpdateResponse {
   canApply: boolean;
   lifecycleStatus?: string;
   rowVersions?: Record<string, number>;
+}
+
+export type BomLifecycleReviewKind =
+  | "expiring_soon"
+  | "expired_pending_archive"
+  | "period_outside_lifecycle"
+  | "overlapping_periods"
+  | "inconsistent_template";
+
+export interface BomLifecycleReviewItem {
+  kind: BomLifecycleReviewKind;
+  severity: "info" | "warning" | "error";
+  bomTemplate: string;
+  materialCode: string;
+  countryCode: string | null;
+  periodId?: string;
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
+  validFrom?: string;
+  validTo?: string | null;
+  message: string;
+  messageZh: string;
+  suggestedActions: string[];
+}
+
+export interface BomLifecycleReviewResponse {
+  asOf: string;
+  warningDays: number;
+  items: BomLifecycleReviewItem[];
 }
 
 export interface QuantityCellUpdate {

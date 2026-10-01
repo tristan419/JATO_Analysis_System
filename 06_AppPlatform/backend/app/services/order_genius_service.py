@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import io
 import uuid as uuid_module
+from calendar import monthrange
 from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy.orm import Session
+from app.db.models import CountryTemplateFobPeriod, CountrySkuFobResolved, MaterialSkuMaster
 
 from app.infra import order_genius_repository as repo
 from app.services.material_master_parser import parse_material_master_xlsx, _infer_interior_from_tail_code
@@ -450,7 +452,7 @@ def _list_matrix_candidate_skus(
             exterior_color_code=colour,
             material_code_search=material_code_search,
         )
-        if include_historical
+        if include_historical or selection_date is None
         else repo.list_active_skus(
             session,
             version=version,
@@ -459,6 +461,8 @@ def _list_matrix_candidate_skus(
             target_date=selection_date,
         )
     )
+    if not include_historical and selection_date is None:
+        active_skus = [sku for sku in active_skus if repo.resolve_effective_lifecycle_status(sku, date.today()) != "historical"]
     if normalized_brand:
         active_skus = [
             sku for sku in active_skus
@@ -599,6 +603,72 @@ def resolve_date_effective_fob(
     return round(float(period.base_fob_eur) + float(amount), 2), None, period_payload
 
 
+def resolve_month_effective_fob(
+    session: Session, country_code: str, sku: MaterialSkuMaster, year: int, month: int,
+    *, default_fob: CountrySkuFobResolved | None, periods: list[CountryTemplateFobPeriod], uses_periods: bool,
+    colour_pricing: dict,
+    include_historical: bool = False,
+) -> dict:
+    """One monthly planning price, with exact sale-day ranges. No today-based pricing."""
+    start, end = date(year, month, 1), date(year, month, monthrange(year, month)[1])
+    result = {"isEditable": False, "fobEur": None, "availableRanges": [], "requiresOrderDate": False, "reason": ""}
+    historical = repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
+    if historical and (not include_historical or (year, month) > (date.today().year, date.today().month)):
+        result["reason"] = "Include historical materials for current/past orders; future use requires extending the template end date / 历史物料须明确启用补录，未来订单请延长模板截止日"
+        return result
+    effective_from, effective_to = repo.get_lifecycle_dates(sku)
+    if not (historical and include_historical):
+        start = max(start, effective_from or start)
+        end = min(end, effective_to or end)
+    if start > end:
+        result["reason"] = "No sale day within the template lifecycle this month / 本月不在模板有效期内，请查看 BOM 日期"
+        return result
+
+    ranges: list[tuple[date, date]] = []
+    bases: set[float] = set()
+    if uses_periods:
+        for period in periods:
+            left, right = max(start, period.valid_from), min(end, period.valid_to or end)
+            if left <= right and float(period.base_fob_eur) > 0:
+                ranges.append((left, right))
+                bases.add(round(float(period.base_fob_eur), 2))
+        if not ranges:
+            result["reason"] = "No country FOB this month (gap or ordering paused); edit country price periods in BOM Admin / 本月国家无价或停价，请在 BOM Admin 补正区间"
+            return result
+        if len(bases) > 1:
+            result["reason"] = "Conflicting monthly Single bases; align this template/country month's prices in BOM Admin / 同月基准冲突，请统一该模板国家价格"
+            return result
+    elif default_fob is not None and float(default_fob.final_fob_eur) > 0:
+        ranges = [(start, end)]
+    else:
+        result["reason"] = "No positive Single base; save a country base in BOM Admin / 无有效基准，请保存国家基准价"
+        return result
+
+    if colour_pricing.get("amount") is None:
+        result["reason"] = "Missing saved tier or surcharge rule; confirm the BOM tier/rule first / 缺档位或规则，请在 BOM Admin 确认"
+        return result
+    if uses_periods:
+        final = round(next(iter(bases)) + float(colour_pricing["amount"]), 2)
+    else:
+        final = float(default_fob.final_fob_eur)
+
+    merged: list[tuple[date, date]] = []
+    for left, right in sorted(ranges):
+        if merged and (left - merged[-1][1]).days <= 1:
+            merged[-1] = (merged[-1][0], max(right, merged[-1][1]))
+        else:
+            merged.append((left, right))
+    full_month = merged == [(date(year, month, 1), date(year, month, monthrange(year, month)[1]))]
+    result.update({
+        "isEditable": True, "fobEur": final,
+        "availableRanges": [{"from": left.isoformat(), "to": right.isoformat()} for left, right in merged],
+        "requiresOrderDate": not full_month,
+        "reason": ("Available " + ", ".join(f"{left.isoformat()} – {right.isoformat()}" for left, right in merged)
+                   + ("; choose an available orderDate for PI / PI 请选择有效下单日" if not full_month else "")),
+    })
+    return result
+
+
 def _historical_surcharge_review(
     session: Session,
     sku: MaterialSkuMaster,
@@ -675,11 +745,20 @@ def _build_matrix_for_country(
         )
         for sku in active_skus
     }
+    # A country schedule can supply a price without an old undated SKU price.
+    schedules = {}
+    for sku in active_skus:
+        if sku.bom_template not in schedules:
+            schedules[sku.bom_template] = (
+                repo.list_country_template_fob_periods(session, country_code, sku.bom_template),
+                repo.has_country_template_fob_periods(session, country_code, sku.bom_template),
+            )
     skus_with_fob = [
         sku for sku in active_skus
         if sku.material_code in fob_map
         or sku.material_code in conflict_codes
         or dated_fob_by_material[sku.material_code][2] is not None
+        or schedules[sku.bom_template][1]
         or (
             include_historical
             and repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
@@ -735,13 +814,20 @@ def _build_matrix_for_country(
         )
         row_months: dict[str, dict] = {}
         row_ttl = 0
+        colour_pricing = repo.resolve_colour_surcharge_for_sku(session, sku, repo.resolve_effective_colour_tier(sku))
         for month in range(1, 13):
             cell = qty_map.get((sku.material_code, month))
             qty = cell.quantity if cell else 0
             row_ttl += qty
+            periods, uses_periods = schedules[sku.bom_template]
+            availability = resolve_month_effective_fob(
+                session, country_code, sku, year, month, default_fob=fob,
+                periods=periods, uses_periods=uses_periods, include_historical=include_historical,
+                colour_pricing=colour_pricing,
+            )
             row_months[str(month)] = {
+                **availability,
                 "quantity": qty,
-                "is_editable": True,
                 "rowVersion": cell.row_version if cell else 1,
             }
 
@@ -777,7 +863,7 @@ def _build_matrix_for_country(
             "fobPeriod": fob_period,
             "lifecycleStatus": "historical" if historical_backfill else lifecycle_status,
             "fobConflict": conflict,
-            "editable": conflict is None and (not historical_backfill or include_historical),
+            "editable": any(cell["isEditable"] for cell in row_months.values()) and (not historical_backfill or include_historical),
             "displayStyle": "strikethrough" if historical_backfill else None,
             "historicalBackfill": historical_backfill,
             "priceSource": (
@@ -840,7 +926,7 @@ def _build_matrix_for_country(
             row_ttl += qty
             row_months[str(month)] = {
                 "quantity": qty,
-                "is_editable": False,
+                "isEditable": False,
                 "rowVersion": cell.row_version if cell else 1,
             }
 
@@ -1118,12 +1204,18 @@ def update_quantity_cell(
             raise ValueError(
                 "Historical material cannot be used for a future month; extend the BOM template end date first."
             )
-    elif lifecycle_status not in {"active", "phase_out"}:
-        raise ValueError("Material code is not active for order entry.")
-
-    # Get current FOB for the cell
+    # The selected month is planning time; today is only the Historical opt-in boundary.
     fob = repo.get_fob_for_country_sku(session, country_code, material_code)
-    fob_eur = float(fob.final_fob_eur) if fob else 0.0
+    availability = resolve_month_effective_fob(
+        session, country_code, sku, order_year, order_month, default_fob=fob,
+        periods=repo.list_country_template_fob_periods(session, country_code, sku.bom_template),
+        uses_periods=repo.has_country_template_fob_periods(session, country_code, sku.bom_template),
+        include_historical=include_historical,
+        colour_pricing=repo.resolve_colour_surcharge_for_sku(session, sku, repo.resolve_effective_colour_tier(sku)),
+    )
+    if not availability["isEditable"]:
+        raise ValueError(availability["reason"])
+    fob_eur = availability["fobEur"]
 
     cell = repo.upsert_quantity_cell(
         session=session,

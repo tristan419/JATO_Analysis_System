@@ -15805,6 +15805,18 @@ table.material-finance-table td:nth-child(n+5) {
   background: rgba(248, 250, 252, 0.88);
 }
 
+.bom-fob-period-gap {
+  margin: 0;
+  padding: 8px;
+  color: #92400e;
+  background: #fffbeb;
+  font-size: 12px;
+}
+
+.bom-fob-edit-card { min-width: 0; }
+.bom-lifecycle-editor select { min-height: 32px; max-width: 100%; }
+.bom-lifecycle-editor [role="status"] { padding: 8px; border: 1px solid #cbd5e1; background: #fff; }
+
 .bom-fob-period-head {
   display: flex;
   align-items: flex-start;

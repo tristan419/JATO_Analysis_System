@@ -150,6 +150,7 @@ import type {
   BaselineVersion,
   BomTemplateLifecycleUpdateRequest,
   BomTemplateLifecycleUpdateResponse,
+  BomLifecycleReviewResponse,
   ColourHexRuleApplyResult,
   ColourHexRuleLookup,
   ColourHexRulePreview,
@@ -5473,6 +5474,11 @@ export const api = {
       { method: "PATCH", body: JSON.stringify(body) },
     ),
 
+  getBomLifecycleReview: (warningDays = 60) =>
+    request<BomLifecycleReviewResponse>(
+      `/order-genius/bom-templates/lifecycle-review?warningDays=${warningDays}`,
+    ),
+
   updateSkuFob: (materialCode: string, body: { countryCode: string; baseFobEur?: number | null; finalFobEur?: number | null; paymentTermCode?: string; remark?: string | null }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),
 
@@ -5487,7 +5493,7 @@ export const api = {
       bomTemplate: params.bomTemplate,
       countryCode: params.countryCode,
     });
-    return request<{ periods: CountryTemplateFobPeriod[] }>(
+    return request<{ periods: CountryTemplateFobPeriod[]; usesPeriods: boolean }>(
       `/order-genius/bom-templates/fob-periods?${qs.toString()}`,
     );
   },
@@ -5511,6 +5517,11 @@ export const api = {
       `/order-genius/bom-templates/fob-periods/${encodeURIComponent(periodId)}?rowVersion=${rowVersion}`,
       { method: "DELETE" },
     ),
+
+  restoreBomTemplateDefaultFob: (bomTemplate: string, countryCode: string, expectedBaseFobEur: number | null) =>
+    request<{ restored: boolean; baseFobEur: number }>("/order-genius/bom-templates/fob-periods/restore-default", {
+      method: "POST", body: JSON.stringify({ bomTemplate, countryCode, previewOnly: expectedBaseFobEur === null, confirmed: expectedBaseFobEur !== null, expectedBaseFobEur }),
+    }),
 
   updateSkuFobsBulk: (body: { updates: { materialCode: string; countryCode: string; finalFobEur: number | null; paymentTermCode?: string | null }[] }) =>
     request<{ updated: number; cleared: number; unchanged: number; total: number }>(

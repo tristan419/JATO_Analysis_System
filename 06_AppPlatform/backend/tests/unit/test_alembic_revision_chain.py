@@ -67,7 +67,27 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20260929_0051"]
+    assert sorted(revisions - parent_revisions) == ["20261001_0052"]
+
+
+def test_fob_period_deletion_intent_revision_preserves_active_periods_and_history() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "fob_period_revision_0052", VERSIONS_DIR / "20261001_0052_fob_period_deletion_intent.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = StringIO()
+    module.op = Operations(MigrationContext.configure(
+        dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output},
+    ))
+    module.upgrade()
+    sql = output.getvalue()
+    assert "ADD COLUMN status TEXT DEFAULT 'active' NOT NULL" in sql
+    assert "DROP CONSTRAINT uq_country_template_fob_period_start" in sql
+    assert "CREATE UNIQUE INDEX uq_country_template_fob_period_start" in sql
+    assert "WHERE status = 'active'" in sql
+    assert "DELETE FROM" not in sql
 
 
 def test_governance_revision_generates_isolated_postgresql_sql() -> None:
