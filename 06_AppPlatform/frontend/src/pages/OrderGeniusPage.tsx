@@ -450,13 +450,13 @@ function powertrainDisplayRank(value: string): number {
   if (upper === "HEV") return 1;
   if (upper === "BEV") return 2;
   if (upper === "PHEV" || upper.includes("SHS")) return 3;
-  if (upper === "MHEV") return 4;
   return 9;
 }
 
-function compareProductGroupEntries(a: ProductGroupEntry, b: ProductGroupEntry): number {
-  const [brandA = "", modelA = "", versionA = "", ptA = ""] = a[0].split("|");
-  const [brandB = "", modelB = "", versionB = "", ptB = ""] = b[0].split("|");
+function compareProductModels(
+  brandA: string, modelA: string, ptA: string,
+  brandB: string, modelB: string, ptB: string,
+): number {
   const brandRankDiff = brandDisplayRank(brandA) - brandDisplayRank(brandB);
   if (brandRankDiff !== 0) return brandRankDiff;
   const brandDiff = brandA.localeCompare(brandB);
@@ -464,7 +464,14 @@ function compareProductGroupEntries(a: ProductGroupEntry, b: ProductGroupEntry):
   const modelNumberDiff = firstModelNumber(modelA) - firstModelNumber(modelB);
   if (modelNumberDiff !== 0) return modelNumberDiff;
   const powertrainDiff = powertrainDisplayRank(ptA) - powertrainDisplayRank(ptB);
-  return modelA.localeCompare(modelB) || powertrainDiff || versionA.localeCompare(versionB) || ptA.localeCompare(ptB);
+  return powertrainDiff || ptA.localeCompare(ptB) || modelA.localeCompare(modelB);
+}
+
+function compareProductGroupEntries(a: ProductGroupEntry, b: ProductGroupEntry): number {
+  const [brandA = "", modelA = "", versionA = "", ptA = ""] = a[0].split("|");
+  const [brandB = "", modelB = "", versionB = "", ptB = ""] = b[0].split("|");
+  return compareProductModels(brandA, modelA, ptA, brandB, modelB, ptB)
+    || versionA.localeCompare(versionB);
 }
 
 function formatProductModelName(brand: string, modelName: string, version?: string): string {
@@ -2590,6 +2597,14 @@ export function OrderGeniusPage() {
             </select>
           </label>
         </div>
+        <label style={{ cursor: "pointer", fontSize: 12, color: "#475569", display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="checkbox" checked={groupByProduct} onChange={(e) => setGroupByProduct(e.target.checked)} />
+          Group by product
+        </label>
+        <label style={{ cursor: "pointer", fontSize: 12, color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="checkbox" checked={hideEmptyRows} onChange={(e) => setHideEmptyRows(e.target.checked)} />
+          Hide empty rows
+        </label>
         <div className="market-scan-field version-comparison-model-picker-field" ref={countryPickerRef} style={{ minWidth: 200 }}>
           <span>Countries{selectedCountries.length > 0 ? ` (${selectedCountries.length})` : ""}</span>
           <div className="version-comparison-model-picker">
@@ -2718,14 +2733,6 @@ export function OrderGeniusPage() {
           ))}
         </datalist>
 
-        <label style={{ cursor: "pointer", fontSize: 12, color: "#475569", display: "flex", alignItems: "center", gap: 4 }}>
-          <input type="checkbox" checked={groupByProduct} onChange={(e) => setGroupByProduct(e.target.checked)} />
-          Group by product
-        </label>
-        <label style={{ cursor: "pointer", fontSize: 12, color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}>
-          <input type="checkbox" checked={hideEmptyRows} onChange={(e) => setHideEmptyRows(e.target.checked)} />
-          Hide empty rows
-        </label>
         {selectedCountries.length > 1 && (
           <label style={{ cursor: "pointer", fontSize: 12, color: "#0f766e", display: "flex", alignItems: "center", gap: 4 }}>
             <input type="checkbox" checked={consolidatedView} onChange={(e) => setConsolidatedView(e.target.checked)} />
@@ -6584,13 +6591,9 @@ export function BomAdminPanel({
 
   const sortedModelGroupEntries = useMemo(() => {
     return [...modelGroups.entries()].sort(([a], [b]) => {
-      // OMODA before JAECOO, then by model number (smaller first)
-      const brandA = a.split('|')[0] || '';
-      const brandB = b.split('|')[0] || '';
-      if (brandA !== brandB) return brandA === 'OMODA' ? -1 : brandA === 'JAECOO' ? 1 : brandA.localeCompare(brandB);
-      const numberA = parseInt((a.match(/\d+/) || ['0'])[0]) || 0;
-      const numberB = parseInt((b.match(/\d+/) || ['0'])[0]) || 0;
-      return numberA - numberB;
+      const [brandA = "", modelA = "", ptA = ""] = a.split("|");
+      const [brandB = "", modelB = "", ptB = ""] = b.split("|");
+      return compareProductModels(brandA, modelA, ptA, brandB, modelB, ptB);
     });
   }, [modelGroups]);
 
