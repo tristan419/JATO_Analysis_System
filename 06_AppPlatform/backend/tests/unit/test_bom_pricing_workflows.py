@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from app.db import models
 from app.infra import order_genius_repository as repo
 from app.services import order_genius_service as service
+from app.services import order_genius_vehicle_service as vehicle_service
+from fastapi import HTTPException
 from app.api.routes import order_genius as routes
 
 
@@ -247,6 +249,151 @@ def test_no_period_schedule_keeps_undated_legacy_fob(db):
 
     assert row["fobEur"] == 1000
     assert row["fobPeriod"] is None
+
+
+def test_clearing_last_period_requires_explicit_restore_and_retains_history(db):
+    single = sku(db, "S", "single")
+    fob(db, "S", 1000, base=1000)
+    row = repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 8, 1), valid_to=date(2026, 8, 31), base_fob_eur=1200, remark=None, changed_by="test")
+    db.commit()
+    repo.delete_country_template_fob_period(db, row.country_template_fob_period_id, row.row_version)
+    db.commit(); db.expire_all()
+    assert repo.list_country_template_fob_periods(db, "CH", "T**001") == []
+    assert repo.has_country_template_fob_periods(db, "CH", "T**001") is True
+    amount, conflict, evidence = service.resolve_date_effective_fob(db, "CH", single, date(2026, 8, 2))
+    assert amount is None and evidence["status"] == "no_price"
+    with pytest.raises(ValueError, match="No country FOB"):
+        service.update_quantity_cell(db, "CH", 2026, 8, "S", 2, "test", 1)
+    assert repo.restore_country_template_default_fob(db, "CH", "T**001", "test", preview_only=True) == 1000
+    with pytest.raises(ValueError, match="preview and confirm"):
+        repo.restore_country_template_default_fob(db, "CH", "T**001", "test", expected_base=900)
+    assert repo.has_country_template_fob_periods(db, "CH", "T**001") is True
+    repo.restore_country_template_default_fob(db, "CH", "T**001", "test", expected_base=1000)
+    db.commit(); db.expire_all()
+    assert repo.has_country_template_fob_periods(db, "CH", "T**001") is False
+    assert db.get(models.CountryTemplateFobPeriod, row.country_template_fob_period_id).status == "default"
+    saved = service.update_quantity_cell(db, "CH", 2026, 8, "S", 2, "test", 1)
+    assert saved["fob_eur"] == 1000
+    # The same start date can be used again without deleting audit history.
+    repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 8, 1), valid_to=date(2026, 8, 31), base_fob_eur=1300, remark=None, changed_by="test")
+    db.commit()
+    assert repo.has_country_template_fob_periods(db, "CH", "T**001") is True
+
+
+def test_country_month_availability_prices_all_colours_and_keeps_other_country(db):
+    sku(db, "S", "single"); sku(db, "D", "dual")
+    for country in ("CH", "SK"):
+        fob(db, "S", 1000, base=1000, country=country)
+        fob(db, "D", 1300, base=1000, surcharge=300, country=country)
+    for month, price in ((8, 1200), (12, 1500)):
+        repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+            valid_from=date(2026, month, 14 if month == 12 else 1), valid_to=None if month == 12 else date(2026, 8, 31),
+            base_fob_eur=price, remark=None, changed_by="test")
+    db.commit()
+    ch = {row["materialCode"]: row for row in service.build_matrix(db, "CH", 2026)["rows"]}
+    sk = {row["materialCode"]: row for row in service.build_matrix(db, "SK", 2026)["rows"]}
+    assert ch["S"]["months"]["8"]["fobEur"] == 1200
+    assert ch["D"]["months"]["8"]["fobEur"] == 1500
+    assert ch["D"]["months"]["9"]["isEditable"] is False
+    assert ch["D"]["months"]["12"]["availableRanges"] == [{"from": "2026-12-14", "to": "2026-12-31"}]
+    assert ch["D"]["months"]["12"]["requiresOrderDate"] is True
+    assert sk["D"]["months"]["9"]["fobEur"] == 1300
+    with pytest.raises(ValueError, match="No country FOB"):
+        service.update_quantity_cell(db, "CH", 2026, 9, "D", 2, "test", 1)
+    saved = service.update_quantity_cell(db, "CH", 2026, 12, "D", 2, "test", 1)
+    db.commit(); db.expire_all()
+    assert saved["fob_eur"] == 1800
+    cell = repo.list_quantities_for_country_year(db, "CH", 2026)[0]
+    assert cell.fob_eur == 1800
+
+
+def test_period_only_prices_are_visible_and_pi_uses_the_same_month_and_date(db):
+    sku(db, "S", "single"); sku(db, "D", "dual")
+    # No old SKU FOB is needed: the country's template period is authoritative.
+    repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 8, 14), valid_to=date(2026, 8, 31), base_fob_eur=1200, remark=None, changed_by="test")
+    db.commit(); db.expire_all()
+    rows = {row["materialCode"]: row for row in service.build_matrix(db, "CH", 2026)["rows"]}
+    assert rows["D"]["months"]["8"]["fobEur"] == 1500
+    with pytest.raises(HTTPException, match="choose an available orderDate"):
+        vehicle_service._resolve_pi_pricing_date(db, "CH", "D", 2026, 8, None)
+    for day in (14, 31):
+        resolved = vehicle_service._resolve_pi_pricing_date(db, "CH", "D", 2026, 8, date(2026, 8, day))
+        assert vehicle_service._line_payload_from_material(db, "CH", "D", {}, pricing_date=resolved)["fobEur"] == 1500
+    with pytest.raises(HTTPException):
+        vehicle_service._line_payload_from_material(db, "CH", "D", {}, pricing_date=date(2026, 8, 13))
+
+
+def test_pi_full_month_same_price_periods_and_legacy_conflict(db):
+    sku(db, "S", "single")
+    for start, end in ((1, 14), (15, 31)):
+        repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+            valid_from=date(2026, 8, start), valid_to=date(2026, 8, end), base_fob_eur=1000, remark=None, changed_by="test")
+    db.commit()
+    assert vehicle_service._resolve_pi_pricing_date(db, "CH", "S", 2026, 8, None) == date(2026, 8, 1)
+    second = repo.list_country_template_fob_periods(db, "CH", "T**001")[1]
+    second.base_fob_eur = 1200  # An existing legacy conflict, not allowed through CRUD.
+    db.commit()
+    with pytest.raises(HTTPException, match="Conflicting monthly"):
+        vehicle_service._resolve_pi_pricing_date(db, "CH", "S", 2026, 8, date(2026, 8, 20))
+
+
+def test_lifecycle_preview_rejects_inverted_dates_without_writing(db):
+    single = sku(db, "S", "single")
+    db.commit()
+    with pytest.raises(ValueError, match="Final order date"):
+        repo.preview_bom_template_lifecycle_update(db, "S", date(2026, 9, 30), date(2026, 8, 1))
+    db.expire_all()
+    assert single.effective_from_date is None and single.effective_to_date is None
+
+
+def test_planned_template_accepts_month_plan_before_its_start_day(db):
+    future = date.today() + timedelta(days=45)
+    single = sku(db, "S", "single")
+    single.effective_from_date = date(future.year, future.month, 14)
+    fob(db, "S", 1000, base=1000)
+    db.commit()
+    matrix = service.build_matrix(db, "CH", future.year)
+    row = next(row for row in matrix["rows"] if row["materialCode"] == "S")
+    assert row["months"][str(future.month)]["isEditable"] is True
+    assert row["months"][str(future.month)]["availableRanges"][0]["from"].endswith("-14")
+    assert service.update_quantity_cell(db, "CH", future.year, future.month, "S", 5, "test", 1)["fob_eur"] == 1000
+
+
+def test_different_bases_in_disjoint_days_of_one_month_rejected(db):
+    sku(db, "S", "single")
+    repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 8, 1), valid_to=date(2026, 8, 10), base_fob_eur=1000, remark=None, changed_by="test")
+    db.commit()
+    with pytest.raises(ValueError, match="One month"):
+        repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+            valid_from=date(2026, 8, 20), valid_to=date(2026, 8, 31), base_fob_eur=1200, remark=None, changed_by="test")
+    repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 8, 20), valid_to=date(2026, 8, 31), base_fob_eur=1000, remark=None, changed_by="test")
+    db.commit()
+
+
+def test_legacy_monthly_price_conflict_blocks_only_affected_country(db):
+    sku(db, "S", "single"); fob(db, "S", 1000, country="CH"); fob(db, "S", 900, country="SK")
+    for day, end, base in ((1, 10, 1000), (20, 31, 1200)):
+        db.add(models.CountryTemplateFobPeriod(country_code="CH", bom_template="T**001",
+            valid_from=date(2026, 8, day), valid_to=date(2026, 8, end), base_fob_eur=base))
+    db.commit()
+    ch = service.build_matrix(db, "CH", 2026)["rows"][0]["months"]["8"]
+    assert ch["isEditable"] is False and "Conflicting" in ch["reason"]
+    assert service.build_matrix(db, "SK", 2026)["rows"][0]["months"]["8"]["isEditable"] is True
+
+
+def test_paused_period_never_adds_surcharge_or_saves_quantity(db):
+    sku(db, "D", "dual"); fob(db, "D", 1300, base=1000, surcharge=300)
+    repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 8, 1), valid_to=date(2026, 8, 31), base_fob_eur=0, remark=None, changed_by="test")
+    db.commit()
+    with pytest.raises(ValueError, match="paused"):
+        service.update_quantity_cell(db, "CH", 2026, 8, "D", 1, "test", 1)
+    assert repo.list_quantities_for_country_year(db, "CH", 2026) == []
 
 
 def test_template_lifecycle_updates_every_colour_and_is_date_derived(db):

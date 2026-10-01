@@ -12,6 +12,8 @@ import {
   type CSSProperties,
 } from "react";
 import { animate } from "animejs";
+import { createPortal } from "react-dom";
+import { BomTemplateLifecycleEditor } from "../components/orderGenius/BomTemplateLifecycleEditor";
 
 import { api, apiUrl, AUTH_FAILURE_EVENT } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -397,9 +399,9 @@ type PiBatchMode = "by_country" | "by_account";
 type OrderGeniusControlTab = "filters" | "bom" | "exports" | "pi";
 
 const ORDER_GENIUS_CONTROL_TAB_LABELS: Record<OrderGeniusControlTab, string> = {
-  filters: "筛选",
+  filters: "Filters",
   bom: "BOM Admin",
-  exports: "导入导出",
+  exports: "Import / Export",
   pi: "PI Batch",
 };
 
@@ -1057,7 +1059,9 @@ export function OrderGeniusPage() {
         colourTier: r.colourTier,
         colourHex: r.colourHex,
         interiorColorName: r.interiorColorName,
-        fobEur: r.fobEur ?? null,
+        fobEur: selectedMonth && Object.prototype.hasOwnProperty.call(r.months[String(selectedMonth)] || {}, "fobEur")
+          ? (r.months[String(selectedMonth)]?.fobEur ?? null) : r.fobEur ?? null,
+        _months: r.months,
         lifecycleStatus: r.lifecycleStatus,
         editable: r.editable,
         historicalBackfill: r.historicalBackfill,
@@ -1077,7 +1081,7 @@ export function OrderGeniusPage() {
         const md = months[String(m)];
         const stateKey = quantityCellKey(r._countryCode, r.materialCode, m);
         const quantity = getEffectiveQuantity(r, m);
-        const amount = quantity * (r.fobEur ?? 0);
+        const amount = quantity * (md?.fobEur ?? (md?.isEditable === false ? 0 : r.fobEur ?? 0));
         row[monthKey] = quantity;
         row[`_amount_${m}`] = amount;
         row._versions[monthKey] = md?.rowVersion ?? 0;
@@ -1121,7 +1125,8 @@ export function OrderGeniusPage() {
         const fob = row.fobEur ?? 0;
         for (let m = 1; m <= 12; m++) {
           const quantity = getEffectiveQuantity(row, m);
-          const amount = quantity * fob;
+          const month = row.months[String(m)];
+          const amount = quantity * (month && Object.prototype.hasOwnProperty.call(month, "fobEur") ? month.fobEur ?? 0 : fob);
           monthlySums[m] += quantity;
           monthlyAmounts[m] += amount;
           ttl += quantity;
@@ -1334,7 +1339,7 @@ export function OrderGeniusPage() {
       }
     }
     return result;
-  }, [cellErrors, combinedMatrix.rows, consolidatedView, expandedProductGroups, groupByProduct, quantityDrafts, savingCells, selectedCountries.length]);
+  }, [cellErrors, combinedMatrix.rows, consolidatedView, expandedProductGroups, groupByProduct, quantityDrafts, savingCells, selectedCountries.length, selectedMonth]);
 
   // Stable refs so callback identity doesn't change on re-render (prevents grid flash)
   const selCountriesRef = useRef(selectedCountries); selCountriesRef.current = selectedCountries;
@@ -1456,22 +1461,14 @@ export function OrderGeniusPage() {
             });
             clearDraft();
           } catch (retryErr: unknown) {
-            clearDraft();
             setCellErrors((prev) => ({ ...prev, [key]: getErrorMessage(retryErr) }));
             loadMatricesRef.current();
           }
         } else if (oldQuantity == null) {
-          clearDraft();
           setCellErrors((prev) => ({ ...prev, [key]: msg }));
           loadMatricesRef.current();
         } else {
-          clearDraft();
           setCellErrors((prev) => ({ ...prev, [key]: msg }));
-          setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
-            quantity: oldQuantity,
-            isEditable: data.editable !== false,
-            rowVersion: oldRowVersion,
-          }));
         }
       } finally {
         setSavingCells((prev) => {
@@ -2398,7 +2395,7 @@ export function OrderGeniusPage() {
     powertrainFilter || "All powertrains",
   ].join(" · ");
   const orderGeniusControlTabs: Array<{ id: OrderGeniusControlTab; label: string; meta: string }> = [
-    { id: "filters", label: "筛选", meta: activeFilterSummary },
+    { id: "filters", label: ORDER_GENIUS_CONTROL_TAB_LABELS.filters, meta: activeFilterSummary },
     {
       id: "bom",
       label: "BOM Admin",
@@ -2406,7 +2403,7 @@ export function OrderGeniusPage() {
     },
     {
       id: "exports",
-      label: "导入导出",
+      label: ORDER_GENIUS_CONTROL_TAB_LABELS.exports,
       meta: `${combinedMatrix.totalRows} rows · ${showUpload || showQtyImport ? "panel open" : "ready"}`,
     },
     {
@@ -2464,11 +2461,12 @@ export function OrderGeniusPage() {
       <DeckFloatingDrawer
         open={showDeck}
         onOpenChange={setShowDeck}
-        triggerPrimary="筛选 / 操作"
+        triggerPrimary="Filters & Actions"
         triggerSecondaryOpen={ORDER_GENIUS_CONTROL_TAB_LABELS[controlTab]}
         triggerSecondaryClosed={activeFilterSummary}
         eyebrow="Order Genius"
-        title="筛选与操作"
+        title="Filters & Actions"
+        closeLabel="Close"
         ariaLabel="Order Genius controls"
         className="order-genius-control-drawer"
         panelClassName="order-genius-control-panel"
@@ -2520,7 +2518,7 @@ export function OrderGeniusPage() {
           <div className="version-comparison-model-picker">
             <div className="version-comparison-model-picker-input-row">
               <input type="text" className="version-comparison-model-search"
-                placeholder={`${selectedCountries.length} 个国家已选 — 搜索...`}
+                placeholder={`${selectedCountries.length} ${selectedCountries.length === 1 ? "country" : "countries"} selected — Search…`}
                 value={countrySearchQuery}
                 onChange={(e) => { setCountrySearchQuery(e.target.value); setCountryPickerOpen(true); }}
                 onFocus={() => { setCountrySearchQuery(""); setCountryPickerOpen(true); }}
@@ -2530,12 +2528,12 @@ export function OrderGeniusPage() {
               <div className="version-comparison-model-dropdown">
                 <div className="version-comparison-model-dropdown-actions">
                   <button type="button" className="version-comparison-batch-btn"
-                    onClick={() => setSelectedCountries(searchedCountryOptions.map((o) => o.value))}>全选</button>
+                    onClick={() => setSelectedCountries(searchedCountryOptions.map((o) => o.value))}>Select all</button>
                   <button type="button" className="version-comparison-batch-btn"
-                    onClick={() => { const vals = new Set(searchedCountryOptions.map((o) => o.value)); setSelectedCountries((prev) => prev.filter((c) => !vals.has(c))); }}>取消</button>
+                    onClick={() => { const vals = new Set(searchedCountryOptions.map((o) => o.value)); setSelectedCountries((prev) => prev.filter((c) => !vals.has(c))); }}>Deselect shown</button>
                   <button type="button" className="version-comparison-batch-btn"
-                    onClick={() => setSelectedCountries([])}>清空</button>
-                  <span className="version-comparison-dropdown-count">{searchedCountryOptions.length} 项 · {selectedCountries.length} 已选</span>
+                    onClick={() => setSelectedCountries([])}>Clear</button>
+                  <span className="version-comparison-dropdown-count">{searchedCountryOptions.length} options · {selectedCountries.length} selected</span>
                 </div>
                 {searchedCountryOptions.slice(0, 30).map((opt) => {
                   const active = selectedCountries.includes(opt.value);
@@ -3868,6 +3866,9 @@ export function BomAdminPanel({
   const [debouncedSearch, setDebouncedSearch] = useState(cachedSearchText.trim());
   const [editFob, setEditFob] = useState<BomFobEditor | null>(null);
   const [fobPeriods, setFobPeriods] = useState<CountryTemplateFobPeriod[]>([]);
+  const [usesFobPeriods, setUsesFobPeriods] = useState(false);
+  const [periodDeletePreview, setPeriodDeletePreview] = useState<CountryTemplateFobPeriod | null>(null);
+  const [restoreDefaultPreview, setRestoreDefaultPreview] = useState<number | null>(null);
   const [fobPeriodsLoading, setFobPeriodsLoading] = useState(false);
   const [fobPeriodSaving, setFobPeriodSaving] = useState(false);
   const [fobPeriodError, setFobPeriodError] = useState("");
@@ -4370,27 +4371,6 @@ export function BomAdminPanel({
     }));
   }, []);
 
-  const patchBomLifecycle = useCallback((
-    materialCodes: string[],
-    patch: {
-      lifecycleStatus?: string | null;
-      effectiveFrom?: string | null;
-      effectiveTo?: string | null;
-    },
-  ) => {
-    patchBomSkus(materialCodes, (sku) => ({
-      ...sku,
-      lifecycleStatus: patch.lifecycleStatus ?? sku.lifecycleStatus,
-      effectiveFrom: Object.prototype.hasOwnProperty.call(patch, "effectiveFrom")
-        ? patch.effectiveFrom
-        : sku.effectiveFrom,
-      effectiveTo: Object.prototype.hasOwnProperty.call(patch, "effectiveTo")
-        ? patch.effectiveTo
-        : sku.effectiveTo,
-      rowVersion: typeof sku.rowVersion === "number" ? sku.rowVersion + 1 : sku.rowVersion,
-    }));
-  }, [patchBomSkus]);
-
   const patchBomInterior = useCallback((
     materialCodes: string[],
     interiorColorName: string | null,
@@ -4745,11 +4725,15 @@ export function BomAdminPanel({
       return;
     }
     let cancelled = false;
+    setFobPeriods([]);
+    setPeriodDeletePreview(null);
+    setRestoreDefaultPreview(null);
+    setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
     setFobPeriodsLoading(true);
     setFobPeriodError("");
     void api.listBomTemplateFobPeriods({ bomTemplate, countryCode })
       .then((response) => {
-        if (!cancelled) setFobPeriods(response.periods);
+        if (!cancelled) { setFobPeriods(response.periods); setUsesFobPeriods(response.usesPeriods); }
       })
       .catch((error: unknown) => {
         if (!cancelled) setFobPeriodError(getErrorMessage(error));
@@ -4766,6 +4750,7 @@ export function BomAdminPanel({
     if (!bomTemplate || !countryCode) return;
     const response = await api.listBomTemplateFobPeriods({ bomTemplate, countryCode });
     setFobPeriods(response.periods);
+    setUsesFobPeriods(response.usesPeriods);
   };
 
   const handleFobPeriodSave = async () => {
@@ -4790,6 +4775,7 @@ export function BomAdminPanel({
       });
       setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
       await reloadFobPeriods();
+      onFobChanged?.();
     } catch (error: unknown) {
       setFobPeriodError(getErrorMessage(error));
     } finally {
@@ -4806,6 +4792,8 @@ export function BomAdminPanel({
         setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
       }
       await reloadFobPeriods();
+      setPeriodDeletePreview(null);
+      onFobChanged?.();
     } catch (error: unknown) {
       setFobPeriodError(getErrorMessage(error));
     } finally {
@@ -4823,6 +4811,17 @@ export function BomAdminPanel({
       baseFobEur: String(period.baseFobEur),
       remark: period.remark ?? "",
     });
+  };
+
+  const handleRestoreDefault = async (): Promise<void> => {
+    if (!editFob?.bomTemplate) return;
+    setFobPeriodSaving(true); setFobPeriodError("");
+    try {
+      const result = await api.restoreBomTemplateDefaultFob(editFob.bomTemplate, editFob.countryCode, restoreDefaultPreview);
+      if (!result.restored) setRestoreDefaultPreview(result.baseFobEur);
+      else { await reloadFobPeriods(); setRestoreDefaultPreview(null); onFobChanged?.(); }
+    } catch (error: unknown) { setFobPeriodError(getErrorMessage(error)); }
+    finally { setFobPeriodSaving(false); }
   };
 
   const handleFobSave = async () => {
@@ -8406,73 +8405,15 @@ export function BomAdminPanel({
                                         </>
                                       )}
                                       lifecycle={(
-                                        <div className="bom-lifecycle-editor">
-                                          <div className="bom-lifecycle-segment" aria-label="Lifecycle status">
-                                            {BOM_LIFECYCLE_OPTIONS.map((option) => (
-                                              <button
-                                                key={`${draftKey}-lifecycle-${option.value}`}
-                                                type="button"
-                                                className={`bom-lifecycle-option bom-lifecycle-option-${option.value}${lifecycleStatus === option.value ? " is-active" : ""}`}
-                                                title={option.description}
-                                                onClick={async () => {
-                                                  const value = option.value;
-                                                  patchBomLifecycle(allCodes, { lifecycleStatus: value });
-                                                  try {
-                                                    await api.updateSkuLifecycle(ref.materialCode, {
-                                                      lifecycleStatus: value,
-                                                      rowVersion: ref.rowVersion,
-                                                    });
-                                                  } catch {}
-                                                  scheduleLoad(1200);
-                                                }}
-                                              >
-                                                {option.label}
-                                              </button>
-                                            ))}
-                                          </div>
-                                          <div className="bom-lifecycle-window">
-                                            <label>
-                                              <span>From</span>
-                                              <input
-                                                type="text"
-                                                placeholder="YYYY-MM"
-                                                defaultValue={ref.effectiveFrom || ""}
-                                                onBlur={async (e) => {
-                                                  const value = e.target.value.trim() || null;
-                                                  patchBomLifecycle(allCodes, { effectiveFrom: value });
-                                                  try {
-                                                    await api.updateSkuLifecycle(ref.materialCode, {
-                                                      lifecycleStatus: ref.lifecycleStatus || lifecycleStatus,
-                                                      effectiveFrom: value,
-                                                      rowVersion: ref.rowVersion,
-                                                    });
-                                                  } catch {}
-                                                  scheduleLoad(1200);
-                                                }}
-                                              />
-                                            </label>
-                                            <label>
-                                              <span>To</span>
-                                              <input
-                                                type="text"
-                                                placeholder="YYYY-MM"
-                                                defaultValue={ref.effectiveTo || ""}
-                                                onBlur={async (e) => {
-                                                  const value = e.target.value.trim() || null;
-                                                  patchBomLifecycle(allCodes, { effectiveTo: value });
-                                                  try {
-                                                    await api.updateSkuLifecycle(ref.materialCode, {
-                                                      lifecycleStatus: ref.lifecycleStatus || lifecycleStatus,
-                                                      effectiveTo: value,
-                                                      rowVersion: ref.rowVersion,
-                                                    });
-                                                  } catch {}
-                                                  scheduleLoad(1200);
-                                                }}
-                                              />
-                                            </label>
-                                          </div>
-                                        </div>
+                                        <BomTemplateLifecycleEditor
+                                          key={`${draftKey}|${ref.rowVersion}`}
+                                          materialCode={ref.materialCode}
+                                          status={lifecycleStatus}
+                                          effectiveFrom={ref.effectiveFrom || null}
+                                          effectiveTo={ref.effectiveTo || null}
+                                          rowVersion={ref.rowVersion}
+                                          onSaved={() => { scheduleLoad(0); onFobChanged?.(); }}
+                                        />
                                       )}
                                       countries={editCountryOptions}
                                       selectedCountryCount={bulkFobEditor.selectedCountries.length}
@@ -8591,9 +8532,9 @@ export function BomAdminPanel({
           </div>
         </div>
       ) : null}
-      {editFob ? (
-        <div className="bom-finance-modal-backdrop" onClick={() => setEditFob(null)}>
-          <div className="bom-fob-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
+      {editFob ? createPortal((
+        <div className="bom-finance-modal-backdrop" onClick={() => { if (!fobPeriodSaving) setEditFob(null); }}>
+          <div className="bom-fob-edit-modal-shell" role="dialog" aria-modal="true" aria-label="Country template FOB periods" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape" && !fobPeriodSaving) setEditFob(null); }}>
             <div className="bom-fob-edit-card">
               <div>
                 <span className="bom-finance-eyebrow">BOM ADMIN · FOB</span>
@@ -8614,11 +8555,7 @@ export function BomAdminPanel({
               <div className="bom-fob-edit-grid">
                 <label>
                   <span>Country</span>
-                  <input
-                    type="text"
-                    value={editFob.countryCode}
-                    onChange={(event) => setEditFob({ ...editFob, countryCode: event.target.value.toUpperCase() })}
-                  />
+                  <input type="text" value={editFob.countryCode} readOnly autoFocus />
                 </label>
                 <label>
                   <span>{editFob.bomTemplate?.includes("**") ? "Base FOB EUR" : "FOB EUR"}</span>
@@ -8643,16 +8580,20 @@ export function BomAdminPanel({
                   <div className="bom-fob-period-head">
                     <div>
                       <strong>Date-specific Single base</strong>
-                      <span>Overrides the default only inside the saved dates. Zero means ordering stopped.</span>
+                      <span>Periods are authoritative for this country. Gaps have no price; zero pauses ordering. One Single base per month.</span>
                     </div>
                     {fobPeriodsLoading ? <span>Loading…</span> : null}
                   </div>
                   {fobPeriods.length > 0 ? (
                     <div className="bom-fob-period-list">
-                      {fobPeriods.map((period) => (
-                        <div key={period.periodId} className="bom-fob-period-row">
+                      {fobPeriods.map((period, index) => (
+                        <Fragment key={period.periodId}>
+                        {index > 0 && fobPeriods[index - 1].validTo && new Date(period.validFrom).getTime() - new Date(fobPeriods[index - 1].validTo!).getTime() > 86400000 ? (
+                          <p className="bom-fob-period-gap">Gap after {fobPeriods[index - 1].validTo} and before {period.validFrom}: no price — ordering unavailable</p>
+                        ) : null}
+                        <div className="bom-fob-period-row">
                           <span>{period.validFrom} → {period.validTo || "Open"}</span>
-                          <strong>{period.baseFobEur.toLocaleString()} EUR</strong>
+                          <strong>{period.baseFobEur === 0 ? "Ordering paused (0 EUR)" : `${period.baseFobEur.toLocaleString()} EUR`}</strong>
                           <span>{period.remark || "—"}</span>
                           <div className="bom-fob-period-actions">
                             <button
@@ -8665,18 +8606,29 @@ export function BomAdminPanel({
                               type="button"
                               className="btn btn-sm btn-ghost"
                               disabled={fobPeriodSaving}
-                              onClick={() => void handleFobPeriodDelete(period)}
+                              onClick={() => setPeriodDeletePreview(period)}
                             >Delete</button>
                           </div>
-                        </div>
+                        </div></Fragment>
                       ))}
                     </div>
-                  ) : !fobPeriodsLoading ? <p>No dated override; the default base remains active.</p> : null}
+                  ) : !fobPeriodsLoading ? <p>{usesFobPeriods ? "All periods removed: no price — ordering unavailable. Restore the default explicitly to resume." : "No periods configured: positive undated default FOB remains available within template dates."}</p> : null}
+                  {fobPeriods.length > 0 ? <p>Outside listed periods: no price — ordering unavailable.</p> : null}
+                  {periodDeletePreview ? <div role="status">
+                    <p>Remove {periodDeletePreview.validFrom} → {periodDeletePreview.validTo || "Open"}? {fobPeriods.length === 1 ? "This is the last period: ordering will remain unavailable; the default will NOT resume." : "These dates will become a no-price gap."}</p>
+                    <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving} onClick={() => void handleFobPeriodDelete(periodDeletePreview)}>Confirm remove period</button>
+                    <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setPeriodDeletePreview(null)}>Cancel removal</button>
+                  </div> : null}
+                  {!fobPeriodsLoading && usesFobPeriods && fobPeriods.length === 0 ? <div>
+                    {restoreDefaultPreview !== null ? <p>Restore undated Single base {restoreDefaultPreview.toLocaleString()} EUR for {editFob.countryCode}? Ordering resumes only within template dates. Saved tier surcharges still apply.</p> : null}
+                    <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => void handleRestoreDefault()}>{restoreDefaultPreview !== null ? "Confirm restore default FOB" : "Restore undated default FOB"}</button>
+                    {restoreDefaultPreview !== null ? <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setRestoreDefaultPreview(null)}>Cancel restore</button> : null}
+                  </div> : null}
                   <div className="bom-fob-period-draft">
-                    <label><span>From</span><input type="date" value={fobPeriodDraft.validFrom} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validFrom: event.target.value }))} /></label>
-                    <label><span>To</span><input type="date" value={fobPeriodDraft.validTo} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validTo: event.target.value }))} /></label>
-                    <label><span>Single base EUR</span><input type="number" min="0" value={fobPeriodDraft.baseFobEur} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, baseFobEur: event.target.value }))} /></label>
-                    <label><span>Remark</span><input type="text" value={fobPeriodDraft.remark} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, remark: event.target.value }))} /></label>
+                    <label><span>From</span><input type="date" disabled={fobPeriodSaving} value={fobPeriodDraft.validFrom} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validFrom: event.target.value }))} /></label>
+                    <label><span>To</span><input type="date" disabled={fobPeriodSaving} value={fobPeriodDraft.validTo} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validTo: event.target.value }))} /></label>
+                    <label><span>Single base EUR</span><input type="number" min="0" disabled={fobPeriodSaving} value={fobPeriodDraft.baseFobEur} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, baseFobEur: event.target.value }))} /></label>
+                    <label><span>Remark</span><input type="text" disabled={fobPeriodSaving} value={fobPeriodDraft.remark} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, remark: event.target.value }))} /></label>
                     <div className="bom-fob-period-actions">
                       <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving || !fobPeriodDraft.validFrom || fobPeriodDraft.baseFobEur === ""} onClick={() => void handleFobPeriodSave()}>
                         {fobPeriodDraft.periodId ? "Save changes" : "Add period"}
@@ -8691,14 +8643,14 @@ export function BomAdminPanel({
               ) : null}
               <BomFinanceActionBar
                 actions={[
-                  { label: `Save ${editFob.materialCodes.length}`, kind: "primary", onClick: () => void handleFobSave() },
-                  { label: "Cancel", onClick: () => setEditFob(null) },
+                  { label: `Save ${editFob.materialCodes.length}`, kind: "primary", disabled: fobPeriodSaving, onClick: () => void handleFobSave() },
+                  { label: "Cancel", disabled: fobPeriodSaving, onClick: () => setEditFob(null) },
                 ]}
               />
             </div>
           </div>
         </div>
-      ) : null}
+      ), document.body) : null}
     </div>
   );
 }

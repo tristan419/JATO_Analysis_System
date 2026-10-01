@@ -1080,7 +1080,43 @@ def get_bom_template_fob_periods(
         raise HTTPException(status_code=400, detail="countryCode and bomTemplate are required")
     validate_country_access(session, user.name, user.role, country)
     rows = repo.list_country_template_fob_periods(session, country, template)
-    return {"periods": [_country_template_fob_period_payload(row) for row in rows]}
+    return {"periods": [_country_template_fob_period_payload(row) for row in rows],
+            "usesPeriods": repo.has_country_template_fob_periods(session, country, template)}
+
+
+@router.post("/bom-templates/fob-periods/restore-default")
+def restore_bom_template_default_fob(body: dict, session: Session = Depends(get_db_session), user=Depends(require_min_role("editor"))) -> dict:
+    country = clean_text(body.get("countryCode")).upper()
+    template = clean_text(body.get("bomTemplate")).upper()
+    preview_only = body.get("previewOnly") is True
+    if not country or not template or (not preview_only and body.get("confirmed") is not True):
+        raise HTTPException(status_code=400, detail="Confirm country, template and restoring undated default FOB")
+    validate_country_access(session, user.name, user.role, country)
+    try:
+        base = repo.restore_country_template_default_fob(
+            session, country, template, user.name, preview_only=preview_only,
+            expected_base=body.get("expectedBaseFobEur"),
+        )
+        if preview_only:
+            return {"restored": False, "baseFobEur": base}
+        session.commit()
+        return {"restored": True, "baseFobEur": base}
+    except (ValueError, LookupError) as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/bom-templates/lifecycle-review")
+def get_bom_template_lifecycle_review(
+    warning_days: int = Query(default=60, alias="warningDays", ge=0, le=365),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return actionable BOM lifecycle drift without mutating any records."""
+    return repo.review_bom_template_lifecycles(
+        session,
+        warning_days=warning_days,
+    )
 
 
 @router.put("/bom-templates/fob-periods")
@@ -1400,6 +1436,8 @@ def patch_sku_lifecycle(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if body.get("previewOnly") is True:
         return preview
     if preview["affectedPeriods"]:

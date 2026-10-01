@@ -23,6 +23,7 @@ import {
 import { AgGridReact } from "ag-grid-react";
 
 import { parseOrderGeniusColourSwatch } from "../utils/orderGeniusColourSwatch";
+import type { MonthCell } from "../types/orderGenius";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -62,6 +63,7 @@ export interface OrderGeniusGridRow {
   } | null;
   remark?: string;
   _countryCode?: string;
+  _months?: Record<string, MonthCell>;
   _indent?: boolean;
   __type?: "groupHeader" | "data" | "consolidated_parent" | "summary";
   __groupLabel?: string;
@@ -83,6 +85,11 @@ export interface OrderGeniusGridRow {
   _errors: Record<string, string>;
   // Saving state per cell key
   _saving: Set<string>;
+}
+
+function monthFob(row: OrderGeniusGridRow, month: number): number {
+  const cell = row._months?.[String(month)];
+  return cell && Object.prototype.hasOwnProperty.call(cell, "fobEur") ? cell.fobEur ?? 0 : row.fobEur ?? 0;
 }
 
 export interface OrderGeniusGridProps {
@@ -414,7 +421,7 @@ export function buildOrderGeniusColumnDefs(
       const amountField = `_amount_${month}` as `_amount_${number}`;
       const precomputed = row[amountField];
       if (precomputed != null) return sum + precomputed;
-      return sum + (row[monthField] || 0) * (row.fobEur || 0);
+      return sum + (row[monthField] || 0) * monthFob(row, month);
     }, 0);
 
   for (const m of activeMonths) {
@@ -427,11 +434,14 @@ export function buildOrderGeniusColumnDefs(
         field,
         initialWidth: 72,
         type: "numericColumn",
-        editable: (params: any) =>
+        editable: (params) =>
           canEditQuantities
           && params.data != null
           && params.data.__type !== "groupHeader"
-          && params.data.editable !== false,
+          && params.data.editable !== false
+          && params.data._months?.[String(m)]?.isEditable !== false,
+        tooltipValueGetter: (params) => params.data?._errors?.[field]
+          || params.data?._months?.[String(m)]?.reason || "",
         cellEditor: "agNumberCellEditor",
         cellEditorParams: { min: 0 },
         valueParser: (p) => {
@@ -444,10 +454,10 @@ export function buildOrderGeniusColumnDefs(
           const row = p.data;
           if (!row || row[field] === nextQuantity) return false;
           row[field] = nextQuantity;
-          row[amountField] = nextQuantity * (row.fobEur ?? 0);
+          row[amountField] = nextQuantity * monthFob(row, m);
           row._ttlAmount = MONTH_NUMBERS.reduce((sum, month) => {
             const monthQuantity = row[`month_${month}`] ?? 0;
-            return sum + monthQuantity * (row.fobEur ?? 0);
+            return sum + monthQuantity * monthFob(row, month);
           }, 0);
           return true;
         },
@@ -473,9 +483,8 @@ export function buildOrderGeniusColumnDefs(
           if (!row) return 0;
           const precomputed = row[amountField];
           if (precomputed != null) return precomputed;
-          const qty = (row as any)[field] ?? 0;
-          const fob = row.fobEur ?? 0;
-          return qty * fob;
+          const qty = row[field] ?? 0;
+          return qty * monthFob(row, m);
         },
         valueFormatter: (p) => (p.value != null ? (p.value as number).toLocaleString() : "0"),
       });
@@ -731,7 +740,7 @@ export function OrderGeniusGrid({
       const amount = sourceRows.reduce((sum, row) => {
         const precomputed = row[amountField];
         if (precomputed != null) return sum + precomputed;
-        return sum + (row[monthField] || 0) * (row.fobEur || 0);
+        return sum + (row[monthField] || 0) * monthFob(row, month);
       }, 0);
       summary[monthField] = quantity;
       summary[amountField] = amount;

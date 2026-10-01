@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.db.models import PiOrderHeader, PiOrderLine, PiOrderLineAllocation, PiVehicleUnit
 from app.infra import order_genius_repository as og_repo
 from app.infra import order_genius_vehicle_repository as repo
-from app.services.order_genius_service import resolve_date_effective_fob
+from app.services.order_genius_service import resolve_date_effective_fob, resolve_month_effective_fob
 from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel
 from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
 
@@ -1061,38 +1061,42 @@ def _resolve_pi_pricing_date(
     if requested_order_date is not None:
         if requested_order_date.year != year or requested_order_date.month != month:
             raise HTTPException(status_code=400, detail="orderDate must be inside the selected order month")
-        return requested_order_date
     sku = (
         og_repo.get_current_baseline_sku_by_code(session, material_code)
         if historical_backfill
         else og_repo.get_sku_by_material_code_any_status(session, material_code)
     )
     if sku is None or not sku.bom_template:
-        return None
+        return requested_order_date
     month_start = date(year, month, 1)
     month_end = date(year, month, monthrange(year, month)[1])
+    effective_from, effective_to = og_repo.get_lifecycle_dates(sku)
+    if requested_order_date is None and not historical_backfill and (
+        (effective_from is not None and effective_from > month_start)
+        or (effective_to is not None and effective_to < month_end)
+    ):
+        raise HTTPException(status_code=409, detail="Template is available for only part of this month; choose an available orderDate / 模板仅部分日期可用，请选择有效下单日")
     periods = og_repo.list_country_template_fob_periods(session, country, sku.bom_template)
     if not periods:
-        return None
-    relevant_periods = [
-        period
-        for period in periods
-        if period.valid_from <= month_end and (period.valid_to is None or period.valid_to >= month_start)
-    ]
-    if not relevant_periods:
-        raise HTTPException(
-            status_code=409,
-            detail=f"No FOB is available for {sku.bom_template} / {country} in {year}-{month:02d}",
-        )
-    if len(relevant_periods) == 1:
-        period = relevant_periods[0]
-        if period.valid_from <= month_start and (period.valid_to is None or period.valid_to >= month_end):
-            return month_start
+        if og_repo.has_country_template_fob_periods(session, country, sku.bom_template):
+            raise HTTPException(status_code=409, detail="Dated periods were cleared; restore default FOB explicitly in BOM Admin / 区间已清空，请明确恢复长期价格")
+        return requested_order_date or (month_start if effective_from is not None or effective_to is not None else None)
+    availability = resolve_month_effective_fob(
+        session, country, sku, year, month, default_fob=None, periods=periods,
+        uses_periods=True, include_historical=historical_backfill,
+        colour_pricing=og_repo.resolve_colour_surcharge_for_sku(session, sku, og_repo.resolve_effective_colour_tier(sku)),
+    )
+    if not availability["isEditable"]:
+        raise HTTPException(status_code=409, detail=availability["reason"])
+    if requested_order_date is not None:
+        return requested_order_date
+    if not availability["requiresOrderDate"]:
+        return month_start
     raise HTTPException(
         status_code=409,
         detail=(
-            f"{sku.bom_template} / {country} has more than one FOB price inside "
-            f"{year}-{month:02d}; choose an orderDate before creating the PI"
+            f"{sku.bom_template} / {country} is available for only some dates in "
+            f"{year}-{month:02d}; choose an available orderDate before creating the PI / 请选择有效下单日"
         ),
     )
 

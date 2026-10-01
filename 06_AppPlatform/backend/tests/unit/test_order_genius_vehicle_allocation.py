@@ -576,10 +576,10 @@ def test_historical_override_survives_country_allocation_normalisation() -> None
 
 
 def test_pi_requires_order_date_when_one_month_crosses_fob_periods(monkeypatch) -> None:
-    sku = SimpleNamespace(bom_template="T7151R**MH0001")
+    sku = SimpleNamespace(bom_template="T7151R**MH0001", colour_tier="single", lifecycle_status="active")
     periods = [
-        SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 14)),
-        SimpleNamespace(valid_from=date(2026, 7, 15), valid_to=None),
+        SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 14), base_fob_eur=1000),
+        SimpleNamespace(valid_from=date(2026, 7, 20), valid_to=None, base_fob_eur=1000),
     ]
     monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
     monkeypatch.setattr(order_repo, "list_country_template_fob_periods", lambda *_args: periods)
@@ -588,12 +588,12 @@ def test_pi_requires_order_date_when_one_month_crosses_fob_periods(monkeypatch) 
         _resolve_pi_pricing_date(object(), "CH", "SKU", 2026, 7, None)
 
     assert exc.value.status_code == 409
-    assert "choose an orderDate" in str(exc.value.detail)
+    assert "choose an available orderDate" in str(exc.value.detail)
 
 
 def test_pi_can_use_single_period_covering_whole_month_without_order_date(monkeypatch) -> None:
-    sku = SimpleNamespace(bom_template="T7151R**MH0001")
-    periods = [SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 31))]
+    sku = SimpleNamespace(bom_template="T7151R**MH0001", colour_tier="single", lifecycle_status="active")
+    periods = [SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 31), base_fob_eur=1000)]
     monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
     monkeypatch.setattr(order_repo, "list_country_template_fob_periods", lambda *_args: periods)
 
@@ -602,7 +602,7 @@ def test_pi_can_use_single_period_covering_whole_month_without_order_date(monkey
 
 def test_pi_does_not_fall_back_when_configured_periods_leave_month_gap(monkeypatch) -> None:
     sku = SimpleNamespace(bom_template="T**001")
-    periods = [SimpleNamespace(valid_from=date(2026, 1, 1), valid_to=date(2026, 1, 31))]
+    periods = [SimpleNamespace(valid_from=date(2026, 1, 1), valid_to=date(2026, 1, 31), base_fob_eur=1000)]
     monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
     monkeypatch.setattr(order_repo, "list_country_template_fob_periods", lambda *_args: periods)
 
@@ -610,7 +610,7 @@ def test_pi_does_not_fall_back_when_configured_periods_leave_month_gap(monkeypat
         _resolve_pi_pricing_date(object(), "CH", "SKU", 2026, 2, None)
 
     assert exc.value.status_code == 409
-    assert "No FOB is available" in str(exc.value.detail)
+    assert "No country FOB" in str(exc.value.detail)
 
 
 def test_header_pricing_date_reuses_pi_month_and_order_date(monkeypatch) -> None:

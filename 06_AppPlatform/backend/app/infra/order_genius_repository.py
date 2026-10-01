@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import unicodedata
 from colorsys import hsv_to_rgb
 from collections import Counter
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, delete, func, inspect, or_, select, text, update
@@ -652,6 +653,8 @@ def preview_bom_template_lifecycle_update(
     effective_from: date | None,
     effective_to: date | None,
 ) -> dict:
+    if effective_from is not None and effective_to is not None and effective_to < effective_from:
+        raise ValueError("Final order date must be on or after first order date / 截止日不得早于开始日")
     anchor = get_sku_by_material_code_any_status(session, material_code)
     if anchor is None:
         raise LookupError("Material code not found")
@@ -662,7 +665,7 @@ def preview_bom_template_lifecycle_update(
     periods = list(
         session.execute(
             select(CountryTemplateFobPeriod)
-            .where(CountryTemplateFobPeriod.bom_template == template)
+            .where(CountryTemplateFobPeriod.bom_template == template, CountryTemplateFobPeriod.status == "active")
             .order_by(
                 CountryTemplateFobPeriod.country_code,
                 CountryTemplateFobPeriod.valid_from,
@@ -696,6 +699,142 @@ def preview_bom_template_lifecycle_update(
         "effectiveTo": effective_to.isoformat() if effective_to else None,
         "affectedPeriods": impacts,
         "canApply": not impacts,
+    }
+
+
+def review_bom_template_lifecycles(
+    session: Session,
+    *,
+    today: date | None = None,
+    warning_days: int = 60,
+) -> dict:
+    """Summarise lifecycle drift using the existing template and FOB-period facts."""
+    review_date = today or date.today()
+    baseline = get_latest_baseline(session)
+    if baseline is None:
+        return {"asOf": review_date.isoformat(), "warningDays": warning_days, "items": []}
+
+    sku_rows = list(
+        session.execute(
+            select(MaterialSkuMaster)
+            .where(MaterialSkuMaster.baseline_version_id == baseline.baseline_version_id)
+            .order_by(MaterialSkuMaster.bom_template, MaterialSkuMaster.material_code)
+        ).scalars().all()
+    )
+    rows_by_template: dict[str, list[MaterialSkuMaster]] = {}
+    for row in sku_rows:
+        template = clean_text(row.bom_template or row.material_code).upper()
+        if template:
+            rows_by_template.setdefault(template, []).append(row)
+
+    period_rows = list(
+        session.execute(
+            select(CountryTemplateFobPeriod).where(CountryTemplateFobPeriod.status == "active").order_by(
+                CountryTemplateFobPeriod.bom_template,
+                CountryTemplateFobPeriod.country_code,
+                CountryTemplateFobPeriod.valid_from,
+            )
+        ).scalars().all()
+    )
+    periods_by_template: dict[str, list[CountryTemplateFobPeriod]] = {}
+    for period in period_rows:
+        periods_by_template.setdefault(period.bom_template, []).append(period)
+
+    items: list[dict] = []
+    warning_deadline = review_date + timedelta(days=max(0, warning_days))
+    for template, rows in rows_by_template.items():
+        anchor = rows[0]
+        boundaries = {get_lifecycle_dates(row) for row in rows}
+        if len(boundaries) > 1:
+            items.append({
+                "kind": "inconsistent_template",
+                "severity": "error",
+                "bomTemplate": template,
+                "materialCode": anchor.material_code,
+                "countryCode": None,
+                "message": "Colour SKUs in this template have different lifecycle dates.",
+                "messageZh": "同一模板内的颜色 SKU 生命周期日期不一致。",
+                "suggestedActions": ["Open template", "Align template lifecycle"],
+            })
+            effective_from = effective_to = None
+        else:
+            effective_from, effective_to = next(iter(boundaries))
+            if effective_to is not None and effective_to < review_date:
+                pending_archive = any(
+                    bool(row.is_active) or clean_text(row.lifecycle_status).lower() != "historical"
+                    for row in rows
+                )
+                if pending_archive:
+                    items.append({
+                        "kind": "expired_pending_archive",
+                        "severity": "warning",
+                        "bomTemplate": template,
+                        "materialCode": anchor.material_code,
+                        "countryCode": None,
+                        "effectiveFrom": effective_from.isoformat() if effective_from else None,
+                        "effectiveTo": effective_to.isoformat(),
+                        "message": f"Final order date {effective_to.isoformat()} has passed; review archive state.",
+                        "messageZh": f"最终下单日 {effective_to.isoformat()} 已过，请确认归档状态。",
+                        "suggestedActions": ["Open template", "Archive as Historical", "Extend final order date"],
+                    })
+            elif effective_to is not None and effective_to <= warning_deadline:
+                items.append({
+                    "kind": "expiring_soon",
+                    "severity": "info",
+                    "bomTemplate": template,
+                    "materialCode": anchor.material_code,
+                    "countryCode": None,
+                    "effectiveFrom": effective_from.isoformat() if effective_from else None,
+                    "effectiveTo": effective_to.isoformat(),
+                    "message": f"Final order date is {effective_to.isoformat()}.",
+                    "messageZh": f"最终下单日为 {effective_to.isoformat()}。",
+                    "suggestedActions": ["Open template", "Extend final order date"],
+                })
+
+        periods_by_country: dict[str, list[CountryTemplateFobPeriod]] = {}
+        for period in periods_by_template.get(template, []):
+            periods_by_country.setdefault(period.country_code, []).append(period)
+            before_start = effective_from is not None and period.valid_from < effective_from
+            after_end = effective_to is not None and (
+                period.valid_to is None or period.valid_to > effective_to
+            )
+            if before_start or after_end:
+                items.append({
+                    "kind": "period_outside_lifecycle",
+                    "severity": "error",
+                    "bomTemplate": template,
+                    "materialCode": anchor.material_code,
+                    "countryCode": period.country_code,
+                    "periodId": str(period.country_template_fob_period_id),
+                    "validFrom": period.valid_from.isoformat(),
+                    "validTo": period.valid_to.isoformat() if period.valid_to else None,
+                    "message": "Country FOB period exceeds the template lifecycle.",
+                    "messageZh": "国家 FOB 区间超出模板生命周期。",
+                    "suggestedActions": ["Open template", "Edit price period", "Extend template lifecycle"],
+                })
+        for country_code, country_periods in periods_by_country.items():
+            ordered = sorted(country_periods, key=lambda row: row.valid_from)
+            for previous, current in zip(ordered, ordered[1:]):
+                overlaps = previous.valid_to is None or previous.valid_to >= current.valid_from
+                if overlaps:
+                    items.append({
+                        "kind": "overlapping_periods",
+                        "severity": "error",
+                        "bomTemplate": template,
+                        "materialCode": anchor.material_code,
+                        "countryCode": country_code,
+                        "periodId": str(current.country_template_fob_period_id),
+                        "validFrom": current.valid_from.isoformat(),
+                        "validTo": current.valid_to.isoformat() if current.valid_to else None,
+                        "message": "Country FOB periods overlap.",
+                        "messageZh": "国家 FOB 日期区间互相重叠。",
+                        "suggestedActions": ["Open template", "Edit price periods"],
+                    })
+
+    return {
+        "asOf": review_date.isoformat(),
+        "warningDays": warning_days,
+        "items": items,
     }
 
 
@@ -1043,6 +1182,7 @@ def list_country_template_fob_periods(
             .where(
                 CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
                 CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
+                CountryTemplateFobPeriod.status == "active",
             )
             .order_by(CountryTemplateFobPeriod.valid_from)
         ).scalars().all()
@@ -1059,6 +1199,7 @@ def has_country_template_fob_periods(
         .where(
             CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
             CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
+            CountryTemplateFobPeriod.status != "default",
         )
         .limit(1)
     ).scalar_one_or_none() is not None
@@ -1075,6 +1216,7 @@ def resolve_country_template_fob_period(
             select(CountryTemplateFobPeriod).where(
                 CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
                 CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
+                CountryTemplateFobPeriod.status == "active",
                 CountryTemplateFobPeriod.valid_from <= target_date,
                 or_(
                     CountryTemplateFobPeriod.valid_to.is_(None),
@@ -1110,7 +1252,7 @@ def save_country_template_fob_period(
         raise ValueError("countryCode and bomTemplate are required")
     if valid_to is not None and valid_to < valid_from:
         raise ValueError("validTo must be on or after validFrom")
-    if base_fob_eur < 0:
+    if not math.isfinite(base_fob_eur) or base_fob_eur < 0:
         raise ValueError("baseFobEur must be greater than or equal to 0")
 
     baseline = get_latest_baseline(session)
@@ -1144,9 +1286,9 @@ def save_country_template_fob_period(
         if period_id is not None
         else None
     )
-    if period_id is not None and row is None:
+    if period_id is not None and (row is None or row.status != "active"):
         raise LookupError("FOB period not found")
-    if row is not None and row_version is not None and row.row_version != row_version:
+    if row is not None and row.row_version != row_version:
         raise RuntimeError("FOB period changed; refresh and retry")
     if row is not None and (
         row.country_code != country or row.bom_template != template
@@ -1156,6 +1298,7 @@ def save_country_template_fob_period(
     overlap = select(CountryTemplateFobPeriod.country_template_fob_period_id).where(
         CountryTemplateFobPeriod.country_code == country,
         CountryTemplateFobPeriod.bom_template == template,
+        CountryTemplateFobPeriod.status == "active",
         or_(
             CountryTemplateFobPeriod.valid_to.is_(None),
             CountryTemplateFobPeriod.valid_to >= valid_from,
@@ -1169,6 +1312,16 @@ def save_country_template_fob_period(
         )
     if session.execute(overlap.limit(1)).scalar_one_or_none() is not None:
         raise ValueError("FOB periods cannot overlap for the same template and country")
+
+    if base_fob_eur > 0:
+        for other in list_country_template_fob_periods(session, country, template):
+            if other.country_template_fob_period_id == period_id or float(other.base_fob_eur) <= 0:
+                continue
+            # Even disjoint days within one month must share one positive base.
+            if ((other.valid_to is None or (other.valid_to.year, other.valid_to.month) >= (valid_from.year, valid_from.month))
+                    and (valid_to is None or (other.valid_from.year, other.valid_from.month) <= (valid_to.year, valid_to.month))
+                    and round(float(other.base_fob_eur), 2) != round(base_fob_eur, 2)):
+                raise ValueError("One month must use one Single base; align the prices or start the new price next month / 同月只能有一个基准价，请统一价格或从下月开始")
 
     if row is None:
         row = CountryTemplateFobPeriod(
@@ -1198,11 +1351,44 @@ def delete_country_template_fob_period(
     row_version: int,
 ) -> None:
     row = session.get(CountryTemplateFobPeriod, period_id)
-    if row is None:
+    if row is None or row.status != "active":
         raise LookupError("FOB period not found")
     if row.row_version != row_version:
         raise RuntimeError("FOB period changed; refresh and retry")
-    session.delete(row)
+    row.status = "deleted"
+    row.row_version += 1
+
+
+def restore_country_template_default_fob(
+    session: Session, country_code: str, bom_template: str, changed_by: str,
+    *, preview_only: bool = False, expected_base: float | None = None,
+) -> float:
+    """Explicitly release a cleared schedule; keep its historical records."""
+    if list_country_template_fob_periods(session, country_code, bom_template):
+        raise ValueError("Remove all dated periods before restoring the undated default FOB")
+    baseline = get_latest_baseline(session)
+    skus = list_bom_template_skus(session, bom_template, baseline.baseline_version_id) if baseline else []
+    if not skus:
+        raise LookupError("BOM template not found")
+    resolution = {"baseFobEur": None}
+    for sku in skus:
+        fob = get_fob_for_country_sku(session, country_code, sku.material_code)
+        if fob is not None:
+            resolution = _resolve_colour_surcharge_reprice_base(session, sku, fob)
+            break
+    if resolution.get("baseFobEur") is None or float(resolution["baseFobEur"]) <= 0:
+        raise ValueError("Confirm a unique positive Single base in BOM Admin before restoring default FOB")
+    base = float(resolution["baseFobEur"])
+    if preview_only:
+        return base
+    if expected_base is None or expected_base != base:
+        raise ValueError("Default Single base changed; preview and confirm again / 长期基准已变化，请重新预览确认")
+    session.execute(update(CountryTemplateFobPeriod).where(
+        CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
+        CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
+        CountryTemplateFobPeriod.status == "deleted",
+    ).values(status="default", updated_by=changed_by, row_version=CountryTemplateFobPeriod.row_version + 1))
+    return base
 
 
 def initialize_sku_fobs_from_source(
