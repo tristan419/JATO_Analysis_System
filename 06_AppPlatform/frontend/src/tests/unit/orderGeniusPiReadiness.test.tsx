@@ -29,6 +29,9 @@ vi.mock("../../components/OrderGeniusGrid", async (original) => ({
       <output data-testid="eligible-rows">{props.selectableRowIds?.size ?? 0}</output>
       <output data-testid="period-price">{row?.fobEur}</output>
       <output data-testid="group-price">{props.rows.find((item) => item.__type === "groupHeader")?.fobEur}</output>
+      <output data-testid="display-row-order">{JSON.stringify(props.rows.map((item) => ({
+        kind: item.__type, groupKey: item.__groupKey, materialCode: item.materialCode,
+      })))}</output>
       <button disabled={!props.piSelectionSummary?.selectableCount} onClick={() => props.piSelectionSummary?.onToggleAll(true)}>Select candidates</button>
     </div>;
   },
@@ -76,6 +79,64 @@ async function openOctober() {
 }
 
 describe("quantity save → PI readiness", () => {
+  it("keeps common toggles outside More filters and applies them without reopening advanced filters", async () => {
+    const update = vi.spyOn(api, "updateQuantityCell");
+    await openOctober();
+    fireEvent.click(screen.getByRole("tab", { name: /Filters/i }));
+    const advanced = screen.getByText("More filters").closest("details");
+    const grouping = screen.getByRole("checkbox", { name: "Group by product" });
+    const hideEmpty = screen.getByRole("checkbox", { name: "Hide empty rows" });
+    expect(advanced?.hasAttribute("open")).toBe(false);
+    expect(grouping.closest("details")).toBeNull();
+    expect(hideEmpty.closest("details")).toBeNull();
+    expect((grouping as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(grouping);
+    await waitFor(() => expect(screen.getByTestId("display-row-order").textContent).not.toContain("groupHeader"));
+    fireEvent.click(hideEmpty);
+    await waitFor(() => expect(screen.getByTestId("display-row-order").textContent).toBe("[]"));
+    fireEvent.click(hideEmpty);
+    await waitFor(() => expect(screen.getByTestId("display-row-order").textContent).toContain("T6481QNCLLX0003"));
+    expect(advanced?.hasAttribute("open")).toBe(false);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("uses brand, model number, saved powertrain and version order for product groups", async () => {
+    const response = await api.getOrderGeniusMatrixBatch({ countries: ["CH"], year: 2026 });
+    const base = response.matrices.CH.rows[0];
+    const identities = [
+      { brand: "JAECOO", modelName: "JAECOO5 HEV", powertrain: "HEV", version: "Alpha" },
+      { brand: "OMODA", modelName: "OMODA10 ICE", powertrain: "ICE", version: "Alpha" },
+      { brand: "OMODA", modelName: "OMODA5 BEV", powertrain: "BEV", version: "Alpha" },
+      { brand: "OMODA", modelName: "OMODA5 HEV", powertrain: "HEV", version: "Zulu" },
+      { brand: "OMODA", modelName: "OMODA5 HEV", powertrain: "HEV", version: "Alpha" },
+      { brand: "OMODA", modelName: "OMODA5 SHS", powertrain: "PHEV", version: "Alpha" },
+      { brand: "OMODA", modelName: "OMODA5 ICE", powertrain: "ICE", version: "Alpha" },
+      { brand: "OMODA", modelName: "OMODA7 ICE", powertrain: "ICE", version: "Alpha" },
+    ];
+    response.matrices.CH.rows = identities.map((identity, index) => ({ ...base, ...identity, materialCode: `CODE${index}` }));
+    vi.mocked(api.getOrderGeniusMatrixBatch).mockResolvedValue(response);
+    render(<OrderGeniusPage />);
+    const expectedKeys = [
+      "OMODA|OMODA5 ICE|Alpha|ICE", "OMODA|OMODA5 HEV|Alpha|HEV", "OMODA|OMODA5 HEV|Zulu|HEV",
+      "OMODA|OMODA5 BEV|Alpha|BEV", "OMODA|OMODA5 SHS|Alpha|PHEV", "OMODA|OMODA7 ICE|Alpha|ICE",
+      "OMODA|OMODA10 ICE|Alpha|ICE", "JAECOO|JAECOO5 HEV|Alpha|HEV",
+    ];
+    const groupKeys = (): string[] => {
+      const rows: Array<{ groupKey?: string }> = JSON.parse(screen.getByTestId("display-row-order").textContent || "[]");
+      return rows.map((row) => row.groupKey || "");
+    };
+    await waitFor(() => expect(groupKeys()).toEqual(expectedKeys));
+    vi.mocked(api.getOrderGeniusMatrixBatch).mockResolvedValue({ ...response, matrices: {
+      CH: { ...response.matrices.CH, rows: [...response.matrices.CH.rows].reverse() },
+    } });
+    fireEvent.click(screen.getByRole("tab", { name: /Filters/i }));
+    const requestsBeforeRefresh = vi.mocked(api.getOrderGeniusMatrixBatch).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(api.getOrderGeniusMatrixBatch).toHaveBeenCalledTimes(requestsBeforeRefresh + 1));
+    expect(groupKeys()).toEqual(expectedKeys);
+    expect(response.matrices.CH.rows.map((row) => row.powertrain)).toEqual(identities.map((identity) => identity.powertrain));
+  });
+
   it("waits for two different pending cells before refreshing and reopening PI", async () => {
     const response = await api.getOrderGeniusMatrixBatch({ countries: ["CH"], year: 2026 });
     response.matrices.CH.rows.push({ ...response.matrices.CH.rows[0], materialCode: "T6481QNBWLX0003", colour: "White",

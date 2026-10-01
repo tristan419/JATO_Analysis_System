@@ -74,6 +74,63 @@ describe("BOM Admin A load continuity", () => {
     vi.useRealTimers();
   });
 
+  it("orders model groups by brand, numeric model and saved powertrain after reload", async () => {
+    const identities: Array<[string, string, string]> = [
+      ["JAECOO", "JAECOO5 HEV", "HEV"],
+      ["OMODA", "OMODA10 ICE", "ICE"],
+      ["OMODA", "OMODA5 BEV", "BEV"],
+      ["OMODA", "OMODA5 REEV", "REEV"],
+      ["OMODA", "OMODA5 SHS", "PHEV"],
+      ["OMODA", "OMODA5 HEV", "HEV"],
+      ["OMODA", "OMODA5 Other", "Other"],
+      ["OMODA", "OMODA5 ICE", "ICE"],
+      ["OMODA", "OMODA7 ICE", "ICE"],
+      ["OMODA", "OMODA concept", "ICE"],
+      ["OMODA", "OMODA5 MHEV", "MHEV"],
+    ];
+    const items = identities.map(([brand, modelName, powertrain], index) => ({
+      ...bomResponse(modelName).items[0], brand, powertrain,
+      materialCode: `CODE${index}`, bomTemplate: `T**${index}`,
+    }));
+    const response = { ...bomResponse("sample"), items };
+    const getBom = vi.spyOn(api, "getBomAdmin").mockResolvedValue(response);
+    const update = vi.spyOn(api, "updateSkuMetadata");
+    const { container } = render(<BomAdminPanel />);
+    await act(async () => { await Promise.resolve(); });
+    const groupNames = () => Array.from(container.querySelectorAll(".bom-admin-model-group > [role=button]"))
+      .map((element) => element.querySelector("span[title]")?.textContent);
+    const expected = [
+      "OMODA OMODA5 ICE", "OMODA OMODA5 HEV", "OMODA OMODA5 BEV", "OMODA OMODA5 SHS",
+      "OMODA OMODA5 MHEV", "OMODA OMODA5 Other", "OMODA OMODA5 REEV",
+      "OMODA OMODA7 ICE", "OMODA OMODA10 ICE", "OMODA OMODA concept", "JAECOO JAECOO5 HEV",
+    ];
+    expect(groupNames()).toEqual(expected);
+    getBom.mockResolvedValue({ ...response, items: [...items].reverse() });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Clear" })); });
+    expect(groupNames()).toEqual(expected);
+    expect(update).not.toHaveBeenCalled();
+    expect(items.map((item) => item.powertrain)).toEqual(identities.map((identity) => identity[2]));
+  });
+
+  it("orders versions and BOM templates within a model independently of response order", async () => {
+    const items = [
+      { version: "Zulu", bomTemplate: "T5**0001" },
+      { version: "Alpha", bomTemplate: "T5**0003" },
+      { version: "Alpha", bomTemplate: "T5**0002" },
+    ].map((identity, index) => ({
+      ...bomResponse("OMODA5 HEV").items[0], ...identity,
+      materialCode: `CODE${index}`, powertrain: "HEV",
+    }));
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue({ ...bomResponse("sample"), items });
+    const { container } = render(<BomAdminPanel />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA OMODA5 HEV/ })); });
+    expect(screen.getAllByText(/^(Alpha|Zulu) ·/).map((element) => element.textContent?.split(" ·")[0]))
+      .toEqual(["Alpha", "Zulu"]);
+    expect(Array.from(container.querySelectorAll("tbody tr")).map((row) => row.querySelector("td")?.textContent))
+      .toEqual(["T5**0002OMODA5 HEV", "T5**0003OMODA5 HEV", "T5**0001OMODA5 HEV"]);
+  });
+
   it("keeps only the final A→B→A search intent and refreshes that key", async () => {
     const requests: Array<{ params: unknown; deferred: Deferred<any> }> = [];
     vi.spyOn(api, "getBomAdmin").mockImplementation((params) => {
