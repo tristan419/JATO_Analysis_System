@@ -327,4 +327,46 @@ describe("quantity save → PI readiness", () => {
     await waitFor(() => expect(screen.getByText("Created CH-202610-003")).toBeTruthy());
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  it("backfills a Historical material through monthly quantity and the shared PI entry without reactivating it", async () => {
+    const response = await api.getOrderGeniusMatrixBatch({ countries: ["CH"], year: 2026 });
+    const historicalRow = response.matrices.CH.rows[0];
+    historicalRow.lifecycleStatus = "historical";
+    historicalRow.historicalBackfill = true;
+    historicalRow.priceSource = "undated_default";
+    vi.mocked(api.getOrderGeniusMatrixBatch).mockResolvedValue(response);
+    const create = vi.spyOn(api, "generateVehicleAllocationFromOrderMatrix").mockResolvedValue({
+      piCode: "CH-202610-003", lineCount: 1, vehicleCount: 13,
+    });
+    await openOctober();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include historical materials" }));
+    await waitFor(() => expect(screen.getByText("Save 15").hasAttribute("disabled")).toBe(false));
+    const save = vi.spyOn(api, "updateQuantityCell").mockResolvedValue(savedQuantity);
+    vi.mocked(api.getVehicleAllocationOrderMatrixPlan).mockResolvedValue(plan(15));
+    fireEvent.click(screen.getByText("Save 15"));
+    await waitFor(() => expect(screen.getByText("PI ready · 13 units available")).toBeTruthy());
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ includeHistorical: true, quantity: 15 }));
+    fireEvent.click(screen.getByText("Select candidates"));
+    fireEvent.click(screen.getByRole("tab", { name: /PI Batch/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Create PI" }));
+    expect(screen.getByRole("alert").textContent).toContain("Confirm that this Historical PI backfill");
+    expect(create).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Confirm Historical PI backfill/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create PI" }));
+    expect(screen.getByRole("alert").textContent).toContain("requires an order date");
+    fireEvent.change(screen.getByLabelText("Order date"), { target: { value: "2026-10-01" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create PI" }));
+    expect(screen.getByRole("alert").textContent).toContain("Confirm the undated default FOB");
+    expect(create).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Use the displayed undated default FOB/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create PI" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      includeHistorical: true, confirmHistorical: true, confirmUndatedDefaultFob: true, orderDate: "2026-10-01",
+      lineItems: [expect.objectContaining({ quantity: 13, historicalPriceReason: null })],
+    }));
+    await waitFor(() => expect(screen.getByText("Created CH-202610-003")).toBeTruthy());
+    expect(historicalRow.lifecycleStatus).toBe("historical");
+    expect(save).toHaveBeenCalledTimes(1);
+  });
 });
