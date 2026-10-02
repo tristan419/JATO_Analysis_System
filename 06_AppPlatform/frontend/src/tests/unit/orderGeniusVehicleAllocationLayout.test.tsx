@@ -294,14 +294,17 @@ describe("PI allocation layout and scope", () => {
   it("uses one column list for headers, cells and restore defaults", async () => {
     await selectPi();
     openView();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Interior" }));
-    expect(screen.queryByRole("columnheader", { name: "Interior" })).toBeNull();
-    expect(screen.getAllByRole("cell").length).toBe(5 * screen.getAllByRole("columnheader").length);
-    fireEvent.click(screen.getByRole("checkbox", { name: "Production" }));
-    expect(screen.getByRole("columnheader", { name: "Production" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /Restore default columns/ }));
-    expect(screen.getByRole("columnheader", { name: "Interior" })).toBeTruthy();
-    expect(screen.queryByRole("columnheader", { name: "Production" })).toBeNull();
+    const columns = within(screen.getByRole("group", { name: "Columns / 显示列" }));
+    const table = screen.getByRole("table");
+    const headers = within(table.querySelector("thead")!);
+    fireEvent.click(columns.getByRole("checkbox", { name: "Interior" }));
+    expect(headers.queryByRole("columnheader", { name: "Interior" })).toBeNull();
+    expect(table.querySelectorAll("tbody td").length).toBe(5 * table.querySelectorAll("thead th").length);
+    fireEvent.click(columns.getByRole("checkbox", { name: "Production" }));
+    expect(headers.getByRole("columnheader", { name: "Production" })).toBeTruthy();
+    fireEvent.click(columns.getByRole("button", { name: /Restore default columns/ }));
+    expect(headers.getByRole("columnheader", { name: "Interior" })).toBeTruthy();
+    expect(headers.queryByRole("columnheader", { name: "Production" })).toBeNull();
   });
 
   it("updates checked cars using the existing bulk endpoint without sending VINs", async () => {
