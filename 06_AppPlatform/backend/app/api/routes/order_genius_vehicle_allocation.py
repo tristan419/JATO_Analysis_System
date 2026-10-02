@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Upload
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.config import PROJECT_ROOT
+from app.core.config import COC_MATCH_JOB_ROOT
 from app.core.security import UserContext, require_min_role, require_roles, validate_country_access
 from app.db.session import get_db_session
 from app.infra import order_genius_vehicle_repository as vehicle_repo
@@ -50,7 +50,8 @@ router = APIRouter(
     tags=["order_genius_vehicle_allocation"],
 )
 
-IMPORT_SESSION_DIR = PROJECT_ROOT / "04_Processed_data" / "ops" / "vehicle_allocation_imports"
+# Share the configured writable operations directory, not the immutable release tree.
+IMPORT_SESSION_DIR = COC_MATCH_JOB_ROOT.parent / "vehicle_allocation_imports"
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
@@ -152,6 +153,41 @@ def _validate_import_access(session: Session, user: UserContext, rows: list[dict
                 source_row = row.get("sourceRow")
                 detail = f"Row {source_row}: {exc.detail}" if source_row else str(exc.detail)
                 raise HTTPException(status_code=exc.status_code, detail=detail) from exc
+
+
+def _vin_import_countries(session: Session, user: UserContext, pi_code: str) -> set[str]:
+    detail = get_pi_detail(session, pi_code)
+    _validate_pi_detail_access(session, user, detail)
+    countries = {v.country_code for v in vehicle_repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)}
+    allowed: set[str] = set()
+    for country in countries:
+        try:
+            _validate_country(session, user, country)
+            allowed.add(country)
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
+    return allowed
+
+
+def _store_import_preview(session: Session, user: UserContext, rows: list[dict], import_id: str,
+                          pi_code: str | None, allow_replacing: bool, source: str | None = None, remove_vins: bool = False) -> dict:
+    payload: dict = {"rows": rows}
+    if source:
+        payload["source"] = source
+    if pi_code:
+        countries = _vin_import_countries(session, user, pi_code)
+        preview = preview_vehicle_import(session, rows, pi_code=pi_code,
+                                         allow_replacing=allow_replacing, allowed_countries=countries, remove_vins=remove_vins)
+        payload.update({"owner": user.name, "vinPreview": preview})
+    else:
+        _validate_import_access(session, user, rows)
+        preview = preview_vehicle_import(session, rows)
+    IMPORT_SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    with (IMPORT_SESSION_DIR / f"{import_id}.json").open("w") as handle:
+        json.dump(payload, handle)
+    preview["importId"] = import_id
+    return preview
 
 
 def _vehicle_filters(
@@ -516,6 +552,9 @@ def generate_pi_from_order_matrix(
 @router.post("/import/preview")
 def preview_import(
     file: UploadFile = File(...),
+    pi_code: str | None = Query(default=None),
+    allow_replacing: bool = Query(default=False),
+    remove_vins: bool = Query(default=False),
     session: Session = Depends(get_db_session),
     user: UserContext = Depends(require_roles("order_filler", "editor", "admin")),
 ) -> dict:
@@ -529,18 +568,12 @@ def preview_import(
         file.file.close()
 
     try:
-        rows = parse_vehicle_allocation_xlsx(tmp_path)
+        rows = parse_vehicle_allocation_xlsx(tmp_path, vin_fill=bool(pi_code))
     except Exception as exc:
-        tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Failed to parse file: {exc}") from exc
-
-    _validate_import_access(session, user, rows)
-    preview = preview_vehicle_import(session, rows)
-    json_path = IMPORT_SESSION_DIR / f"{import_id}.json"
-    with json_path.open("w") as handle:
-        json.dump({"rows": rows}, handle)
-    preview["importId"] = import_id
-    return preview
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return _store_import_preview(session, user, rows, import_id, _clean(pi_code.upper()) if pi_code else None, allow_replacing, remove_vins=remove_vins is True)
 
 
 @router.post("/import/vin-list")
@@ -578,15 +611,12 @@ def preview_import_rows(
     user: UserContext = Depends(require_roles("order_filler", "editor", "admin")),
 ) -> dict:
     rows = _normalise_import_rows_payload(body)
-    _validate_import_access(session, user, rows)
-    preview = preview_vehicle_import(session, rows)
     import_id = str(uuid4())
-    IMPORT_SESSION_DIR.mkdir(parents=True, exist_ok=True)
-    json_path = IMPORT_SESSION_DIR / f"{import_id}.json"
-    with json_path.open("w") as handle:
-        json.dump({"rows": rows, "source": "parsed_rows"}, handle)
-    preview["importId"] = import_id
-    return preview
+    pi_code = _clean(body.get("piCode")) if isinstance(body, dict) else None
+    allow_replacing = body.get("allowReplacing") is True if isinstance(body, dict) else False
+    remove_vins = body.get("removeVins") is True if isinstance(body, dict) else False
+    return _store_import_preview(session, user, rows, import_id, pi_code.upper() if pi_code else None,
+                                 allow_replacing, source="parsed_rows", remove_vins=remove_vins)
 
 
 @router.post("/import/{import_id}/apply")
@@ -608,8 +638,15 @@ def apply_import(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Failed to read import session data") from exc
 
-    _validate_import_access(session, user, rows)
-    result = apply_vehicle_import(session, rows, user.name)
+    vin_preview = payload.get("vinPreview")
+    if vin_preview:
+        if payload.get("owner") != user.name:
+            raise HTTPException(403, "Preview belongs to another user. Upload again / 此预览属于其他账号，请重新上传")
+        countries = _vin_import_countries(session, user, vin_preview["piCode"])
+        result = apply_vehicle_import(session, rows, user.name, vin_preview=vin_preview, allowed_countries=countries)
+    else:
+        _validate_import_access(session, user, rows)
+        result = apply_vehicle_import(session, rows, user.name)
     session.commit()
     json_path.unlink(missing_ok=True)
     xlsx_path.unlink(missing_ok=True)

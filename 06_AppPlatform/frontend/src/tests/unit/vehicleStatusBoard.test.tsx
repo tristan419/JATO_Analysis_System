@@ -49,6 +49,7 @@ const STATUS_FLOW: VehicleStatusFlowConfig = {
 function vehicle(overrides: Partial<PiVehicleUnit>): PiVehicleUnit {
   return {
     vehicleUnitId: "unit-1",
+    fobEur: null,
     piCode: "PI-DK-202607-001",
     officialPiNo: null,
     orderingAccountCode: "NCG",

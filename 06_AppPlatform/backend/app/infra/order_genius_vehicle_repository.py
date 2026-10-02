@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import Integer, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import PiOrderHeader, PiOrderLine, PiOrderLineAllocation, PiVehicleUnit
@@ -76,6 +76,12 @@ def get_vehicle_by_vin(session: Session, vin: str) -> PiVehicleUnit | None:
     return session.execute(
         select(PiVehicleUnit).where(PiVehicleUnit.vin == vin)
     ).scalars().first()
+
+
+def list_vehicles_by_vins(session: Session, vins: set[str]) -> list[PiVehicleUnit]:
+    if not vins:
+        return []
+    return list(session.execute(select(PiVehicleUnit).where(PiVehicleUnit.vin.in_(vins))).scalars().all())
 
 
 def list_headers(
@@ -226,10 +232,13 @@ def list_vehicles_for_bulk_update(
     *,
     pi_code: str,
     pi_line_code: str | None = None,
+    lock: bool = False,
 ) -> list[PiVehicleUnit]:
     stmt = select(PiVehicleUnit).where(PiVehicleUnit.pi_code == pi_code)
     if pi_line_code:
         stmt = stmt.where(PiVehicleUnit.pi_line_code == pi_line_code)
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     return list(session.execute(
         stmt.order_by(PiVehicleUnit.pi_line_code, PiVehicleUnit.car_code)
     ).scalars().all())
@@ -324,7 +333,19 @@ def list_vehicles(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = int(session.execute(count_stmt).scalar_one() or 0)
     rows = session.execute(
-        stmt.order_by(PiVehicleUnit.created_at_utc.desc())
+        stmt.order_by(
+            case((func.upper(PiVehicleUnit.brand).like("%OMODA%"), 0),
+                 (func.upper(PiVehicleUnit.brand).like("%JAECOO%"), 1), else_=2),
+            func.lower(PiVehicleUnit.brand),
+            func.coalesce(cast(func.substring(PiVehicleUnit.model_name, r"\d+"), Integer), 2147483647),
+            case((func.upper(PiVehicleUnit.powertrain) == "ICE", 0),
+                 (func.upper(PiVehicleUnit.powertrain) == "HEV", 1),
+                 (func.upper(PiVehicleUnit.powertrain) == "BEV", 2),
+                 (func.upper(PiVehicleUnit.powertrain).in_(["PHEV", "SHS"]), 3), else_=9),
+            func.lower(PiVehicleUnit.powertrain), func.lower(PiVehicleUnit.model_name),
+            func.lower(PiVehicleUnit.version), PiVehicleUnit.bom,
+            PiVehicleUnit.material_code, PiVehicleUnit.pi_line_code, PiVehicleUnit.car_code,
+        )
         .offset(max(page - 1, 0) * page_size)
         .limit(page_size)
     ).scalars().all()

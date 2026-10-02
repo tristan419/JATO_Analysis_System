@@ -109,6 +109,7 @@ export interface PiLineAllocation {
 }
 
 export interface PiVehicleUnit {
+  fobEur: number | null;
   vehicleUnitId: string;
   piCode: string;
   officialPiNo: string | null;
@@ -283,11 +284,15 @@ export interface VehicleAllocationPlan {
 
 export interface VehicleImportPreviewRow {
   sourceRow: number;
-  action: "create" | "update";
+  action: "create" | "update" | "fill" | "replace" | "remove" | "skip" | "conflict";
   piCode: string | null;
   carCode: string | null;
   vin: string | null;
   materialCode: string | null;
+  oldVin?: string | null;
+  rowVersion?: number | null;
+  requestedCarCode?: string | null;
+  inputOldVin?: string | null;
   warnings: string[];
   errors: string[];
 }
@@ -303,6 +308,20 @@ export interface VehicleImportPreview {
   errors: string[];
   previewRows: VehicleImportPreviewRow[];
   status: "ok" | "error";
+  mode?: "pi_vin_fill";
+  removeVins?: boolean;
+  removedUnits?: number;
+  piCode?: string;
+  allowReplacing?: boolean;
+  filledUnits?: number;
+  replacedUnits?: number;
+  skippedUnits?: number;
+  conflictUnits?: number;
+  remainingUnits?: number;
+  targetVehicles?: Array<{
+    carCode: string; materialCode: string | null; vin: string | null;
+    countryCode: string; piLineCode: string;
+  }>;
 }
 
 export type VehicleImportParsedRow = Record<string, unknown>;
@@ -310,12 +329,17 @@ export type VehicleImportParsedRow = Record<string, unknown>;
 export interface VehicleImportParsedRowsPayload {
   rows: VehicleImportParsedRow[];
   source?: string | null;
+  piCode?: string;
+  allowReplacing?: boolean;
+  removeVins?: boolean;
 }
 
 export interface VehicleImportResult {
   createdUnits: number;
   updatedUnits: number;
   warnings: string[];
+  skippedUnits?: number;
+  removedUnits?: number;
 }
 
 export interface VehicleVinListExtract {
