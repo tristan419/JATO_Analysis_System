@@ -1079,7 +1079,7 @@ def build_options(
     if normalized_model:
         skus = [s for s in skus if normalize_brand_text(s.model_name) == normalized_model]
 
-    # Filter by canonical powertrain (model-name-aware)
+    # Filter by the saved powertrain, never by the model name.
     if powertrain:
         skus = [s for s in skus if _extract_canonical_pt(s) == normalize_powertrain(powertrain)]
 
@@ -1116,6 +1116,8 @@ def build_options(
         pts = sorted(set(
             _extract_canonical_pt(s) for s in skus
         ))
+
+    pts = [pt for pt in pts if pt]
 
     if version:
         vers = sorted(set(s.version for s in skus))

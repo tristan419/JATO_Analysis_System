@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../api/client";
 import { BomAdminPanel } from "../../pages/OrderGeniusPage";
+import { clearCachedPageValue } from "../../utils/pageCache";
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -59,6 +60,7 @@ describe("BOM Admin A load continuity", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     localStorage.clear();
+    clearCachedPageValue("order-genius:bom-admin");
     vi.spyOn(api, "getAccountCountryOptions").mockResolvedValue({ items: [] });
     vi.spyOn(api, "getOrderGeniusColourSurcharges").mockResolvedValue({ items: [] });
     vi.spyOn(api, "getOrderGeniusSpecialColourSurcharges").mockResolvedValue({ items: [] });
@@ -110,6 +112,82 @@ describe("BOM Admin A load continuity", () => {
     expect(groupNames()).toEqual(expected);
     expect(update).not.toHaveBeenCalled();
     expect(items.map((item) => item.powertrain)).toEqual(identities.map((identity) => identity[2]));
+  });
+
+  it.each([
+    ["HEV", "HEV"], ["Other", "Other"], ["", "Needs confirmation"],
+  ])("uses saved %s for both group and dropdown, never the BEV model name", async (saved, label) => {
+    const response = bomResponse("OMODA5 BEV");
+    response.items[0].powertrain = saved;
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue(response);
+    const update = vi.spyOn(api, "updateSkuMetadata");
+    const { container } = render(<BomAdminPanel />);
+    await act(async () => { await Promise.resolve(); });
+    const group = screen.getByRole("button", { name: /OMODA OMODA5 BEV/ });
+    expect(group.textContent).toContain(`· ${label} ·`);
+    fireEvent.click(group);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(container.querySelector<HTMLInputElement>('input[name="powertrain"]')?.value).toBe(saved);
+    expect(container.querySelector(".bom-edit-powertrain-select")?.textContent).toContain(label);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("copies a Historical HEV to a new Active suffix without changing its powertrain", async () => {
+    const response = bomResponse("OMODA5 BEV");
+    Object.assign(response.items[0], {
+      powertrain: "HEV", materialCode: "T71506JBWMH0008", bomTemplate: "T71506J**MH0008",
+      colourCode: "BW", colourHex: "", interiorColorName: "", fobByCountry: {},
+      lifecycleStatus: "historical",
+    });
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue(response);
+    const create = vi.spyOn(api, "createMaterialSku").mockResolvedValue({ materialCode: "T71506JBWMH0011" });
+    const update = vi.spyOn(api, "updateSkuMetadata");
+    render(<BomAdminPanel />);
+    await act(async () => { await Promise.resolve(); });
+    const group = screen.getByRole("button", { name: /OMODA OMODA5 BEV/ });
+    if (group.getAttribute("aria-expanded") !== "true") await act(async () => { fireEvent.click(group); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Edit" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Copy material/i })); });
+    fireEvent.change(screen.getByPlaceholderText("New material code"), { target: { value: "T71506J**MH0011" } });
+    fireEvent.click(within(screen.getByLabelText("Draft lifecycle status")).getByRole("button", { name: "Active" }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add" })); });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      materialCode: "T71506JBWMH0011", powertrain: "HEV", modelName: "OMODA5 BEV", lifecycleStatus: "active",
+    }));
+    expect(response.items[0].powertrain).toBe("HEV");
+    expect(response.items[0].lifecycleStatus).toBe("historical");
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("asks to confirm a missing source powertrain instead of copying it as ICE", async () => {
+    const response = bomResponse("OMODA5 HEV");
+    response.items[0].powertrain = "";
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue(response);
+    const create = vi.spyOn(api, "createMaterialSku");
+    render(<BomAdminPanel />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA OMODA5 HEV/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Edit" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Copy material/i })); });
+    expect(screen.getByText(/Choose and save the source template powertrain before copying/)).toBeTruthy();
+    expect(screen.queryByPlaceholderText("New material code")).toBeNull();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit powertrain when adding a new material", async () => {
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Existing"));
+    const create = vi.spyOn(api, "createMaterialSku");
+    const { container } = render(<BomAdminPanel />);
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "+ Material" }));
+    for (const [placeholder, value] of [
+      ["Material Code", "T71506JBWMH0011"], ["Brand", "OMODA"], ["Model", "OMODA5 HEV"],
+      ["Version", "Comfort"], ["Colour", "White"], ["Code", "BW"],
+    ]) fireEvent.change(screen.getByPlaceholderText(placeholder), { target: { value } });
+    expect(container.querySelector(".bom-add-powertrain-select")?.textContent).toContain("Choose powertrain");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add" })); });
+    expect(screen.getByText("Missing: Powertrain")).toBeTruthy();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("orders versions and BOM templates within a model independently of response order", async () => {
