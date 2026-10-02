@@ -20,6 +20,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
+import { compareProductModels } from "../utils/orderGeniusProductSort";
 import {
   buildBomEditScopeKey,
   resolveBomAdminColourTier,
@@ -430,41 +431,6 @@ interface PiBatchLineItem {
   allocations?: PiBatchAllocation[];
   historicalFobOverrideEur?: number;
   historicalPriceReason?: string | null;
-}
-
-function brandDisplayRank(brand: string): number {
-  const upper = brand.toUpperCase();
-  if (upper.includes("OMODA")) return 0;
-  if (upper.includes("JAECOO")) return 1;
-  return 2;
-}
-
-function firstModelNumber(value: string): number {
-  const match = value.match(/\d+/);
-  return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
-}
-
-function powertrainDisplayRank(value: string): number {
-  const upper = value.toUpperCase();
-  if (upper === "ICE") return 0;
-  if (upper === "HEV") return 1;
-  if (upper === "BEV") return 2;
-  if (upper === "PHEV" || upper.includes("SHS")) return 3;
-  return 9;
-}
-
-function compareProductModels(
-  brandA: string, modelA: string, ptA: string,
-  brandB: string, modelB: string, ptB: string,
-): number {
-  const brandRankDiff = brandDisplayRank(brandA) - brandDisplayRank(brandB);
-  if (brandRankDiff !== 0) return brandRankDiff;
-  const brandDiff = brandA.localeCompare(brandB);
-  if (brandDiff !== 0) return brandDiff;
-  const modelNumberDiff = firstModelNumber(modelA) - firstModelNumber(modelB);
-  if (modelNumberDiff !== 0) return modelNumberDiff;
-  const powertrainDiff = powertrainDisplayRank(ptA) - powertrainDisplayRank(ptB);
-  return powertrainDiff || ptA.localeCompare(ptB) || modelA.localeCompare(modelB);
 }
 
 function compareProductGroupEntries(a: ProductGroupEntry, b: ProductGroupEntry): number {

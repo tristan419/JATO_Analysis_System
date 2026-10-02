@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import PiOrderHeader, PiOrderLine, PiOrderLineAllocation, PiVehicleUnit
@@ -518,13 +519,13 @@ def get_pi_detail(session: Session, pi_code: str) -> dict:
         row = line_to_dict(line)
         row["allocations"] = [allocation_to_dict(allocation) for allocation in allocations_by_line.get(line.pi_line_id, [])]
         line_rows.append(row)
-    vehicles, total = repo.list_vehicles(session, pi_code=pi_code, page=1, page_size=5000)
+    vehicles = repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
     return {
         "header": header_to_dict(header),
         "lines": line_rows,
         "summary": repo.vehicle_summary(session, pi_code),
         "vehicles": vehicles_to_dict(session, vehicles),
-        "vehicleTotal": total,
+        "vehicleTotal": len(vehicles),
     }
 
 
@@ -649,7 +650,12 @@ def search_vehicle_allocation(session: Session, keyword: str) -> dict:
     return {"type": "empty", "item": None}
 
 
-def preview_vehicle_import(session: Session, rows: list[dict[str, Any]]) -> dict:
+def preview_vehicle_import(
+    session: Session, rows: list[dict[str, Any]], *, pi_code: str | None = None,
+    allow_replacing: bool = False, allowed_countries: set[str] | None = None, remove_vins: bool = False,
+) -> dict:
+    if pi_code:
+        return _preview_pi_vin_fill(session, rows, pi_code, allow_replacing, allowed_countries, remove_vins)
     warnings: list[str] = []
     errors: list[str] = []
     preview_rows: list[dict[str, Any]] = []
@@ -714,7 +720,12 @@ def preview_vehicle_import(session: Session, rows: list[dict[str, Any]]) -> dict
     }
 
 
-def apply_vehicle_import(session: Session, rows: list[dict[str, Any]], username: str) -> dict:
+def apply_vehicle_import(
+    session: Session, rows: list[dict[str, Any]], username: str, *,
+    vin_preview: dict | None = None, allowed_countries: set[str] | None = None,
+) -> dict:
+    if vin_preview is not None:
+        return _apply_pi_vin_fill(session, vin_preview, username, allowed_countries)
     preview = preview_vehicle_import(session, rows)
     if preview["errors"]:
         raise HTTPException(status_code=400, detail="Import has blocking errors")
@@ -738,6 +749,131 @@ def apply_vehicle_import(session: Session, rows: list[dict[str, Any]], username:
             _create_vehicle_from_import_row(session, row, username)
             created += 1
     return {"createdUnits": created, "updatedUnits": updated, "warnings": preview["warnings"]}
+
+
+def _preview_pi_vin_fill(
+    session: Session, rows: list[dict[str, Any]], pi_code: str,
+    allow_replacing: bool, allowed_countries: set[str] | None, remove_vins: bool = False,
+) -> dict:
+    if not repo.get_header_by_code(session, pi_code):
+        raise HTTPException(404, "PI no longer exists. Select a PI again / PI 已不存在，请重新选择")
+    vehicles = [v for v in repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
+                if allowed_countries is None or v.country_code in allowed_countries]
+    by_car = {v.car_code: v for v in vehicles}
+    by_material: dict[str, list[PiVehicleUnit]] = {}
+    for vehicle in vehicles:
+        by_material.setdefault((vehicle.material_code or "").upper(), []).append(vehicle)
+    for row in rows:
+        for key in ("vin", "old_vin", "car_code", "material_code", "bom"):
+            row[key] = (_clean(row.get(key)) or "").upper()
+    existing = {v.vin: v for v in repo.list_vehicles_by_vins(
+        session, {r[key] for r in rows for key in ("vin", "old_vin") if r[key]},
+    )}
+    # Reserve explicit targets before assigning automatic slots, regardless of file order.
+    reserved = {r["car_code"] for r in rows if r["car_code"]}
+    reserved.update(existing[r["old_vin"]].car_code for r in rows if r["old_vin"] in existing)
+    used: set[str] = set()
+    seen_vins: set[str] = set()
+    preview_rows: list[dict] = []
+    errors: list[str] = []
+    for row in rows:
+        vin = row["vin"]
+        material = row["material_code"] or row["bom"]
+        issues: list[str] = []
+        candidates = by_material.get(material, [])
+        target = by_car.get(row["car_code"]) if row["car_code"] else existing.get(row["old_vin"])
+        occupied = existing.get(vin)
+        if not VIN_CODE_RE.fullmatch(vin):
+            issues.append("Invalid VIN: use 17 letters/digits / VIN 无效，请使用17位文本")
+        if vin in seen_vins:
+            issues.append("Duplicate VIN in file: remove duplicate row / 文件内 VIN 重复，请删除重复行")
+        seen_vins.add(vin)
+        if not candidates:
+            issues.append("BOM is not in this PI or your country scope: check PI/BOM / 物料不在本 PI 或国家权限范围，请核对")
+        if row["car_code"] and not target:
+            issues.append("Target CarCode is outside this PI/country scope / 目标 CarCode 不属于本 PI 或国家权限范围")
+        if row["old_vin"] and (not target or target.vin != row["old_vin"]):
+            issues.append("Old VIN does not match the target: select CarCode / 旧 VIN 与目标不符，请指定 CarCode")
+        if target and target not in candidates:
+            issues.append("Target BOM differs: choose a same-BOM CarCode / 目标物料不符，请选择同物料 CarCode")
+        if occupied:
+            if occupied.car_code not in by_car or occupied not in candidates or (target and target != occupied):
+                issues.append("VIN is assigned elsewhere: check PI/BOM/target / VIN 已被其他车辆占用，请核对 PI、物料和目标")
+            else:
+                target = occupied
+        if remove_vins and target and target.vin and target.vin != vin:
+            issues.append("Target VIN differs: preview the original file again / 目标 VIN 不符，请重新预览原文件")
+        if not target and not issues and not remove_vins:
+            empty = [v for v in candidates if not v.vin and v.car_code not in used | reserved]
+            if len({(v.pi_line_code, v.country_code) for v in empty}) > 1:
+                issues.append("Multiple lines/markets: select target CarCode / 存在多个明细或市场，请指定目标 CarCode")
+            elif empty:
+                target = empty[0]
+            else:
+                issues.append("No empty slot: verify quantity or select a replacement target / 无空位，请核对数量或指定替换目标")
+        if target and target.car_code in used:
+            issues.append("Target used by another file row: select another CarCode / 目标已分配给本文件其他行，请换目标")
+        action = ("remove" if occupied and target and not issues else "skip") if remove_vins else (
+            "skip" if occupied and not issues else "replace" if target and target.vin else "fill")
+        if action == "replace" and not allow_replacing:
+            issues.append("Replacement is off: enable and confirm old → new VIN / 替换未开启，请勾选并确认旧→新 VIN")
+        if issues:
+            action = "conflict"
+        elif target:
+            used.add(target.car_code)
+        errors.extend(f"Row {row.get('sourceRow')}: {issue}" for issue in issues)
+        preview_rows.append({
+            "sourceRow": row.get("sourceRow"), "action": action, "piCode": pi_code,
+            "carCode": target.car_code if target else None, "vin": vin, "materialCode": material,
+            "oldVin": target.vin if target else None, "rowVersion": target.row_version if target else None,
+            "requestedCarCode": row["car_code"] or None, "inputOldVin": row["old_vin"] or None,
+            "warnings": [], "errors": issues,
+        })
+    counts = {action: sum(r["action"] == action for r in preview_rows) for action in ("fill", "replace", "remove", "skip", "conflict")}
+    return {
+        "mode": "pi_vin_fill", "piCode": pi_code, "allowReplacing": allow_replacing, "removeVins": remove_vins,
+        "totalRows": len(rows), "newHeaders": 0, "newLines": 0, "newUnits": 0,
+        "updatedUnits": counts["fill"] + counts["replace"] + counts["remove"], "removedUnits": counts["remove"], "filledUnits": counts["fill"],
+        "replacedUnits": counts["replace"], "skippedUnits": counts["skip"], "conflictUnits": counts["conflict"],
+        "remainingUnits": sum(not v.vin for v in vehicles) - counts["fill"] + counts["remove"],
+        "warnings": [], "errors": errors, "previewRows": preview_rows,
+        "targetVehicles": [{"carCode": v.car_code, "materialCode": (v.material_code or "").upper(),
+                            "vin": v.vin, "countryCode": v.country_code, "piLineCode": v.pi_line_code} for v in vehicles],
+        "status": "error" if errors else "ok",
+    }
+
+
+def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_countries: set[str] | None) -> dict:
+    if preview.get("status") != "ok":
+        raise HTTPException(400, "Fix all preview conflicts before applying / 请先解决全部预览冲突")
+    pi_code = preview["piCode"]
+    try:
+        with session.begin_nested():
+            vehicles = repo.list_vehicles_for_bulk_update(session, pi_code=pi_code, lock=True)
+            by_car = {v.car_code: v for v in vehicles}
+            rows = preview["previewRows"]
+            existing = {v.vin: v for v in repo.list_vehicles_by_vins(session, {r["vin"] for r in rows})}
+            for row in rows:
+                if row["action"] == "skip" and not row["carCode"]:
+                    if existing.get(row["vin"]):
+                        raise HTTPException(409, "VIN changed: preview again / VIN 已变化，请重新预览")
+                    continue
+                vehicle = by_car.get(row["carCode"])
+                if (not vehicle or (allowed_countries is not None and vehicle.country_code not in allowed_countries)
+                        or (vehicle.material_code or "").upper() != row["materialCode"]
+                        or vehicle.vin != row["oldVin"] or vehicle.row_version != row["rowVersion"]):
+                    raise HTTPException(409, "Target changed: preview again; nothing applied / 目标已变化，请重新预览，未写入任何车辆")
+                owner = existing.get(row["vin"])
+                if owner and owner.car_code != vehicle.car_code:
+                    raise HTTPException(409, "VIN was assigned after preview: preview again / VIN 已被占用，请重新预览")
+            for row in rows:
+                if row["action"] != "skip":
+                    _apply_vehicle_updates(session, by_car[row["carCode"]], {"vin": None if row["action"] == "remove" else row["vin"]}, username)
+            session.flush()
+    except IntegrityError as exc:
+        raise HTTPException(409, "VIN changed concurrently: preview again; nothing applied / VIN 并发变化，请重新预览，未写入任何车辆") from exc
+    return {"createdUnits": 0, "updatedUnits": preview["updatedUnits"],
+            "removedUnits": preview.get("removedUnits", 0), "skippedUnits": preview["skippedUnits"], "warnings": []}
 
 
 def export_vehicle_units(session: Session, **filters):
@@ -816,18 +952,28 @@ def allocation_to_dict(allocation: PiOrderLineAllocation) -> dict:
 
 def vehicles_to_dict(session: Session, vehicles: list[PiVehicleUnit]) -> list[dict]:
     header_cache: dict[str, PiOrderHeader | None] = {}
-    return [vehicle_to_dict(session, vehicle, header_cache) for vehicle in vehicles]
+    price_cache: dict[tuple[str, str], float | None] = {}
+    return [vehicle_to_dict(session, vehicle, header_cache, price_cache) for vehicle in vehicles]
 
 
 def vehicle_to_dict(
     session: Session,
     vehicle: PiVehicleUnit,
     header_cache: dict[str, PiOrderHeader | None] | None = None,
+    price_cache: dict[tuple[str, str], float | None] | None = None,
 ) -> dict:
     cache = header_cache if header_cache is not None else {}
     if vehicle.pi_code not in cache:
         cache[vehicle.pi_code] = repo.get_header_by_code(session, vehicle.pi_code)
     header = cache.get(vehicle.pi_code)
+    prices = price_cache if price_cache is not None else {}
+    key = (vehicle.pi_line_code, vehicle.country_code)
+    if key not in prices:
+        line = repo.get_line_by_code(session, vehicle.pi_line_code)
+        allocations = repo.list_allocations_by_line(session, line.pi_line_id) if line else []
+        market = [a for a in allocations if a.market_country_code == vehicle.country_code]
+        prices[key] = (_float(market[0].fob_eur) if len(market) == 1 else
+                       _float(line.fob_eur) if line and not allocations and header and header.country_code == vehicle.country_code else None)
     return {
         "vehicleUnitId": str(vehicle.vehicle_unit_id),
         "piCode": vehicle.pi_code,
@@ -839,6 +985,7 @@ def vehicle_to_dict(
         "piLineCode": vehicle.pi_line_code,
         "carCode": vehicle.car_code,
         "vin": vehicle.vin,
+        "fobEur": prices[key],
         "materialCode": vehicle.material_code,
         "bom": vehicle.bom,
         "brand": vehicle.brand,
@@ -1140,6 +1287,13 @@ def _line_payload_from_material(
     )
     fob = og_repo.get_fob_for_country_sku(session, country, material_code)
     if sku:
+        interior_name, interior_code = sku.interior_color_name, sku.interior_colour_code
+        if not interior_name and sku.bom_template and getattr(sku, "baseline_version_id", None):
+            interiors = {(s.interior_color_name, s.interior_colour_code) for s in
+                         og_repo.list_bom_template_skus(session, sku.bom_template, sku.baseline_version_id)
+                         if s.interior_color_name}
+            if len(interiors) == 1:
+                interior_name, interior_code = next(iter(interiors))
         payload.update({
             "materialCode": sku.material_code,
             "bom": sku.bom_template,
@@ -1149,8 +1303,8 @@ def _line_payload_from_material(
             "powertrain": sku.powertrain,
             "exteriorColorName": sku.exterior_color_name,
             "exteriorColorCode": sku.exterior_color_code,
-            "interiorColorName": sku.interior_color_name,
-            "interiorColourCode": sku.interior_colour_code,
+            "interiorColorName": interior_name,
+            "interiorColourCode": interior_code,
         })
     if sku and pricing_date and sku.bom_template:
         dated_fob, conflict, evidence = resolve_date_effective_fob(

@@ -5414,11 +5414,11 @@ export const api = {
     );
   },
 
-  previewVehicleAllocationImport: (file: File) => {
+  previewVehicleAllocationImport: (file: File, scope?: { piCode: string; allowReplacing: boolean; removeVins?: boolean }) => {
     const form = new FormData();
     form.append("file", file);
     return request<VehicleImportPreview>(
-      "/order-genius/vehicle-allocation/import/preview",
+      `/order-genius/vehicle-allocation/import/preview${scope ? `?${new URLSearchParams({ pi_code: scope.piCode, allow_replacing: String(scope.allowReplacing), remove_vins: String(scope.removeVins ?? false) })}` : ""}`,
       { method: "POST", body: form },
     );
   },

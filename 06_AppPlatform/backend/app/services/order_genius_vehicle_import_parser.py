@@ -14,6 +14,7 @@ HEADER_MAP = {
     "official pi no": "official_pi_no",
     "car code": "car_code",
     "vin": "vin",
+    "old vin": "old_vin",
     "bom": "bom",
     "material code": "material_code",
     "brand": "brand",
@@ -46,13 +47,13 @@ HEADER_MAP = {
 VIN_HEADER_LABELS = {"vin", "vin code", "vin no", "vin number", "车架号", "车辆识别码"}
 
 
-def parse_vehicle_allocation_xlsx(file_path: Path) -> list[dict[str, Any]]:
+def parse_vehicle_allocation_xlsx(file_path: Path, *, vin_fill: bool = False) -> list[dict[str, Any]]:
     wb = openpyxl.load_workbook(file_path, data_only=True)
     try:
         ws = wb[wb.sheetnames[0]]
-        header_row = _find_header_row(ws)
+        header_row = _find_header_row(ws, vin_fill=vin_fill)
         if header_row is None:
-            raise ValueError("Missing PI vehicle allocation headers")
+            raise ValueError("Use BOM / Material Code + VIN headers / 请提供 BOM 或 Material Code 与 VIN 表头" if vin_fill else "Missing PI vehicle allocation headers")
         header_map = _header_map(ws, header_row)
         rows: list[dict[str, Any]] = []
         for row_idx in range(header_row + 1, ws.max_row + 1):
@@ -90,13 +91,15 @@ def parse_vehicle_vin_list_xlsx(file_path: Path) -> list[str]:
         wb.close()
 
 
-def _find_header_row(ws) -> int | None:
+def _find_header_row(ws, *, vin_fill: bool = False) -> int | None:
     for row_idx in range(1, min(ws.max_row, 10) + 1):
         values = {
             str(ws.cell(row=row_idx, column=col_idx).value or "").strip().lower()
             for col_idx in range(1, ws.max_column + 1)
         }
-        if "pi code" in values and ("car code" in values or "vin" in values):
+        if vin_fill and "vin" in values and values.intersection({"bom", "material code"}):
+            return row_idx
+        if not vin_fill and "pi code" in values and ("car code" in values or "vin" in values):
             return row_idx
     return None
 

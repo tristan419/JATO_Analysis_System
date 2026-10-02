@@ -1,11 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../api/client";
 import { CommandSelect, type CommandSelectOption } from "../components/CommandSelect";
 import { LoadingActionButton } from "../components/LoadingActionButton";
 import {
-  buildUnsupportedVehicleImportPreview,
-  detectVehicleImportSource,
-  parseVehicleImportRowsPayload,
   VehicleImportDigestPanel,
   VehicleStatusBoard,
   VinPasteDigestPanel,
@@ -29,7 +26,9 @@ import type {
   VehicleStatusFlowStep,
   VehicleImportPreview,
 } from "../types/orderGeniusVehicle";
+import { ptColor } from "../utils/colors";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
+import { compareProductModels } from "../utils/orderGeniusProductSort";
 
 const ALLOCATION_STATUSES: AllocationStatus[] = [
   "unallocated",
@@ -50,13 +49,12 @@ const LOGISTICS_STATUSES: LogisticsStatus[] = [
   "delivered",
 ];
 
-type PiToolTab = "status" | "vin" | "import" | "batch";
+type PiToolTab = "import" | "status" | "view";
 
 const PI_TOOL_TABS: Array<DeckControlTabItem<PiToolTab>> = [
-  { key: "status", label: "Status", caption: "Flow board" },
-  { key: "vin", label: "VIN paste", caption: "Preview apply" },
-  { key: "import", label: "Import", caption: "File digest" },
-  { key: "batch", label: "Batch", caption: "Fields" },
+  { key: "import", label: "Import VINs", caption: "导入 VIN" },
+  { key: "status", label: "Update status", caption: "更新状态" },
+  { key: "view", label: "View", caption: "筛选与列" },
 ];
 
 interface EditableVehicleForm {
@@ -76,30 +74,8 @@ interface EditableVehicleForm {
   remark: string;
 }
 
-interface PiForm {
-  countryCode: string;
-  orderMonth: string;
-  orderDate: string;
-  officialPiNo: string;
-  shipName: string;
-  eta: string;
-}
-
-interface LineForm {
-  materialCode: string;
-  bom: string;
-  brand: string;
-  modelName: string;
-  version: string;
-  powertrain: string;
-  exteriorColorName: string;
-  interiorColorName: string;
-  quantity: string;
-  fobEur: string;
-}
-
 interface BulkVehicleForm {
-  vinText: string;
+  dealerCode: string;
   productionDate: string;
   etd: string;
   eta: string;
@@ -107,11 +83,6 @@ interface BulkVehicleForm {
   shipName: string;
   allocationStatus: AllocationStatus | "";
   logisticsStatus: LogisticsStatus | "";
-}
-
-function currentMonth(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function display(value: string | number | null | undefined): string {
@@ -140,6 +111,12 @@ function dateInput(value: string | null | undefined): string {
 
 function statusText(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function actionableError(reason: unknown, suggestion: string): string {
+  const message = reason instanceof Error ? reason.message : "";
+  return /[\u3400-\u9fff]/.test(message) && !/\b[45]\d\d\b|traceback|internal server error/i.test(message)
+    ? message : suggestion;
 }
 
 const DEFAULT_ALLOCATION_STATUS_OPTIONS: Array<CommandSelectOption<AllocationStatus>> = ALLOCATION_STATUSES.map((status) => ({
@@ -194,14 +171,6 @@ function logisticsOptionsFromFlow(flow: VehicleStatusFlowConfig | null): Array<C
   return options.length > 0 ? options : DEFAULT_LOGISTICS_STATUS_OPTIONS;
 }
 
-function batchAllocationValue(value: string | undefined): AllocationStatus | "" {
-  return ALLOCATION_STATUSES.includes(value as AllocationStatus) ? value as AllocationStatus : "";
-}
-
-function batchLogisticsValue(value: string | undefined): LogisticsStatus | "" {
-  return LOGISTICS_STATUSES.includes(value as LogisticsStatus) ? value as LogisticsStatus : "";
-}
-
 function toEditForm(vehicle: PiVehicleUnit): EditableVehicleForm {
   return {
     vin: vehicle.vin ?? "",
@@ -240,13 +209,6 @@ function toVehiclePayload(form: EditableVehicleForm): UpdateVehiclePayload {
   };
 }
 
-function parseVinText(value: string): string[] {
-  return value
-    .split(/[\s,;]+/)
-    .map((item) => item.trim().toUpperCase())
-    .filter(Boolean);
-}
-
 function toBulkFieldPayload(form: BulkVehicleForm): UpdateVehiclePayload {
   const payload: UpdateVehiclePayload = {};
   if (form.productionDate) {
@@ -263,6 +225,9 @@ function toBulkFieldPayload(form: BulkVehicleForm): UpdateVehiclePayload {
   }
   if (form.shipName.trim()) {
     payload.shipName = form.shipName.trim();
+  }
+  if (form.dealerCode.trim()) {
+    payload.dealerCode = form.dealerCode.trim();
   }
   if (form.allocationStatus) {
     payload.allocationStatus = form.allocationStatus;
@@ -288,6 +253,37 @@ function buildDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
+type VehicleColumnKey = keyof PiVehicleUnit | "config";
+const VEHICLE_COLUMNS: Array<{ key: VehicleColumnKey; label: string; optional?: boolean }> = [
+  { key: "carCode", label: "Car Code" }, { key: "vin", label: "VIN" },
+  { key: "piCode", label: "PI" }, { key: "countryCode", label: "Country" },
+  { key: "materialCode", label: "Material" }, { key: "config", label: "Config" },
+  { key: "exteriorColorName", label: "Exterior" }, { key: "interiorColorName", label: "Interior" },
+  { key: "fobEur", label: "FOB (EUR)" },
+  { key: "allocationStatus", label: "Allocation" }, { key: "logisticsStatus", label: "Logistics" },
+  { key: "shipName", label: "Ship" }, { key: "eta", label: "ETA" },
+  { key: "readyForPickupDate", label: "Ready" },
+  { key: "productionDate", label: "Production", optional: true },
+  { key: "etd", label: "ETD", optional: true },
+  { key: "actualDepartureDate", label: "Actual departure", optional: true },
+  { key: "actualArrivalDate", label: "Actual arrival", optional: true },
+  { key: "dealerCode", label: "Dealer", optional: true },
+];
+const DEFAULT_COLUMNS = VEHICLE_COLUMNS.filter((column) => !column.optional).map((column) => column.key);
+const EMPTY_BULK_FORM: BulkVehicleForm = {
+  dealerCode: "", productionDate: "", etd: "", eta: "", readyForPickupDate: "",
+  shipName: "", allocationStatus: "", logisticsStatus: "",
+};
+
+function vehicleCell(vehicle: PiVehicleUnit, key: VehicleColumnKey): ReactNode {
+  if (key === "fobEur") return <span title={vehicle.fobEur == null ? "No confirmed market price snapshot; check PI details / 缺已确认的市场价格快照，请核对 PI 明细" : "Confirmed PI market price snapshot; not today's BOM price / 已确认的 PI 市场价格快照；不是当前 BOM 价格"}>{vehicle.fobEur == null ? "—" : vehicle.fobEur.toLocaleString("en-GB")}</span>;
+  if (key === "config") return `${display(vehicle.modelName)} / ${display(vehicle.version)}`;
+  if (key === "allocationStatus" || key === "logisticsStatus") {
+    return <span className={`va-status va-status-${vehicle[key]}`}>{statusText(vehicle[key])}</span>;
+  }
+  return display(vehicle[key]);
+}
+
 export function OrderGeniusVehicleAllocationPage() {
   const { user } = useAuth();
   const { countryOptions: accountCountryOptions } = useAccountCountryOptions();
@@ -309,8 +305,6 @@ export function OrderGeniusVehicleAllocationPage() {
   const [deleteConfirmPi, setDeleteConfirmPi] = useState<string | null>(null);
   // Multi-select state
   const [selectedCarCodes, setSelectedCarCodes] = useState<Set<string>>(new Set());
-  const [batchForm, setBatchForm] = useState<Record<string, string>>({});
-  const [batchSaving, setBatchSaving] = useState(false);
   const [selectedLineCode, setSelectedLineCode] = useState<string | null>(null);
   const [selectedVehicle, setSelectedVehicle] = useState<PiVehicleUnit | null>(null);
   const [editForm, setEditForm] = useState<EditableVehicleForm | null>(null);
@@ -319,53 +313,29 @@ export function OrderGeniusVehicleAllocationPage() {
   const [sideLoading, setSideLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [bulkSaving, setBulkSaving] = useState(false);
-  const [generating, setGenerating] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [piForm, setPiForm] = useState<PiForm>({
-    countryCode: defaultCountry,
-    orderMonth: "",
-    orderDate: "",
-    officialPiNo: "",
-    shipName: "",
-    eta: "",
-  });
-  const [lineForm, setLineForm] = useState<LineForm>({
-    materialCode: "",
-    bom: "",
-    brand: "",
-    modelName: "",
-    version: "",
-    powertrain: "",
-    exteriorColorName: "",
-    interiorColorName: "",
-    quantity: "1",
-    fobEur: "",
-  });
-  const [bulkForm, setBulkForm] = useState<BulkVehicleForm>({
-    vinText: "",
-    productionDate: "",
-    etd: "",
-    eta: "",
-    readyForPickupDate: "",
-    shipName: "",
-    allocationStatus: "",
-    logisticsStatus: "",
-  });
-  const [importPreview, setImportPreview] = useState<VehicleImportPreview | null>(null);
-  const [importBusy, setImportBusy] = useState(false);
+  const [bulkForm, setBulkForm] = useState<BulkVehicleForm>(EMPTY_BULK_FORM);
+  const [linesOpen, setLinesOpen] = useState(false);
+  const linePanelRef = useRef<HTMLDivElement>(null);
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<VehicleColumnKey>>(new Set(DEFAULT_COLUMNS));
+  const visibleColumns = VEHICLE_COLUMNS.filter((column) => visibleColumnKeys.has(column.key));
   const [toolDrawerOpen, setToolDrawerOpen] = useState(false);
-  const [activeToolTab, setActiveToolTab] = useState<PiToolTab>("vin");
+  const [activeToolTab, setActiveToolTab] = useState<PiToolTab>("import");
   const [vinPasteText, setVinPasteText] = useState("");
   const [vinPasteMessage, setVinPasteMessage] = useState("");
   const [vinPasteApplying, setVinPasteApplying] = useState(false);
-  const [vinFileBusy, setVinFileBusy] = useState(false);
+  const [importPreview, setImportPreview] = useState<VehicleImportPreview | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [allowReplacing, setAllowReplacing] = useState(false);
+  const [removeVins, setRemoveVins] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const [statusFlow, setStatusFlow] = useState<VehicleStatusFlowConfig | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const vinFileInputRef = useRef<HTMLInputElement>(null);
 
+  const scopeBusy = saving || bulkSaving || vinPasteApplying || importBusy;
   const page = filters.page ?? 1;
   const pageSize = filters.pageSize ?? 100;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -417,12 +387,11 @@ export function OrderGeniusVehicleAllocationPage() {
     };
     addFallbackCode(defaultCountry);
     addFallbackCode(filters.country);
-    addFallbackCode(piForm.countryCode);
     addFallbackCode(piBrowseCountry);
     addFallbackCode(selectedPi?.header.countryCode);
     selectedPi?.header.marketCountryCodes.forEach(addFallbackCode);
     return Array.from(byCode.values()).sort((a, b) => a.value.localeCompare(b.value));
-  }, [accountCountryOptions, defaultCountry, filters.country, piBrowseCountry, piForm.countryCode, selectedPi]);
+  }, [accountCountryOptions, defaultCountry, filters.country, piBrowseCountry, selectedPi]);
   const vinPasteScopeVehicles = useMemo(() => {
     if (!selectedPi) {
       return [];
@@ -433,18 +402,17 @@ export function OrderGeniusVehicleAllocationPage() {
   }, [selectedPi, selectedLineCode]);
 
   const tableSummary = useMemo(() => {
-    const vinMissing = vehicles.filter((item) => !item.vin).length;
-    const ready = vehicles.filter((item) => item.logisticsStatus === "ready_for_pickup").length;
-    const allocated = vehicles.filter((item) => item.allocationStatus === "allocated").length;
+    const vinMissing = vinPasteScopeVehicles.filter((item) => !item.vin).length;
+    const ready = vinPasteScopeVehicles.filter((item) => item.logisticsStatus === "ready_for_pickup").length;
+    const allocated = vinPasteScopeVehicles.filter((item) => item.allocationStatus === "allocated").length;
     return { vinMissing, ready, allocated };
-  }, [vehicles]);
+  }, [vinPasteScopeVehicles]);
 
   useEffect(() => {
     if (!defaultCountry) {
       return;
     }
     setFilters((current) => current.country ? current : { ...current, country: defaultCountry });
-    setPiForm((current) => current.countryCode ? current : { ...current, countryCode: defaultCountry });
     setPiBrowseCountry((current) => current || defaultCountry);
   }, [defaultCountry]);
 
@@ -493,7 +461,7 @@ export function OrderGeniusVehicleAllocationPage() {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "加载车辆失败");
+          setError(actionableError(err, "Could not load vehicles. Re-read this PI / 无法读取车辆，请重新读取当前 PI；仍失败请联系管理员。"));
         }
       })
       .finally(() => {
@@ -526,7 +494,7 @@ export function OrderGeniusVehicleAllocationPage() {
         if (!cancelled) {
           setPiHeaders([]);
           setPiHeaderTotal(0);
-          setPiListError(err instanceof Error ? err.message : "加载 PI 列表失败");
+          setPiListError(actionableError(err, "Could not load PI list. Check country/month and retry / 无法读取 PI 列表，请核对国家、月份并重试。"));
         }
       })
       .finally(() => {
@@ -546,6 +514,97 @@ export function OrderGeniusVehicleAllocationPage() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!linesOpen) return;
+    function closeOutside(event: PointerEvent): void {
+      if (event.target instanceof Node && !linePanelRef.current?.contains(event.target)) setLinesOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent): void {
+      if (event.key === "Escape") setLinesOpen(false);
+    }
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [linesOpen]);
+
+  function clearScopeEdits(): void {
+    setSelectedCarCodes(new Set());
+    setBulkForm(EMPTY_BULK_FORM);
+    setSelectedVehicle(null);
+    setEditForm(null);
+    setVinPasteText("");
+    setVinPasteMessage("");
+    setDeleteConfirmPi(null);
+    setImportPreview(null);
+    setImportError(null);
+    setRemoveVins(false);
+    setAllowReplacing(false);
+  }
+
+  function showImportError(reason: unknown): void {
+    setImportError(actionableError(reason, "Could not complete VIN import. Check the selected PI and BOM/VIN headers, then preview again. / VIN 导入未完成，请核对所选 PI 和 BOM、VIN 表头后重新预览；若仍失败，请联系管理员检查服务日志。"));
+  }
+
+  async function previewVinFile(file: File): Promise<void> {
+    if (!selectedPi || scopeBusy) return;
+    setImportBusy(true); setImportPreview(null); setImportError(null);
+    try {
+      const preview = await api.previewVehicleAllocationImport(file, { piCode: selectedPi.header.piCode, allowReplacing, ...(removeVins ? { removeVins: true } : {}) });
+      setImportPreview(preview);
+    } catch (reason) { showImportError(reason); }
+    finally { setImportBusy(false); }
+  }
+
+  async function repreviewVinTargets(replacing: boolean, sourceRow?: number, carCode?: string): Promise<void> {
+    setAllowReplacing(replacing);
+    if (!selectedPi || !importPreview || scopeBusy) return;
+    const rows = importPreview.previewRows.map((row) => ({
+      sourceRow: row.sourceRow, material_code: row.materialCode, vin: row.vin,
+      old_vin: row.inputOldVin, car_code: row.sourceRow === sourceRow ? carCode : row.requestedCarCode,
+    }));
+    setImportBusy(true); setImportError(null); setImportPreview(null);
+    try {
+      setImportPreview(await api.previewVehicleAllocationParsedRows({ piCode: selectedPi.header.piCode, allowReplacing: replacing, rows, removeVins: importPreview.removeVins }));
+    } catch (reason) { showImportError(reason); }
+    finally { setImportBusy(false); }
+  }
+
+  async function applyVinFile(): Promise<void> {
+    if (!importPreview || importPreview.status !== "ok" || !importPreview.updatedUnits || scopeBusy || !selectedPi) return;
+    if ((importPreview.replacedUnits ?? 0) > 0 && !window.confirm(`Replace ${importPreview.replacedUnits} existing VINs as previewed? / 确认按预览替换 ${importPreview.replacedUnits} 个已录 VIN？`)) return;
+    if (importPreview.removeVins && !window.confirm(`Clear ${importPreview.removedUnits} VINs only? Vehicles, quantities, prices and logistics remain. / 仅清除 ${importPreview.removedUnits} 个 VIN？车辆位、数量、价格及物流保持不变。`)) return;
+    setImportBusy(true); setImportError(null);
+    try {
+      const result = await api.applyVehicleAllocationImport(importPreview.importId);
+      setImportPreview(null);
+      setNotice(importPreview.removeVins ? `VIN cleared: ${result.removedUnits} / 已清 VIN ${result.removedUnits}，车辆位保留` : `VIN saved: ${result.updatedUnits}; already imported: ${result.skippedUnits ?? 0} / VIN 已保存 ${result.updatedUnits}，已录跳过 ${result.skippedUnits ?? 0}`);
+      setRefreshKey((value) => value + 1);
+      try {
+        setSelectedPi(await api.getVehicleAllocationPi(selectedPi.header.piCode));
+      } catch {
+        setError("VINs were saved, but the PI view could not refresh. Select this PI again; do not re-apply. / VIN 已保存，但 PI 页面刷新失败。请重新选择此 PI，无须重复应用。");
+      }
+    } catch (reason) {
+      setImportPreview(null); showImportError(reason);
+    } finally { setImportBusy(false); }
+  }
+
+  async function previewSelectedVinRemoval(): Promise<void> {
+    if (!selectedPi || scopeBusy) return;
+    const rows = selectedPi.vehicles.filter((v) => selectedCarCodes.has(v.carCode) && v.vin).map((v, index) => ({
+      sourceRow: index + 1, material_code: v.materialCode, car_code: v.carCode, vin: v.vin,
+    }));
+    if (!rows.length) { setImportError("Select vehicles with VINs first / 请先勾选有 VIN 的车辆"); return; }
+    setRemoveVins(true); setImportBusy(true); setImportError(null); setImportPreview(null);
+    try {
+      setImportPreview(await api.previewVehicleAllocationParsedRows({ piCode: selectedPi.header.piCode, removeVins: true, rows }));
+    } catch (reason) { showImportError(reason); }
+    finally { setImportBusy(false); }
+  }
+
   function updateFilter<K extends keyof VehicleAllocationFilters>(
     key: K,
     value: VehicleAllocationFilters[K],
@@ -564,10 +623,8 @@ export function OrderGeniusVehicleAllocationPage() {
       carCode: undefined,
       page: 1,
     }));
-    setSelectedVehicle(null);
-    setEditForm(null);
-    setPiBrowseCountry(detail.header.countryCode);
-    setPiBrowseMonth(detail.header.orderMonth);
+    clearScopeEdits();
+    setLinesOpen(false);
   }
 
   function openPiTool(tab: PiToolTab): void {
@@ -576,6 +633,7 @@ export function OrderGeniusVehicleAllocationPage() {
   }
 
   async function applyVinPaste(vins: string[]): Promise<void> {
+    if (scopeBusy) return;
     if (!selectedPi) {
       setError("先选择 PI");
       return;
@@ -603,7 +661,7 @@ export function OrderGeniusVehicleAllocationPage() {
       setVinPasteMessage(message);
       setNotice(message);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "VIN 填充失败");
+      setError(actionableError(err, "Could not complete VIN paste. Re-read the PI before retrying / VIN 粘贴未完成，请先重新读取 PI 核对已有 VIN，再重试。"));
     } finally {
       setVinPasteApplying(false);
     }
@@ -621,7 +679,7 @@ export function OrderGeniusVehicleAllocationPage() {
       const result = await api.searchVehicleAllocation(keyword);
       if (result.type === "pi" && isPiDetail(result.item)) {
         const detail = result.item;
-        setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
+        setPiVehicleScope(detail, null);
         setNotice(`Loaded ${detail.header.piCode}`);
         return;
       }
@@ -636,7 +694,7 @@ export function OrderGeniusVehicleAllocationPage() {
       }
       setNotice("No match");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "搜索失败");
+      setError(actionableError(err, "Search failed. Check PI/CarCode/VIN and search again / 搜索未完成，请核对 PI、CarCode 或 VIN 后重试。"));
     }
   }
 
@@ -645,9 +703,9 @@ export function OrderGeniusVehicleAllocationPage() {
     setNotice(null);
     try {
       const detail = await api.getVehicleAllocationPi(piCode);
-      setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
+      setPiVehicleScope(detail, null);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "加载 PI 失败");
+      setError(actionableError(err, "Could not load this PI. Retry from the PI list / 无法读取此 PI，请从 PI 列表重新选择；仍失败请联系管理员。"));
     }
   }
 
@@ -655,6 +713,7 @@ export function OrderGeniusVehicleAllocationPage() {
     if (!selectedPi) {
       return;
     }
+    clearScopeEdits();
     setSelectedLineCode(lineCode);
     setFilters((current) => ({
       ...current,
@@ -663,8 +722,6 @@ export function OrderGeniusVehicleAllocationPage() {
       carCode: undefined,
       page: 1,
     }));
-    setSelectedVehicle(null);
-    setEditForm(null);
   }
 
   function selectVehicle(vehicle: PiVehicleUnit): void {
@@ -673,7 +730,7 @@ export function OrderGeniusVehicleAllocationPage() {
   }
 
   async function saveVehicle(): Promise<void> {
-    if (!selectedVehicle || !editForm) {
+    if (!selectedVehicle || !editForm || scopeBusy) {
       return;
     }
     setSaving(true);
@@ -686,90 +743,32 @@ export function OrderGeniusVehicleAllocationPage() {
       setSelectedVehicle(next);
       setEditForm(toEditForm(next));
       setVehicles((current) => current.map((item) => item.carCode === next.carCode ? next : item));
+      setSelectedPi((current) => current ? {
+        ...current, vehicles: current.vehicles.map((item) => item.carCode === next.carCode ? next : item),
+      } : current);
       setNotice(`Saved ${next.carCode}`);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "保存失败");
+      setError(actionableError(err, "Could not save this vehicle. Keep your input and check the VIN/status before retrying / 车辆保存未完成，输入已保留；请核对 VIN、状态后重试。"));
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function createPi(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    setSaving(true);
-    setError(null);
-    try {
-      const header = await api.createVehicleAllocationPi({
-        countryCode: piForm.countryCode.trim().toUpperCase(),
-        orderMonth: piForm.orderMonth,
-        orderDate: cleanText(piForm.orderDate),
-        officialPiNo: cleanText(piForm.officialPiNo),
-        shipName: cleanText(piForm.shipName),
-        eta: cleanText(piForm.eta),
-      });
-      const detail = await api.getVehicleAllocationPi(header.piCode);
-      setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
-      setPiForm((current) => ({ ...current, officialPiNo: "", shipName: "", eta: "" }));
-      setRefreshKey((key) => key + 1);
-      setNotice(`Created ${header.piCode}`);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "创建 PI 失败");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function generatePiFromSelection(): Promise<void> {
-    const [yearText, monthText] = piForm.orderMonth.split("-");
-    const orderYear = Number(yearText);
-    const orderMonth = Number(monthText);
-    if (!piForm.countryCode.trim() || !Number.isFinite(orderYear) || !Number.isFinite(orderMonth)) {
-      setError("Country and Month are required");
-      return;
-    }
-    setGenerating(true);
-    setError(null);
-    try {
-      const result = await api.generateVehicleAllocationFromOrderMatrix({
-        countryCode: piForm.countryCode.trim().toUpperCase(),
-        orderYear,
-        orderMonth,
-        officialPiNo: cleanText(piForm.officialPiNo),
-        orderDate: cleanText(piForm.orderDate),
-        shipName: cleanText(piForm.shipName),
-        eta: cleanText(piForm.eta),
-      });
-      const detail = await api.getVehicleAllocationPi(result.piCode);
-      setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
-      setRefreshKey((key) => key + 1);
-      setNotice(`Generated ${result.piCode}: ${result.lineCount} lines / ${result.vehicleCount} cars`);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "生成 PI 失败");
-    } finally {
-      setGenerating(false);
     }
   }
 
   async function handleDeletePi(piCode: string): Promise<void> {
+    if (scopeBusy) return;
+    setSaving(true);
     setError(null);
     try {
       await api.deleteVehicleAllocationPi(piCode);
       setDeleteConfirmPi(null);
       setSelectedPi(null);
+      setSelectedLineCode(null);
+      clearScopeEdits();
+      setFilters({ country: defaultCountry, page: 1, pageSize });
       setRefreshKey((key) => key + 1);
-    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Delete failed"); }
-  }
-
-  async function handleDeleteLine(piLineCode: string): Promise<void> {
-    setError(null);
-    try {
-      await api.deleteVehicleAllocationLine(piLineCode);
-      setRefreshKey((key) => key + 1);
-      if (selectedPi) {
-        const detail = await api.getVehicleAllocationPi(selectedPi.header.piCode);
-        setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
-      }
-    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Delete line failed"); }
+      setNotice("PI deleted; monthly demand is retained and the allocation is released. / PI 已删除，月需求保留，占用已释放，可回选品重新创建。");
+    } catch { setError("PI could not be deleted. Select it again and retry / PI 删除未完成，请重新选择并重试。"); }
+    finally { setSaving(false); }
   }
 
   function toggleVehicleSelect(carCode: string) {
@@ -789,166 +788,6 @@ export function OrderGeniusVehicleAllocationPage() {
     }
   }
 
-  async function applyBatchToSelected(): Promise<void> {
-    if (selectedCarCodes.size === 0) return;
-    const fields = Object.fromEntries(
-      Object.entries(batchForm).filter(([, v]) => v && v !== "Keep"),
-    );
-    if (Object.keys(fields).length === 0) {
-      setError("请填写至少一个批量字段");
-      return;
-    }
-    setBatchSaving(true);
-    setError(null);
-    try {
-      const result = await api.bulkUpdateVehicleAllocationVehicles({
-        piCode: selectedPi?.header.piCode ?? undefined,
-        piLineCode: selectedLineCode ?? undefined,
-        carCodes: Array.from(selectedCarCodes),
-        fields,
-      });
-      setSelectedCarCodes(new Set());
-      setBatchForm({});
-      const detail = selectedPi ? await api.getVehicleAllocationPi(selectedPi.header.piCode) : null;
-      if (detail) setSelectedPi(detail);
-      setRefreshKey((key) => key + 1);
-      setNotice(`Updated ${result.updatedUnits}/${result.matchedUnits} vehicles`);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "批量更新失败");
-    } finally {
-      setBatchSaving(false);
-    }
-  }
-
-  async function createLine(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (!selectedPi) {
-      setError("先选择 PI");
-      return;
-    }
-    const quantity = Number(lineForm.quantity || 0);
-    if (!Number.isFinite(quantity) || quantity < 0) {
-      setError("Quantity must be non-negative");
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      const createdLine = await api.createVehicleAllocationLine(selectedPi.header.piCode, {
-        materialCode: cleanText(lineForm.materialCode),
-        bom: cleanText(lineForm.bom),
-        brand: cleanText(lineForm.brand),
-        modelName: cleanText(lineForm.modelName),
-        version: cleanText(lineForm.version),
-        powertrain: cleanText(lineForm.powertrain),
-        exteriorColorName: cleanText(lineForm.exteriorColorName),
-        interiorColorName: cleanText(lineForm.interiorColorName),
-        quantity,
-        fobEur: cleanText(lineForm.fobEur),
-      });
-      const detail = await api.getVehicleAllocationPi(selectedPi.header.piCode);
-      setPiVehicleScope(detail, createdLine.piLineCode);
-      setLineForm((current) => ({
-        ...current,
-        materialCode: "",
-        bom: "",
-        brand: "",
-        modelName: "",
-        version: "",
-        powertrain: "",
-        exteriorColorName: "",
-        interiorColorName: "",
-        quantity: "1",
-        fobEur: "",
-      }));
-      setRefreshKey((key) => key + 1);
-      setNotice("Line created and Car Codes generated");
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "创建 PI Line 失败");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleImportFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
-    setImportBusy(true);
-    setError(null);
-    setImportPreview(null);
-    try {
-      const sourceKind = detectVehicleImportSource(file);
-      if (sourceKind === "parsedRows") {
-        const payload = await parseVehicleImportRowsPayload(file);
-        const preview = await api.previewVehicleAllocationParsedRows(payload);
-        setImportPreview(preview);
-        setNotice(`Preview ${preview.totalRows} parsed rows`);
-        return;
-      }
-      if (sourceKind !== "spreadsheet") {
-        const preview = buildUnsupportedVehicleImportPreview(file.name, sourceKind);
-        setImportPreview(preview);
-        setNotice(sourceKind === "image" ? "Image preview needs parser setup" : "Unsupported import file");
-        return;
-      }
-      const preview = await api.previewVehicleAllocationImport(file);
-      setImportPreview(preview);
-      setNotice(`Preview ${preview.totalRows} rows`);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "导入预览失败");
-    } finally {
-      setImportBusy(false);
-      event.target.value = "";
-    }
-  }
-
-  async function handleVinListFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
-    setVinFileBusy(true);
-    setError(null);
-    setVinPasteMessage("");
-    try {
-      const result = await api.extractVehicleAllocationVinList(file);
-      const nextText = result.vins.join("\n");
-      setVinPasteText(nextText);
-      setActiveToolTab("vin");
-      setToolDrawerOpen(true);
-      const message = result.vins.length > 0
-        ? `Loaded ${result.vins.length} VIN candidates from ${result.fileName || file.name}`
-        : `No VIN candidates found in ${result.fileName || file.name}`;
-      setVinPasteMessage(message);
-      setNotice(message);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "VIN 文件解析失败");
-    } finally {
-      setVinFileBusy(false);
-      event.target.value = "";
-    }
-  }
-
-  async function applyImport(): Promise<void> {
-    if (!importPreview || importPreview.status === "error") {
-      return;
-    }
-    setImportBusy(true);
-    setError(null);
-    try {
-      const result = await api.applyVehicleAllocationImport(importPreview.importId);
-      setNotice(`Imported ${result.createdUnits} new / ${result.updatedUnits} updated`);
-      setImportPreview(null);
-      setRefreshKey((key) => key + 1);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "导入应用失败");
-    } finally {
-      setImportBusy(false);
-    }
-  }
-
   async function exportCurrentView(): Promise<void> {
     setExporting(true);
     setError(null);
@@ -957,7 +796,7 @@ export function OrderGeniusVehicleAllocationPage() {
       const country = filters.country || "ALL";
       buildDownload(blob, `Vehicle_Allocation_${country}_${new Date().toISOString().slice(0, 10)}.xlsx`);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "导出失败");
+      setError(actionableError(err, "Export failed. Check view filters and retry / 导出未完成，请核对查看筛选后重试。"));
     } finally {
       setExporting(false);
     }
@@ -965,14 +804,14 @@ export function OrderGeniusVehicleAllocationPage() {
 
   async function applyBulkUpdate(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    if (scopeBusy) return;
     if (!selectedPi) {
       setError("先选择 PI");
       return;
     }
-    const vinList = parseVinText(bulkForm.vinText);
     const fields = toBulkFieldPayload(bulkForm);
-    if (vinList.length === 0 && Object.keys(fields).length === 0) {
-      setError("请填写批量字段。VIN 请通过 PI Tools 的 VIN paste 预览后应用。");
+    if (Object.keys(fields).length === 0) {
+      setError("Choose at least one status field. / 请填写至少一个状态字段。");
       return;
     }
     setBulkSaving(true);
@@ -981,7 +820,7 @@ export function OrderGeniusVehicleAllocationPage() {
       const result = await api.bulkUpdateVehicleAllocationVehicles({
         piCode: selectedPi.header.piCode,
         piLineCode: selectedLineCode ?? undefined,
-        vinList,
+        carCodes: selectedCarCodes.size ? Array.from(selectedCarCodes) : undefined,
         fields,
       });
       const detail = await api.getVehicleAllocationPi(selectedPi.header.piCode);
@@ -989,13 +828,14 @@ export function OrderGeniusVehicleAllocationPage() {
       setSelectedVehicle(null);
       setEditForm(null);
       setRefreshKey((key) => key + 1);
-      setBulkForm((current) => ({ ...current, vinText: "" }));
+      setBulkForm(EMPTY_BULK_FORM);
+      setSelectedCarCodes(new Set());
       setNotice(
         `Updated ${result.updatedUnits}/${result.matchedUnits} vehicles`
-        + (result.vinAssigned ? ` · ${result.vinAssigned} VINs` : ""),
+        + " / 车辆状态已更新",
       );
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "批量更新失败");
+      setError(actionableError(err, "Could not complete status update. Input is retained; re-read the PI to check saved status before retrying / 状态更新未完成，输入已保留；请先重新读取 PI 核对已保存状态，再重试。"));
     } finally {
       setBulkSaving(false);
     }
@@ -1015,19 +855,30 @@ export function OrderGeniusVehicleAllocationPage() {
             placeholder="PI Code / Car Code / VIN"
             title="Search by PI Code, Car Code, or VIN"
           />
-          <LoadingActionButton type="submit" title="Load the matching PI or vehicle">
+          <LoadingActionButton type="submit" disabled={scopeBusy} title="Load the matching PI or vehicle">
             Search
           </LoadingActionButton>
         </form>
+        <button type="button" aria-expanded={toolDrawerOpen} onClick={() => setToolDrawerOpen((current) => !current)}>
+          PI Tools / 分车工具
+        </button>
       </div>
 
       {(error || notice) && (
         <div className={`va-message ${error ? "is-error" : "is-notice"}`}>
           {error || notice}
+          {error ? <div className="va-button-row">
+            <button type="button" disabled={scopeBusy} onClick={() => {
+              setRefreshKey((key) => key + 1);
+              if (selectedPi) void selectPi(selectedPi.header.piCode);
+            }}>Re-read PI / 重新读取 PI</button>
+            <a href="/product/order-genius">Check selection / 核对选品</a>
+          </div> : null}
         </div>
       )}
 
       <DeckFloatingDrawer
+        showTrigger={false}
         open={toolDrawerOpen}
         onOpenChange={setToolDrawerOpen}
         triggerPrimary="PI Tools"
@@ -1046,52 +897,182 @@ export function OrderGeniusVehicleAllocationPage() {
           ariaLabel="PI vehicle allocation tools"
         />
         <div className="va-tool-tab-body">
-          {activeToolTab === "status" ? (
-            <VehicleStatusBoard
-              scopeLabel={activeScopeLabel}
-              vehicles={vinPasteScopeVehicles}
-              statusFlow={statusFlow}
-            />
-          ) : null}
-          {activeToolTab === "vin" ? (
-            <VinPasteDigestPanel
-              scopeLabel={activeScopeLabel}
-              vehicles={vinPasteScopeVehicles}
-              pasteText={vinPasteText}
-              applying={vinPasteApplying}
-              fileBusy={vinFileBusy}
-              applyMessage={vinPasteMessage}
-              onPasteTextChange={setVinPasteText}
-              onPickFile={() => vinFileInputRef.current?.click()}
-              onApply={(vins) => void applyVinPaste(vins)}
-            />
-          ) : null}
           {activeToolTab === "import" ? (
-            <VehicleImportDigestPanel
-              preview={importPreview}
-              busy={importBusy}
-              exporting={exporting}
-              onPickFile={() => fileInputRef.current?.click()}
-              onApply={() => void applyImport()}
-              onExport={() => void exportCurrentView()}
-              onClear={() => setImportPreview(null)}
-            />
+            <>
+              <section className="va-tool-card">
+                <strong>BOM + VIN file import / 物料号与 VIN 文件导入</strong>
+                <p>{selectedPi ? `Whole PI: ${selectedPi.header.piCode} / 匹配整批 PI，不受所选明细或车辆页码限制。` : "Select a PI first / 请先选择 PI"}</p>
+                <p>BOM / Material Code + VIN; optional Car Code / Old VIN for correction. / 必填物料号和 VIN，纠错可加 Car Code 或 Old VIN。</p>
+                <label className="va-check"><input type="checkbox" checked={removeVins} disabled={scopeBusy}
+                  onChange={(event) => { setRemoveVins(event.target.checked); setImportPreview(null); }} />Remove these VINs from file / 按原文件清 VIN（先预览）</label>
+                <button type="button" disabled={scopeBusy || !selectedCarCodes.size} onClick={() => void previewSelectedVinRemoval()}>Clear selected VINs / 清勾选 VIN（先预览）</button>
+                {!removeVins ? <label className="va-check"><input type="checkbox" checked={allowReplacing} disabled={scopeBusy}
+                  onChange={(event) => void repreviewVinTargets(event.target.checked)} />Allow replacing existing VINs / 允许替换已录 VIN</label> : null}
+                <input ref={importInputRef} type="file" accept=".xlsx" hidden aria-label="BOM and VIN XLSX"
+                  onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void previewVinFile(file); }} />
+                {importError ? <div role="alert" className="va-import-error">{importError}<br />
+                  <button type="button" onClick={() => importInputRef.current?.click()} disabled={scopeBusy}>Re-upload / 重新上传</button>
+                  <a href="/product/order-genius">Check order selection / 核对选品订单</a>
+                </div> : null}
+                <VehicleImportDigestPanel preview={importPreview} busy={scopeBusy}
+                  onPickFile={() => { if (selectedPi) importInputRef.current?.click(); else setImportError("Select a PI before uploading / 请先选择目标 PI 再上传"); }}
+                  onApply={applyVinFile} onClear={() => { setImportPreview(null); setImportError(null); }}
+                  onTargetChange={(row, car) => void repreviewVinTargets(allowReplacing, row, car)} />
+              </section>
+              <details>
+                <summary>VIN paste · auxiliary / 辅助粘贴</summary>
+                <VinPasteDigestPanel
+                  scopeLabel={activeScopeLabel}
+                  vehicles={vinPasteScopeVehicles}
+                  pasteText={vinPasteText}
+                  applying={scopeBusy}
+                  applyMessage={vinPasteMessage}
+                  onPasteTextChange={setVinPasteText}
+                  onApply={(vins) => void applyVinPaste(vins)}
+                />
+              </details>
+            </>
           ) : null}
-          {activeToolTab === "batch" ? (
-            <section className="va-tool-card">
-              <div className="va-tool-card-head">
-                <span>Batch maintain</span>
-                <strong>{selectedCarCodes.size} selected</strong>
-              </div>
-              <p>
-                Use Bulk Maintain for the current PI or PI line scope. Use the selected-vehicle bar when updates
-                must target explicit car codes.
-              </p>
-              <div className="va-tool-status-grid">
-                <div><span>Scope</span><strong>{activeScopeLabel}</strong></div>
-                <div><span>Selected</span><strong>{selectedCarCodes.size}</strong></div>
-              </div>
-            </section>
+          {activeToolTab === "status" ? (
+            <>
+              <form className="va-bulk-panel" onSubmit={(event) => void applyBulkUpdate(event)}>
+                <div className="va-bulk-head">
+                  <div>
+                    <h3>Update status</h3>
+                    <span title="Current batch edit scope">{selectedCarCodes.size ? `${selectedCarCodes.size} selected vehicles / 勾选车辆` : `${activeScopeLabel} · ${vinPasteScopeVehicles.length} vehicles / 全范围`}</span>
+                  </div>
+                  <LoadingActionButton
+                    type="submit"
+                    loading={bulkSaving}
+                    disabled={!selectedPi || scopeBusy}
+                    loadingLabel="Applying..."
+                  >
+                    Update status
+                  </LoadingActionButton>
+                </div>
+                <div className="va-bulk-fields">
+                  <label>Production<input type="date" value={bulkForm.productionDate} onChange={(event) => setBulkForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
+                  <label>ETD<input type="date" value={bulkForm.etd} onChange={(event) => setBulkForm((current) => ({ ...current, etd: event.target.value }))} /></label>
+                  <label>ETA<input type="date" value={bulkForm.eta} onChange={(event) => setBulkForm((current) => ({ ...current, eta: event.target.value }))} /></label>
+                  <label>Ready Pickup<input type="date" value={bulkForm.readyForPickupDate} onChange={(event) => setBulkForm((current) => ({ ...current, readyForPickupDate: event.target.value }))} /></label>
+                  <label>Ship<input value={bulkForm.shipName} onChange={(event) => setBulkForm((current) => ({ ...current, shipName: event.target.value }))} /></label>
+                  <label>Dealer code<input value={bulkForm.dealerCode} onChange={(event) => setBulkForm((current) => ({ ...current, dealerCode: event.target.value }))} /></label>
+                  <div className="va-field">
+                    <span>Allocation</span>
+                    <CommandSelect
+                      value={bulkForm.allocationStatus}
+                      options={allocationStatusOptions}
+                      placeholder="Keep allocation"
+                      searchPlaceholder="Search allocation..."
+                      allowClear
+                      onChange={(value) => setBulkForm((current) => ({ ...current, allocationStatus: value }))}
+                    />
+                  </div>
+                  <div className="va-field">
+                    <span>Logistics</span>
+                    <CommandSelect
+                      value={bulkForm.logisticsStatus}
+                      options={logisticsStatusOptions}
+                      placeholder="Keep logistics"
+                      searchPlaceholder="Search logistics..."
+                      allowClear
+                      onChange={(value) => setBulkForm((current) => ({ ...current, logisticsStatus: value }))}
+                    />
+                  </div>
+                </div>
+              </form>
+
+              <details>
+                <summary>Status details / 状态详情</summary>
+                <VehicleStatusBoard scopeLabel={activeScopeLabel} vehicles={vinPasteScopeVehicles} statusFlow={statusFlow} />
+              </details>
+            </>
+          ) : null}
+          {activeToolTab === "view" ? (
+            <>
+              <section className="va-filters">
+                <input
+                  value={filters.carCode ?? ""}
+                  onChange={(event) => updateFilter("carCode", event.target.value.toUpperCase())}
+                  placeholder="Car Code"
+                  title="Filter by generated Car Code"
+                />
+                <input
+                  value={filters.vin ?? ""}
+                  onChange={(event) => updateFilter("vin", event.target.value.toUpperCase())}
+                  placeholder="VIN"
+                  title="Filter by VIN"
+                />
+                <input
+                  value={filters.materialCode ?? ""}
+                  onChange={(event) => updateFilter("materialCode", event.target.value.toUpperCase())}
+                  placeholder="Material"
+                  title="Filter by material code"
+                />
+                <CommandSelect
+                  value={filters.allocationStatus ?? ""}
+                  options={allocationStatusOptions}
+                  placeholder="Allocation"
+                  searchPlaceholder="Search allocation..."
+                  allowClear
+                  onChange={(value) => updateFilter("allocationStatus", value)}
+                />
+                <CommandSelect
+                  value={filters.logisticsStatus ?? ""}
+                  options={logisticsStatusOptions}
+                  placeholder="Logistics"
+                  searchPlaceholder="Search logistics..."
+                  allowClear
+                  onChange={(value) => updateFilter("logisticsStatus", value)}
+                />
+                <label className="va-check">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(filters.vinMissingOnly)}
+                    onChange={(event) => updateFilter("vinMissingOnly", event.target.checked)}
+                  />
+                  VIN missing
+                </label>
+                <label className="va-check">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(filters.unallocatedOnly)}
+                    onChange={(event) => updateFilter("unallocatedOnly", event.target.checked)}
+                  />
+                  Unallocated
+                </label>
+                <LoadingActionButton
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setFilters({
+                      country: selectedPi?.header.countryCode || defaultCountry,
+                      piCode: selectedPi?.header.piCode, piLineCode: selectedLineCode ?? undefined,
+                      page: 1, pageSize,
+                    });
+                  }}
+                >
+                  Reset
+                </LoadingActionButton>
+              </section>
+
+              <fieldset className="va-columns">
+                <legend>Columns / 显示列</legend>
+                {VEHICLE_COLUMNS.map((column) => (
+                  <label key={column.key}>
+                    <input type="checkbox" checked={visibleColumnKeys.has(column.key)}
+                      onChange={() => setVisibleColumnKeys((current) => {
+                        const next = new Set(current);
+                        if (next.has(column.key)) next.delete(column.key); else next.add(column.key);
+                        return next;
+                      })} />
+                    {column.label}
+                  </label>
+                ))}
+                <button type="button" className="btn-secondary" onClick={() => setVisibleColumnKeys(new Set(DEFAULT_COLUMNS))}>Restore default columns / 恢复默认列</button>
+              </fieldset>
+              <LoadingActionButton loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出</LoadingActionButton>
+            </>
           ) : null}
         </div>
       </DeckFloatingDrawer>
@@ -1118,8 +1099,9 @@ export function OrderGeniusVehicleAllocationPage() {
                 />
               </div>
               <div className="va-form-row">
-                <label>Browse Month</label>
+                <label htmlFor="pi-browse-month">Browse Month</label>
                 <input
+                  id="pi-browse-month"
                   type="month"
                   value={piBrowseMonth}
                   onChange={(event) => {
@@ -1137,84 +1119,13 @@ export function OrderGeniusVehicleAllocationPage() {
                 </div>
               ) : null}
             </div>
-            <form className="va-form" onSubmit={createPi}>
-              <div className="va-form-row">
-                <label>Country</label>
-                <CommandSelect
-                  value={normalizeCountryCode(piForm.countryCode)}
-                  options={countryCommandOptions}
-                  placeholder="Country"
-                  searchPlaceholder="Search country..."
-                  onChange={(value) => setPiForm((current) => ({
-                    ...current,
-                    countryCode: value,
-                  }))}
-                />
-              </div>
-              <div className="va-form-row">
-                <label>Month</label>
-                <input
-                  type="month"
-                  value={piForm.orderMonth}
-                  onChange={(event) => setPiForm((current) => ({ ...current, orderMonth: event.target.value }))}
-                />
-              </div>
-              <div className="va-form-row">
-                <label>Official PI</label>
-                <input
-                  value={piForm.officialPiNo}
-                  onChange={(event) => setPiForm((current) => ({ ...current, officialPiNo: event.target.value }))}
-                />
-              </div>
-              <div className="va-form-row">
-                <label>Order Date</label>
-                <input
-                  type="date"
-                  value={piForm.orderDate}
-                  onChange={(event) => setPiForm((current) => ({ ...current, orderDate: event.target.value }))}
-                />
-              </div>
-              <div className="va-form-row">
-                <label>Ship</label>
-                <input
-                  value={piForm.shipName}
-                  onChange={(event) => setPiForm((current) => ({ ...current, shipName: event.target.value }))}
-                />
-              </div>
-              <div className="va-form-row">
-                <label>ETA</label>
-                <input
-                  type="date"
-                  value={piForm.eta}
-                  onChange={(event) => setPiForm((current) => ({ ...current, eta: event.target.value }))}
-                />
-              </div>
-              <div className="va-button-row">
-                <LoadingActionButton
-                  type="submit"
-                  loading={saving}
-                  loadingLabel="Creating..."
-                  disabled={generating || !piForm.countryCode || !piForm.orderMonth}
-                >
-                  Create PI
-                </LoadingActionButton>
-                <LoadingActionButton
-                  variant="secondary"
-                  loading={generating}
-                  loadingLabel="Generating..."
-                  onClick={() => void generatePiFromSelection()}
-                  disabled={saving || !piForm.countryCode || !piForm.orderMonth}
-                  title="Generate remaining PI lines and car codes from the selected country/month order matrix"
-                >
-                  Generate
-                </LoadingActionButton>
-              </div>
-            </form>
+            <a className="va-selection-link" href="/product/order-genius">Go to selection / 前往选品创建 PI</a>
             <div className="va-pi-list">
               {piHeaders.map((pi) => (
                 <button
                   type="button"
                   key={pi.piCode}
+                  disabled={scopeBusy}
                   className={selectedPi?.header.piCode === pi.piCode ? "is-active" : ""}
                   onClick={() => void selectPi(pi.piCode)}
                   title={`Account ${display(pi.orderingAccountCode)} · Markets ${marketCountriesText(pi)}`}
@@ -1247,142 +1158,49 @@ export function OrderGeniusVehicleAllocationPage() {
             ) : null}
           </section>
 
-          <section className="va-panel">
-            <div className="va-panel-head">
-              <h2>PI Tools</h2>
-              <span>{importBusy ? "Busy" : "Digest ready"}</span>
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xls,.xlsm,.json,application/json,image/png,image/jpeg,image/webp,image/heic,image/heif"
-              onChange={(event) => void handleImportFile(event)}
-              hidden
-            />
-            <input
-              ref={vinFileInputRef}
-              type="file"
-              accept=".xlsx,.xls,.xlsm"
-              onChange={(event) => void handleVinListFile(event)}
-              hidden
-            />
-            <div className="va-side-tool-card">
-              <p>Use the floating tool drawer for VIN paste, file digest, status board and batch maintain.</p>
-              <div className="va-side-tool-actions">
-                <LoadingActionButton
-                  type="button"
-                  variant="secondary"
-                  loading={importBusy}
-                  loadingLabel="Opening..."
-                  onClick={() => openPiTool("import")}
-                >
-                  Import / Export
-                </LoadingActionButton>
-                <LoadingActionButton
-                  type="button"
-                  variant="secondary"
-                  onClick={() => openPiTool("vin")}
-                >
-                  VIN Paste
-                </LoadingActionButton>
-              </div>
-              {importPreview ? (
-                <span className="va-side-tool-digest">
-                  Preview loaded · {importPreview.totalRows} rows
-                </span>
+          {selectedPi ? (
+            <div className="va-panel" ref={linePanelRef}>
+              <button type="button" className="btn-secondary" aria-expanded={linesOpen} aria-controls="pi-line-list"
+                onClick={() => setLinesOpen((current) => !current)}>
+                PI lines · {selectedPi.lines.length} / 明细
+              </button>
+              <small className="va-scope-label">{selectedLine ? display(selectedLine.materialCode) : "All PI / 整批"}</small>
+              {linesOpen ? (
+                <div className="va-line-list" id="pi-line-list" role="region" aria-label="PI lines">
+                  <div className={`va-line-row va-line-all ${selectedLineCode === null ? "is-active" : ""}`}>
+                    <button type="button" disabled={scopeBusy} className="va-line-body" onClick={() => selectLineScope(null)}
+                      title="Use the whole PI as the vehicle table and batch-edit scope">
+                      <strong>All PI</strong>
+                      <span>{selectedPi.header.piCode} · Qty {selectedPi.vehicleTotal}</span>
+                      <small>{selectedPi.vehicles.filter((vehicle) => !vehicle.vin).length} no VIN</small>
+                    </button>
+                  </div>
+                  {selectedPi.lines.slice().sort((a, b) => compareProductModels(a.brand ?? "", a.modelName ?? "", a.powertrain ?? "", b.brand ?? "", b.modelName ?? "", b.powertrain ?? "")
+                    || (a.version ?? "").localeCompare(b.version ?? "") || (a.bom ?? "").localeCompare(b.bom ?? "")
+                    || (a.materialCode ?? "").localeCompare(b.materialCode ?? "") || a.piLineCode.localeCompare(b.piLineCode)).map((line) => (
+                    <div
+                      key={line.piLineCode}
+                      className={`va-line-row ${selectedLineCode === line.piLineCode ? "is-active" : ""}`}
+                    >
+                      <button type="button" disabled={scopeBusy} className="va-line-body" onClick={() => selectLineScope(line.piLineCode)}
+                        title="Line quantity and market split generated from order matrix allocation">
+                        <strong>{line.piLineCode}</strong>
+                        <span className="va-line-config" style={{ color: ptColor(line.powertrain ?? "", "#475467") }}>{display(line.materialCode)} · {display(line.modelName)} / {display(line.version)} · Qty {line.quantity}</span>
+                        <small>
+                          {(line.allocations ?? []).length > 0
+                            ? (line.allocations ?? []).map((allocation) => `${allocation.marketCountryCode} ${allocation.quantity}`).join(" · ")
+                            : `Market ${selectedPi.header.countryCode} ${line.quantity}`}
+                        </small>
+                      </button>
+                    </div>
+                  ))}
+                </div>
               ) : null}
+
             </div>
-          </section>
+          ) : null}
         </aside>
-
         <main className="va-main">
-          <section className="va-filters">
-            <CommandSelect
-              value={normalizeCountryCode(filters.country)}
-              options={countryCommandOptions}
-              placeholder="Country"
-              searchPlaceholder="Search country..."
-              allowClear
-              onChange={(value) => updateFilter("country", value || undefined)}
-            />
-            <input
-              value={filters.piCode ?? ""}
-              onChange={(event) => updateFilter("piCode", event.target.value.toUpperCase())}
-              placeholder="PI Code"
-              title="Filter vehicles by PI Code"
-            />
-            <input
-              value={filters.carCode ?? ""}
-              onChange={(event) => updateFilter("carCode", event.target.value.toUpperCase())}
-              placeholder="Car Code"
-              title="Filter by generated Car Code"
-            />
-            <input
-              value={filters.vin ?? ""}
-              onChange={(event) => updateFilter("vin", event.target.value.toUpperCase())}
-              placeholder="VIN"
-              title="Filter by VIN"
-            />
-            <input
-              value={filters.materialCode ?? ""}
-              onChange={(event) => updateFilter("materialCode", event.target.value.toUpperCase())}
-              placeholder="Material"
-              title="Filter by material code"
-            />
-            <CommandSelect
-              value={filters.allocationStatus ?? ""}
-              options={allocationStatusOptions}
-              placeholder="Allocation"
-              searchPlaceholder="Search allocation..."
-              allowClear
-              onChange={(value) => updateFilter("allocationStatus", value)}
-            />
-            <CommandSelect
-              value={filters.logisticsStatus ?? ""}
-              options={logisticsStatusOptions}
-              placeholder="Logistics"
-              searchPlaceholder="Search logistics..."
-              allowClear
-              onChange={(value) => updateFilter("logisticsStatus", value)}
-            />
-            <label className="va-check">
-              <input
-                type="checkbox"
-                checked={Boolean(filters.vinMissingOnly)}
-                onChange={(event) => updateFilter("vinMissingOnly", event.target.checked)}
-              />
-              VIN missing
-            </label>
-            <label className="va-check">
-              <input
-                type="checkbox"
-                checked={Boolean(filters.unallocatedOnly)}
-                onChange={(event) => updateFilter("unallocatedOnly", event.target.checked)}
-              />
-              Unallocated
-            </label>
-            <LoadingActionButton
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                setFilters({ country: defaultCountry, page: 1, pageSize: 100 });
-                setSelectedPi(null);
-                setSelectedLineCode(null);
-                setSelectedVehicle(null);
-                setEditForm(null);
-              }}
-            >
-              Reset
-            </LoadingActionButton>
-          </section>
-
-          <section className="va-stats">
-            <div><span>Total</span><strong>{total}</strong></div>
-            <div><span>Allocated</span><strong>{tableSummary.allocated}</strong></div>
-            <div><span>VIN Missing</span><strong>{tableSummary.vinMissing}</strong></div>
-            <div><span>Ready</span><strong>{tableSummary.ready}</strong></div>
-          </section>
-
           {selectedPi && (
             <section className="va-pi-detail">
               <div className="va-pi-title">
@@ -1398,14 +1216,16 @@ export function OrderGeniusVehicleAllocationPage() {
                   </span>
                 </div>
                 <div className="va-pi-metrics">
-                  <span>{selectedPi.summary.totalUnits ?? 0} units</span>
-                  <span>{selectedPi.summary.vinMissing ?? 0} no VIN</span>
-                  <span>{selectedPi.summary.readyForPickup ?? 0} ready</span>
-                  {deleteConfirmPi === selectedPi.header.piCode ? (
-                    <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                      <span style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>Delete?</span>
+                  <span>{vinPasteScopeVehicles.length} units / 台</span>
+                  <span>{tableSummary.vinMissing} no VIN / 待录</span>
+                  <button type="button" className="btn-secondary" onClick={() => openPiTool("status")}>
+                    Status / 状态 · {tableSummary.ready} ready · {tableSummary.allocated} allocated
+                  </button>
+                  {user?.role === "admin" && (deleteConfirmPi === selectedPi.header.piCode ? (
+                    <span style={{ display: "flex", flexWrap: "wrap", maxWidth: "100%", gap: 4, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>Delete {selectedPi.lines.reduce((sum, line) => sum + line.quantity, 0)} units + VINs; release PI allocation, retain monthly demand? / 删除整批及 VIN、释放占用，保留月需求？</span>
                       <button type="button" className="btn btn-sm btn-primary" style={{ background: "#dc2626", padding: "2px 10px", fontSize: 11 }}
-                        onClick={() => handleDeletePi(selectedPi.header.piCode)}>Yes</button>
+                        disabled={scopeBusy} onClick={() => handleDeletePi(selectedPi.header.piCode)}>Yes</button>
                       <button type="button" className="btn btn-sm btn-ghost" style={{ padding: "2px 10px", fontSize: 11 }}
                         onClick={() => setDeleteConfirmPi(null)}>No</button>
                     </span>
@@ -1416,169 +1236,19 @@ export function OrderGeniusVehicleAllocationPage() {
                       title="Delete this PI and all its lines, allocations, and vehicles">
                       Delete PI
                     </button>
-                  )}
-                </div>
-              </div>
-              <form className="va-bulk-panel" onSubmit={(event) => void applyBulkUpdate(event)}>
-                <div className="va-bulk-head">
-                  <div>
-                    <h3>Bulk Maintain</h3>
-                    <span title="Current batch edit scope">{activeScopeLabel}</span>
-                  </div>
-                  <LoadingActionButton
-                    type="submit"
-                    loading={bulkSaving}
-                    loadingLabel="Applying..."
-                  >
-                    Apply Batch
-                  </LoadingActionButton>
-                </div>
-                <div className="va-bulk-vin-entry">
-                  <div>
-                    <strong>VIN filling uses preview digest</strong>
-                    <span>Paste VINs, check duplicate/overflow rows, then apply to {activeScopeLabel}.</span>
-                  </div>
-                  <button type="button" onClick={() => openPiTool("vin")}>
-                    Open VIN Paste
-                  </button>
-                </div>
-                <div className="va-bulk-fields">
-                  <label>Production<input type="date" value={bulkForm.productionDate} onChange={(event) => setBulkForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
-                  <label>ETD<input type="date" value={bulkForm.etd} onChange={(event) => setBulkForm((current) => ({ ...current, etd: event.target.value }))} /></label>
-                  <label>ETA<input type="date" value={bulkForm.eta} onChange={(event) => setBulkForm((current) => ({ ...current, eta: event.target.value }))} /></label>
-                  <label>Ready Pickup<input type="date" value={bulkForm.readyForPickupDate} onChange={(event) => setBulkForm((current) => ({ ...current, readyForPickupDate: event.target.value }))} /></label>
-                  <label>Ship<input value={bulkForm.shipName} onChange={(event) => setBulkForm((current) => ({ ...current, shipName: event.target.value }))} /></label>
-                  <div className="va-field">
-                    <span>Allocation</span>
-                    <CommandSelect
-                      value={bulkForm.allocationStatus}
-                      options={allocationStatusOptions}
-                      placeholder="Keep allocation"
-                      searchPlaceholder="Search allocation..."
-                      allowClear
-                      onChange={(value) => setBulkForm((current) => ({ ...current, allocationStatus: value }))}
-                    />
-                  </div>
-                  <div className="va-field">
-                    <span>Logistics</span>
-                    <CommandSelect
-                      value={bulkForm.logisticsStatus}
-                      options={logisticsStatusOptions}
-                      placeholder="Keep logistics"
-                      searchPlaceholder="Search logistics..."
-                      allowClear
-                      onChange={(value) => setBulkForm((current) => ({ ...current, logisticsStatus: value }))}
-                    />
-                  </div>
-                </div>
-              </form>
-              <form className="va-line-form" onSubmit={createLine}>
-                <input value={lineForm.materialCode} onChange={(event) => setLineForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="Material Code" />
-                <input value={lineForm.bom} onChange={(event) => setLineForm((current) => ({ ...current, bom: event.target.value }))} placeholder="BOM" />
-                <input value={lineForm.brand} onChange={(event) => setLineForm((current) => ({ ...current, brand: event.target.value }))} placeholder="Brand" />
-                <input value={lineForm.modelName} onChange={(event) => setLineForm((current) => ({ ...current, modelName: event.target.value }))} placeholder="Model" />
-                <input value={lineForm.version} onChange={(event) => setLineForm((current) => ({ ...current, version: event.target.value }))} placeholder="Version" />
-                <input value={lineForm.powertrain} onChange={(event) => setLineForm((current) => ({ ...current, powertrain: event.target.value }))} placeholder="Powertrain" />
-                <input value={lineForm.exteriorColorName} onChange={(event) => setLineForm((current) => ({ ...current, exteriorColorName: event.target.value }))} placeholder="Exterior" />
-                <input value={lineForm.interiorColorName} onChange={(event) => setLineForm((current) => ({ ...current, interiorColorName: event.target.value }))} placeholder="Interior" />
-                <input value={lineForm.fobEur} onChange={(event) => setLineForm((current) => ({ ...current, fobEur: event.target.value }))} placeholder="FOB" inputMode="decimal" />
-                <input value={lineForm.quantity} onChange={(event) => setLineForm((current) => ({ ...current, quantity: event.target.value }))} placeholder="Qty" inputMode="numeric" />
-                <LoadingActionButton type="submit" loading={saving} loadingLabel="Adding...">
-                  Add Line
-                </LoadingActionButton>
-              </form>
-              {selectedPi.lines.length > 0 ? (
-                <div className="va-line-list">
-                  <div className={`va-line-row va-line-all ${selectedLineCode === null ? "is-active" : ""}`}>
-                    <button type="button" className="va-line-body" onClick={() => selectLineScope(null)}
-                      title="Use the whole PI as the vehicle table and batch-edit scope">
-                      <strong>All PI</strong>
-                      <span>{selectedPi.header.piCode} · Qty {selectedPi.summary.totalUnits ?? 0}</span>
-                      <small>{selectedPi.summary.vinMissing ?? 0} no VIN</small>
-                    </button>
-                  </div>
-                  {selectedPi.lines.map((line) => (
-                    <div
-                      key={line.piLineCode}
-                      className={`va-line-row ${selectedLineCode === line.piLineCode ? "is-active" : ""}`}
-                    >
-                      <button type="button" className="va-line-body" onClick={() => selectLineScope(line.piLineCode)}
-                        title="Line quantity and market split generated from order matrix allocation">
-                        <strong>{line.piLineCode}</strong>
-                        <span>{display(line.materialCode)} · {display(line.modelName)} / {display(line.version)} · Qty {line.quantity}</span>
-                        <small>
-                          {(line.allocations ?? []).length > 0
-                            ? (line.allocations ?? []).map((allocation) => `${allocation.marketCountryCode} ${allocation.quantity}`).join(" · ")
-                            : `Market ${selectedPi.header.countryCode} ${line.quantity}`}
-                        </small>
-                      </button>
-                      <button
-                        type="button"
-                        className="va-line-delete"
-                        title="Delete this line"
-                        onClick={() => void handleDeleteLine(line.piLineCode)}
-                      >✕</button>
-                    </div>
                   ))}
                 </div>
-              ) : null}
+              </div>
             </section>
           )}
 
-          {/* ── Batch action bar (visible when vehicles selected) ── */}
-          {selectedCarCodes.size > 0 && (
-            <div style={{
-              display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
-              padding: "8px 12px", background: "#eff6ff", border: "1px solid #93c5fd",
-              borderRadius: 6, marginBottom: 8, fontSize: 13,
-            }}>
-              <span style={{ fontWeight: 600, color: "#1e40af" }}>{selectedCarCodes.size} selected</span>
-              <input type="date" placeholder="ETD" value={batchForm.etd ?? ""}
-                onChange={(e) => setBatchForm((f) => ({ ...f, etd: e.target.value }))}
-                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db" }} />
-              <input type="date" placeholder="ETA" value={batchForm.eta ?? ""}
-                onChange={(e) => setBatchForm((f) => ({ ...f, eta: e.target.value }))}
-                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db" }} />
-              <input type="text" placeholder="Ship name" value={batchForm.shipName ?? ""}
-                onChange={(e) => setBatchForm((f) => ({ ...f, shipName: e.target.value }))}
-                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db", width: 120 }} />
-              <input type="text" placeholder="Dealer code" value={batchForm.dealerCode ?? ""}
-                onChange={(e) => setBatchForm((f) => ({ ...f, dealerCode: e.target.value }))}
-                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db", width: 100 }} />
-              <CommandSelect
-                value={batchAllocationValue(batchForm.allocationStatus)}
-                options={allocationStatusOptions}
-                placeholder="Alloc..."
-                searchPlaceholder="Search allocation..."
-                allowClear
-                compact
-                className="va-inline-command-select"
-                onChange={(value) => setBatchForm((current) => ({ ...current, allocationStatus: value }))}
-              />
-              <CommandSelect
-                value={batchLogisticsValue(batchForm.logisticsStatus)}
-                options={logisticsStatusOptions}
-                placeholder="Logi..."
-                searchPlaceholder="Search logistics..."
-                allowClear
-                compact
-                className="va-inline-command-select"
-                onChange={(value) => setBatchForm((current) => ({ ...current, logisticsStatus: value }))}
-              />
-              <LoadingActionButton
-                size="sm"
-                loading={batchSaving}
-                loadingLabel="Applying..."
-                onClick={applyBatchToSelected}
-              >
-                Apply to {selectedCarCodes.size}
-              </LoadingActionButton>
-              <button type="button" className="btn btn-sm btn-ghost"
-                onClick={() => { setSelectedCarCodes(new Set()); setBatchForm({}); }} style={{ fontSize: 12 }}>
-                Clear
-              </button>
+          {selectedCarCodes.size > 0 ? (
+            <div className="va-selected-actions">
+              <span>{selectedCarCodes.size} selected / 已勾选</span>
+              <button type="button" onClick={() => openPiTool("status")}>Update selected status / 更新勾选状态</button>
+              <button type="button" className="btn-secondary" onClick={() => setSelectedCarCodes(new Set())}>Clear selection / 清除勾选</button>
             </div>
-          )}
+          ) : null}
 
           <section className="va-table-wrap">
             <div className="va-table-head">
@@ -1597,21 +1267,10 @@ export function OrderGeniusVehicleAllocationPage() {
                       <input type="checkbox"
                         checked={vehicles.length > 0 && vehicles.every((v) => selectedCarCodes.has(v.carCode))}
                         onChange={toggleSelectAll}
+                        aria-label="Select current page vehicles"
                         style={{ margin: 0 }} />
                     </th>
-                    <th>Car Code</th>
-                    <th>VIN</th>
-                    <th>PI</th>
-                    <th>Country</th>
-                    <th>Material</th>
-                    <th>Config</th>
-                    <th>Exterior</th>
-                    <th>Interior</th>
-                    <th>Allocation</th>
-                    <th>Logistics</th>
-                    <th>Ship</th>
-                    <th>ETA</th>
-                    <th>Ready</th>
+                    {visibleColumns.map((column) => <th key={column.key}>{column.label}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -1623,29 +1282,19 @@ export function OrderGeniusVehicleAllocationPage() {
                       className={selectedVehicle?.carCode === vehicle.carCode ? "is-selected" : ""}
                     >
                       <td>
-                        <input type="checkbox" checked={isChecked}
+                        <input type="checkbox" aria-label={`Select ${vehicle.carCode}`} checked={isChecked}
                           onChange={() => toggleVehicleSelect(vehicle.carCode)}
                           onClick={(e) => e.stopPropagation()}
                           style={{ margin: 0 }} />
                       </td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.carCode}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.vin)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.piCode}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.countryCode}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.materialCode)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.modelName)} / {display(vehicle.version)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.exteriorColorName)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.interiorColorName)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}><span className={`va-status va-status-${vehicle.allocationStatus}`}>{statusText(vehicle.allocationStatus)}</span></td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}><span className={`va-status va-status-${vehicle.logisticsStatus}`}>{statusText(vehicle.logisticsStatus)}</span></td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.shipName)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.eta)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.readyForPickupDate)}</td>
+                      {visibleColumns.map((column) => (
+                        <td key={column.key} onClick={() => selectVehicle(vehicle)}>{vehicleCell(vehicle, column.key)}</td>
+                      ))}
                     </tr>
                   );})}
                   {!loading && vehicles.length === 0 && (
                     <tr>
-                      <td colSpan={14} className="va-empty">{selectedPi ? "No vehicles in current scope" : "Select a PI to view vehicles"}</td>
+                      <td colSpan={visibleColumns.length + 1} className="va-empty">{selectedPi ? "No vehicles in current scope" : "Select a PI to view vehicles"}</td>
                     </tr>
                   )}
                 </tbody>
@@ -1699,6 +1348,7 @@ export function OrderGeniusVehicleAllocationPage() {
           <LoadingActionButton
             className="va-save"
             loading={saving}
+            disabled={scopeBusy}
             loadingLabel="Saving..."
             onClick={() => void saveVehicle()}
           >
@@ -1713,7 +1363,7 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-kicker{font-size:11px;font-weight:700;text-transform:uppercase;color:#667085}
         .va-header h1{font-size:28px;font-weight:600;line-height:1.1;margin:4px 0 0}
         .va-search{display:flex;gap:8px;min-width:420px}
-        .va-search input,.va-filters input,.va-form input,.va-line-form input,.va-bulk-panel textarea,.va-bulk-fields input,.va-drawer input,.va-drawer textarea{border:1px solid #cfd6df;background:#fff;color:#111827;border-radius:6px;padding:9px 10px;min-width:0}
+        .va-search input,.va-filters input,.va-form input,.va-bulk-panel textarea,.va-bulk-fields input,.va-drawer input,.va-drawer textarea{border:1px solid #cfd6df;background:#fff;color:#111827;border-radius:6px;padding:9px 10px;min-width:0}
         .va-search input{flex:1}
         .vehicle-allocation-page button{border:1px solid #1c69d4;background:#1c69d4;color:white;border-radius:6px;padding:9px 12px;cursor:pointer;font-weight:600}
         .vehicle-allocation-page .btn-secondary,.vehicle-allocation-page .btn-ghost{background:#fff;color:#344054;border-color:#cfd6df}
@@ -1724,10 +1374,12 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-message.is-error{background:#fff1f0;color:#a8071a;border:1px solid #ffa39e}
         .va-message.is-notice{background:#f0f7ff;color:#174ea6;border:1px solid #b7d6ff}
         .va-layout{display:grid;grid-template-columns:330px minmax(0,1fr);gap:16px;align-items:start}
-        .va-side,.va-main{display:flex;flex-direction:column;gap:16px}
-        .va-panel,.va-filters,.va-stats,.va-pi-detail,.va-table-wrap{background:#fff;border:1px solid #d8dee6;border-radius:8px}
+        .va-side,.va-main{display:flex;flex-direction:column;gap:16px;min-width:0}
+        .va-panel,.va-filters,.va-pi-detail,.va-table-wrap{background:#fff;border:1px solid #d8dee6;border-radius:8px}
         .va-panel{padding:14px}
         .va-panel-head,.va-table-head,.va-pi-title,.va-drawer-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+        .va-pi-title{flex-wrap:wrap}
+        .va-pi-title > div{min-width:0;overflow-wrap:anywhere}
         .va-panel-head h2,.va-pi-title h2,.va-drawer h2{font-size:15px;margin:0}
         .va-panel-head span,.va-table-head span,.va-pi-title span,.va-drawer-head span{color:#667085;font-size:12px}
         .va-form{display:grid;gap:10px;margin-top:12px}
@@ -1738,21 +1390,8 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-pi-list button.is-active{border-color:#1c69d4;background:#eef5ff}
         .va-pi-list small{color:#667085}
         .va-button-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
-        .va-side-tool-card{display:grid;gap:12px;margin-top:12px;padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc}
-        .va-side-tool-card p{margin:0;color:#64748b;font-size:12px;line-height:1.45}
-        .va-side-tool-actions{display:grid;grid-template-columns:1fr;gap:8px}
-        .va-side-tool-digest{display:inline-flex;align-items:center;width:max-content;border:1px solid #bfdbfe;border-radius:999px;background:#eff6ff;color:#1d4ed8;padding:4px 8px;font-size:11px;font-weight:800}
-        .va-import-preview{display:grid;gap:10px;margin-top:12px;border-top:1px solid #e5eaf0;padding-top:12px}
-        .va-preview-grid{display:grid;grid-template-columns:1fr auto;gap:6px;font-size:12px}
-        .va-preview-grid span{color:#667085}
-        .va-preview-error{font-size:12px;color:#a8071a}
-        .va-filters{display:grid;grid-template-columns:repeat(6,minmax(112px,1fr));gap:10px;padding:12px}
+        .va-filters{display:grid;grid-template-columns:repeat(2,minmax(112px,1fr));gap:10px;padding:12px}
         .va-check{display:flex;align-items:center;gap:6px;min-height:38px;font-size:12px;color:#475467}
-        .va-stats{display:grid;grid-template-columns:repeat(4,1fr)}
-        .va-stats div{padding:14px 16px;border-right:1px solid #e5eaf0}
-        .va-stats div:last-child{border-right:none}
-        .va-stats span{display:block;color:#667085;font-size:12px}
-        .va-stats strong{font-size:22px}
         .va-pi-detail{padding:14px}
         .va-pi-metrics{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
         .va-pi-metrics span{border:1px solid #d8dee6;border-radius:999px;padding:4px 8px;background:#f8fafc}
@@ -1761,29 +1400,22 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-bulk-head h3{font-size:14px;margin:0}
         .va-bulk-head span{font-size:12px;color:#667085}
         .va-bulk-panel textarea{min-height:90px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
-        .va-bulk-vin-entry{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid #dbe6f4;border-radius:8px;background:#f5f9ff}
-        .va-bulk-vin-entry div{display:grid;gap:3px}
-        .va-bulk-vin-entry strong{font-size:13px;color:#1e3a8a}
-        .va-bulk-vin-entry span{font-size:12px;color:#64748b}
-        .va-bulk-vin-entry button{background:#fff;color:#1c69d4;border-color:#bfdbfe;white-space:nowrap}
-        .va-bulk-fields{display:grid;grid-template-columns:repeat(7,minmax(112px,1fr));gap:8px}
+        .va-bulk-fields{display:grid;grid-template-columns:repeat(2,minmax(112px,1fr));gap:8px}
         .va-bulk-fields label,.va-bulk-fields .va-field{display:grid;gap:5px;font-size:12px;font-weight:700;color:#475467}
-        .va-line-form{display:grid;grid-template-columns:repeat(10,minmax(82px,1fr)) auto;gap:8px;margin-top:12px}
-        .va-line-list{display:grid;gap:6px;margin-top:12px}
+        .va-line-list{display:grid;gap:6px;margin-top:12px;max-height:45vh;overflow:auto}
         .va-line-row{display:flex;align-items:stretch;border:1px solid #e5eaf0;border-radius:6px;background:#fbfcfe;color:#111827;overflow:hidden}
         .va-line-row.is-active{border-color:#1c69d4;background:#eef5ff}
         .va-line-all{background:#fff}
-        .va-line-body{display:grid;grid-template-columns:170px minmax(0,1fr) minmax(150px,auto);gap:8px;align-items:center;flex:1;padding:8px;border:none;background:none;cursor:pointer;text-align:left;color:inherit;font:inherit}
+        .vehicle-allocation-page .va-line-body{display:grid;grid-template-columns:1fr;gap:8px;align-items:center;flex:1;padding:8px;border:none;background:#f8fafc;cursor:pointer;text-align:left;color:#344054;font:inherit}
         .va-line-body strong{font-size:12px}
-        .va-line-body span,.va-line-body small{font-size:12px;color:#667085;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-        .va-line-delete{display:flex;align-items:center;justify-content:center;width:32px;flex-shrink:0;border:none;border-left:1px solid #e5eaf0;background:#f9fafb;color:#d1d5db;cursor:pointer;font-size:14px;padding:0}
-        .va-line-delete:hover{background:#fef2f2;color:#ef4444;border-left-color:#fecaca}
+        .va-line-body span,.va-line-body small{font-size:12px;color:#667085;overflow-wrap:anywhere;white-space:normal}
+        .va-line-config{font-weight:600;filter:brightness(.72)}
         .va-table-wrap{overflow:hidden}
         .va-table-head{padding:10px 12px;border-bottom:1px solid #e5eaf0}
         .va-table-head div{display:flex;gap:8px;align-items:center}
         .va-table-head button{padding:6px 10px}
         .va-table-scroll{overflow:auto;max-height:620px}
-        .va-table{width:100%;border-collapse:collapse;min-width:1280px}
+        .va-table{width:100%;border-collapse:collapse}
         .va-table th{position:sticky;top:0;background:#f8fafc;color:#475467;text-align:left;font-size:12px;border-bottom:1px solid #d8dee6;padding:10px}
         .va-table td{border-bottom:1px solid #eef2f6;padding:10px;font-size:13px;white-space:nowrap}
         .va-table tbody tr{cursor:pointer}
@@ -1799,9 +1431,19 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-drawer-head button{background:#fff;color:#111827;border-color:#cfd6df}
         .va-drawer-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
         .va-drawer label,.va-drawer .va-field{display:grid;gap:5px;font-size:12px;font-weight:700;color:#475467}
-        .va-inline-command-select{width:112px}
         .va-drawer textarea{min-height:88px;resize:vertical}
         .va-wide{grid-column:1/-1}
+        .va-columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;border:1px solid #d8dee6;border-radius:8px;padding:12px}
+        .va-columns label{display:flex;align-items:center;gap:6px;font-size:12px}
+        .va-columns button{grid-column:1/-1}
+        .va-import-error{color:#b42318;background:#fff5f4;padding:10px;border-radius:6px;margin:8px 0;font-size:12px}
+        .va-import-error a{display:inline-block;margin:8px}
+        .vehicle-import-digest-panel .upload-digest-panel{box-shadow:none;padding:12px}
+        .vehicle-import-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+        .vehicle-import-digest-panel td{padding:8px;border-bottom:1px solid #e2e8f0;font-size:12px;overflow-wrap:anywhere}
+        .vehicle-import-digest-panel select{min-width:200px}
+        .va-selection-link,.va-scope-label{display:block;margin-top:10px;font-size:12px}
+        .va-selected-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
         .va-save{width:100%;margin-top:14px}
         .vehicle-allocation-tool-drawer{top:92px;width:min(520px,calc(100vw - 32px))}
         .vehicle-allocation-tool-panel{width:min(720px,calc(100vw - 32px));height:min(72vh,760px)}
@@ -1839,32 +1481,17 @@ export function OrderGeniusVehicleAllocationPage() {
         .vin-paste-preview-empty{padding:14px;color:#64748b;font-size:12px;text-align:center}
         .vin-paste-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;width:100%}
         .vin-paste-message{color:#0f766e;font-size:12px;font-weight:800}
-        .vehicle-import-digest-panel .upload-digest-panel{background:rgba(255,255,255,.86);border-color:rgba(203,213,225,.86);box-shadow:none}
-        .vehicle-import-digest-panel.is-compact .upload-digest-panel{padding:12px}
-        .vehicle-import-digest-panel.is-compact .upload-digest-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
-        .vehicle-import-digest-panel.is-compact .upload-digest-head p{display:none}
-        .vehicle-import-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;width:100%}
-        .vehicle-import-preview-table{display:grid;min-width:0;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden}
-        .vehicle-import-preview-head,.vehicle-import-preview-row{display:grid;grid-template-columns:54px 78px minmax(138px,1fr) minmax(152px,1.1fr) minmax(128px,1fr) minmax(160px,1.5fr);gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid #e2e8f0;font-size:12px}
-        .vehicle-import-preview-head{background:#f8fafc;color:#475467;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
-        .vehicle-import-preview-row strong{text-transform:uppercase;color:#1d4ed8}
-        .vehicle-import-preview-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-        .vehicle-import-preview-row.is-error{background:#fff7f7;color:#b91c1c}
-        .vehicle-import-preview-empty{padding:14px;color:#64748b;font-size:12px;text-align:center}
         @media (max-width:1100px){
-          .va-layout{grid-template-columns:1fr}
+          .va-layout{grid-template-columns:minmax(0,1fr)}
           .va-header{align-items:stretch;flex-direction:column}
           .va-search{min-width:0}
           .va-filters{grid-template-columns:repeat(2,minmax(0,1fr))}
-          .va-line-form,.va-bulk-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+          .va-bulk-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
           .va-line-row{grid-template-columns:1fr}
-          .va-stats{grid-template-columns:repeat(2,1fr)}
         }
         @media (max-width:640px){
           .vehicle-allocation-page{padding:14px}
-          .va-filters,.va-line-form,.va-bulk-fields,.va-drawer-grid{grid-template-columns:1fr}
-          .va-stats{grid-template-columns:1fr}
-          .va-stats div{border-right:none;border-bottom:1px solid #e5eaf0}
+          .va-filters,.va-bulk-fields,.va-drawer-grid{grid-template-columns:1fr}
           .va-drawer{top:0;width:100%}
         }
       `}</style>
