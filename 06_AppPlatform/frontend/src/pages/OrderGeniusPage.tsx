@@ -820,6 +820,7 @@ export function OrderGeniusPage() {
   const [orderingAccountCodeEdited, setOrderingAccountCodeEdited] = useState(false);
   const [creatingPiBatch, setCreatingPiBatch] = useState(false);
   const [piBatchNotice, setPiBatchNotice] = useState("");
+  const [piBatchError, setPiBatchError] = useState("");
   const [confirmHistoricalPi, setConfirmHistoricalPi] = useState(false);
   const [confirmUndatedHistoricalFob, setConfirmUndatedHistoricalFob] = useState(false);
   const [confirmHistoricalSurcharge, setConfirmHistoricalSurcharge] = useState(false);
@@ -1793,6 +1794,7 @@ export function OrderGeniusPage() {
     setPiBatchQuantities({});
     setOrderingAccountCodeEdited(false);
     setPiBatchNotice("");
+    setPiBatchError("");
     setPiBatchCreatedCodes([]);
   }, [selectedMonth, selectedYear, selectedCountries]);
 
@@ -2011,6 +2013,7 @@ export function OrderGeniusPage() {
       return next;
     });
     setPiBatchNotice("");
+    setPiBatchError("");
     setPiBatchCreatedCodes([]);
   }, [piReady, remainingPiQuantity, selectablePiRowsById]);
 
@@ -2020,6 +2023,7 @@ export function OrderGeniusPage() {
     const nextQuantity = Math.max(0, Math.min(Math.floor(quantity || 0), remainingQuantity));
     setPiBatchQuantities((current) => ({ ...current, [rowId]: nextQuantity }));
     setPiBatchNotice("");
+    setPiBatchError("");
     setPiBatchCreatedCodes([]);
   };
 
@@ -2029,6 +2033,7 @@ export function OrderGeniusPage() {
       setPiSelectedRowIds(new Set());
       setPiBatchQuantities({});
       setPiBatchNotice("");
+      setPiBatchError("");
       setPiBatchCreatedCodes([]);
       return;
     }
@@ -2042,6 +2047,7 @@ export function OrderGeniusPage() {
     setPiSelectedRowIds(nextIds);
     setPiBatchQuantities(nextQuantities);
     setPiBatchNotice("");
+    setPiBatchError("");
     setPiBatchCreatedCodes([]);
   }, [piReady, remainingPiQuantity, selectablePiRows, selectedMonth]);
 
@@ -2070,37 +2076,38 @@ export function OrderGeniusPage() {
     setPiBatchQuantities({});
     setOrderingAccountCodeEdited(false);
     setPiBatchNotice("");
+    setPiBatchError("");
     setPiBatchCreatedCodes([]);
   };
 
   const handleCreatePiBatch = async (): Promise<void> => {
     if (!piReady) {
-      setError(piReadinessText);
+      setPiBatchError(piReadinessText);
       return;
     }
     if (selectedMonth == null) {
-      setError("Select one month before creating PI");
+      setPiBatchError("Select one month before creating PI");
       return;
     }
     if (selectedPiRows.length === 0) {
-      setError("Select at least one order row");
+      setPiBatchError("Select at least one order row");
       return;
     }
     if (selectedHistoricalPiRows.length > 0) {
       if (!includeHistorical || !confirmHistoricalPi) {
-        setError("Confirm that this Historical PI backfill will not reactivate the material / 请确认历史补录不会重新启用物料");
+        setPiBatchError("Confirm that this Historical PI backfill will not reactivate the material / 请确认历史补录不会重新启用物料");
         return;
       }
       if (!piBatchForm.orderDate) {
-        setError("Historical PI backfill requires an order date inside the selected month / 历史补录必须选择订单月份内的具体日期");
+        setPiBatchError("Historical PI backfill requires an order date inside the selected month / 历史补录必须选择订单月份内的具体日期");
         return;
       }
       if (selectedHistoricalNeedsUndatedConfirmation && !confirmUndatedHistoricalFob) {
-        setError("Confirm the undated default FOB or create a dated price period / 请确认无日期基准价或先建立日期价格区间");
+        setPiBatchError("Confirm the undated default FOB or create a dated price period / 请确认无日期基准价或先建立日期价格区间");
         return;
       }
       if (selectedHistoricalNeedsSurchargeConfirmation && !confirmHistoricalSurcharge) {
-        setError("Review and confirm the Historical colour surcharge / 请核对并确认历史颜色加价");
+        setPiBatchError("Review and confirm the Historical colour surcharge / 请核对并确认历史颜色加价");
         return;
       }
     }
@@ -2113,19 +2120,19 @@ export function OrderGeniusPage() {
       const requestedQuantity = Math.floor(piBatchQuantities[rowId] ?? remainingQuantity);
       if (requestedQuantity <= 0) continue;
       if (requestedQuantity > remainingQuantity) {
-        setError(`PI quantity exceeds remaining quantity: ${row.materialCode} (remaining ${remainingQuantity})`);
+        setPiBatchError(`PI quantity exceeds remaining quantity: ${row.materialCode} (remaining ${remainingQuantity})`);
         return;
       }
       const countryCode = row._countryCode || primaryCountry;
       const historicalOverrideText = historicalFobOverrides[rowId]?.trim() ?? "";
       const historicalOverride = historicalOverrideText === "" ? undefined : Number(historicalOverrideText);
-      const historicalReason = cleanText(historicalPriceReasons[rowId]);
+      const historicalReason = cleanText(historicalPriceReasons[rowId] ?? "");
       if (historicalOverride !== undefined && (!Number.isFinite(historicalOverride) || historicalOverride < 0)) {
-        setError(`Historical FOB override must be zero or greater: ${row.materialCode}`);
+        setPiBatchError(`Historical FOB override must be zero or greater: ${row.materialCode}`);
         return;
       }
       if (historicalOverride !== undefined && !historicalReason) {
-        setError(`Historical FOB override requires a reason: ${row.materialCode}`);
+        setPiBatchError(`Historical FOB override requires a reason: ${row.materialCode}`);
         return;
       }
       const items = byCountry.get(countryCode) ?? new Map<string, PiBatchLineItem>();
@@ -2178,7 +2185,7 @@ export function OrderGeniusPage() {
     }
 
     if (byCountry.size === 0) {
-      setError("Selected PI quantity must be greater than 0");
+      setPiBatchError("Selected PI quantity must be greater than 0");
       return;
     }
     if (piBatchMode === "by_account") {
@@ -2186,13 +2193,13 @@ export function OrderGeniusPage() {
         piBatchForm.orderingAccountCode || suggestedOrderingAccountCode(selectedPiCountries),
       );
       if (accountCode.length < 2) {
-        setError("Ordering account code must be at least 2 letters or numbers");
+        setPiBatchError("Ordering account code must be at least 2 letters or numbers");
         return;
       }
     }
 
     setCreatingPiBatch(true);
-    setError("");
+    setPiBatchError("");
     setPiBatchNotice("");
     setPiBatchCreatedCodes([]);
     try {
@@ -2255,7 +2262,7 @@ export function OrderGeniusPage() {
       setPiBatchCreatedCodes(createdCodes);
       setPiBatchRefreshKey((key) => key + 1);
     } catch (err: unknown) {
-      setError(`PI batch failed: ${getErrorMessage(err)}`);
+      setPiBatchError(`PI creation failed / PI 创建失败: ${getErrorMessage(err)}`);
       setPiBatchRefreshKey((key) => key + 1);
     } finally {
       setCreatingPiBatch(false);
@@ -3094,7 +3101,7 @@ export function OrderGeniusPage() {
               onClick={() => void handleCreatePiBatch()}
               title={piBatchMode === "by_account" ? "Create one PI for the ordering account and keep country allocations on each line" : "Create one PI per selected country"}
             >
-              {creatingPiBatch ? "Creating..." : "Create PI"}
+              {creatingPiBatch ? "Creating…" : "Create PI"}
             </button>
             <button
               type="button"
@@ -3105,8 +3112,11 @@ export function OrderGeniusPage() {
               Clear
             </button>
           </div>
+          {piBatchError ? (
+            <div role="alert" className="alert alert-error">{piBatchError}</div>
+          ) : null}
           {piBatchNotice ? (
-            <div className="og-pi-batch-notice">
+            <div role="status" className="og-pi-batch-notice">
               <span>{piBatchNotice}</span>
               {piBatchCreatedCodes.length > 0 ? (
                 <span className="og-pi-batch-links">
