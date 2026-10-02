@@ -161,6 +161,7 @@ def test_create_material_sku_canonicalizes_jaecoo_and_creates_manual_baseline(
             "materialCode": "T7000Z5BWMY0026",
             "brand": "JEACOO",
             "modelName": "JEACOO5 HEV",
+            "powertrain": "HEV",
             "version": "Exclusive-FWD",
                 "colour": "Khaki white",
                 "colourCode": "bw",
@@ -203,6 +204,7 @@ def test_create_material_sku_rejects_duplicate_material_code(monkeypatch) -> Non
                 "materialCode": "T7000Z5BWMY0026",
                 "brand": "JAECOO",
                 "modelName": "JAECOO5 HEV",
+                "powertrain": "HEV",
                 "version": "Exclusive-FWD",
                 "colour": "Khaki white",
                 "colourCode": "BW",
@@ -241,6 +243,7 @@ def test_create_material_sku_initializes_automatic_fobs_from_source(monkeypatch)
             "materialCode": "T7000UEMY0001",
             "brand": "OMODA",
             "modelName": "OMODA7",
+            "powertrain": "PHEV",
             "version": "Premium-FWD",
             "colour": "Matte silver",
             "colourCode": "UE",
@@ -553,6 +556,7 @@ def test_create_material_sku_resolves_known_unknown_and_conflict_rules(
         "materialCode": f"NEW-{scenario}",
         "brand": "OMODA",
         "modelName": "OMODA5",
+        "powertrain": "BEV",
         "version": "Premium",
         "colour": supplied_name,
         "colourCode": code,
@@ -626,10 +630,12 @@ def _legacy_jaecoo_sku() -> SimpleNamespace:
     )
 
 
-def test_build_matrix_normalizes_legacy_jaecoo_and_model_powertrain(monkeypatch) -> None:
+def test_build_matrix_normalizes_legacy_jaecoo_and_saved_powertrain(monkeypatch) -> None:
     sku = _legacy_jaecoo_sku()
+    sku.powertrain = "HEV"
     sku.colour_hex = "#F0ECE0"
     historical = _legacy_jaecoo_sku()
+    historical.powertrain = "HEV"
     historical.material_code = "T7000Z5ZEMY0025"
     historical.exterior_color_code = "ZE"
     historical.colour_tier = "dual"
@@ -851,6 +857,7 @@ def test_list_bom_with_fob_backfills_interior_and_effective_colour_tier(monkeypa
 
 def test_build_options_normalizes_legacy_jaecoo_filter_values(monkeypatch) -> None:
     sku = _legacy_jaecoo_sku()
+    sku.powertrain = "HEV"
 
     monkeypatch.setattr(
         order_genius_service.repo,
@@ -880,6 +887,34 @@ def test_build_options_normalizes_legacy_jaecoo_filter_values(monkeypatch) -> No
     assert result["powertrains"] == ["HEV"]
     assert result["versions"] == ["Exclusive-FWD"]
     assert result["materialCodes"] == ["T7000Z5**MY0026"]
+    sku.powertrain = None
+    assert order_genius_service.build_options(_FakeSession(), "SK")["powertrains"] == []
+
+
+@pytest.mark.parametrize("model_name", ["OMODA5 HEV", "OMODA5 BEV", "JAECOO8 SHS"])
+@pytest.mark.parametrize("saved,expected", [
+    ("ICE", "ICE"), ("BEV", "BEV"), ("HEV", "HEV"), ("PHEV", "PHEV"),
+    ("MHEV", "MHEV"), ("REEV", "REEV"), ("FCV", "FCV"), ("EV", "BEV"),
+    ("SHS", "PHEV"), ("Other", "OTHER"), (None, ""), ("", ""),
+])
+def test_powertrain_uses_only_saved_field(model_name, saved, expected) -> None:
+    sku = SimpleNamespace(model_name=model_name, powertrain=saved)
+    assert repo._extract_canonical_powertrain(sku) == expected
+    assert order_genius_service._extract_canonical_pt(sku) == expected
+    assert sku.powertrain == saved
+
+
+def test_create_material_requires_explicit_powertrain() -> None:
+    session = _CreateMaterialSession()
+    with pytest.raises(HTTPException) as error:
+        order_genius_routes.create_material_sku(
+            {"modelName": "OMODA5 HEV", "colourTier": "single"},
+            session=session,
+            user=SimpleNamespace(name="test"),
+        )
+    assert error.value.status_code == 400
+    assert "powertrain" in error.value.detail
+    assert session.added == []
 
 
 def test_list_bom_with_fob_empty_keeps_tuple_shape(monkeypatch) -> None:

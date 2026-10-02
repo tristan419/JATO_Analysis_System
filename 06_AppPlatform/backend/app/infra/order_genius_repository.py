@@ -155,29 +155,11 @@ COUNTRY_MATERIAL_FINANCE_VALUE_FIELDS = (
 
 
 def _extract_canonical_powertrain(sku: MaterialSkuMaster) -> str:
-    """An explicitly saved powertrain wins; names only describe legacy missing values."""
+    """Normalize only the saved field; a name must never supply a powertrain."""
     raw_pt = clean_text(sku.powertrain).upper()
-    if raw_pt in {"ICE", "BEV", "EV", "HEV", "PHEV", "MHEV", "REEV", "FCEV"}:
-        return "BEV" if raw_pt == "EV" else raw_pt
-    model = clean_text(sku.model_name).upper()
-    combined = f"{model} {raw_pt}"
-    if "PHEV" in combined or "SHS" in combined or "PLUG" in combined:
-        return "PHEV"
-    if "MHEV" in combined or "MILD HYBRID" in combined:
-        return "MHEV"
-    if "REEV" in combined or "EREV" in combined or "RANGE EXTEND" in combined:
-        return "REEV"
-    if "FCEV" in combined or "FCV" in combined or "FUEL CELL" in combined:
-        return "FCV"
-    if "HEV" in combined or "HYBRID ELECTRIC" in combined:
-        return "HEV"
-    if "BEV" in combined or "BATTERY ELECTRIC" in combined:
-        return "BEV"
-    if "EV" in combined or "ELECTRIC" in combined:
-        return "BEV"
-    if "ICE" in combined or "PETROL" in combined or "DIESEL" in combined or "LPG" in combined:
-        return "ICE"
-    return normalize_powertrain(raw_pt) if raw_pt else "OTHER"
+    if raw_pt in {"ICE", "BEV", "HEV", "PHEV", "MHEV", "REEV", "FCV", "OTHER"}:
+        return raw_pt
+    return normalize_powertrain(raw_pt) if raw_pt else ""
 
 
 def resolve_effective_colour_tier(sku: object) -> str | None:

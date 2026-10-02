@@ -115,6 +115,24 @@ def test_product_save_is_atomic_and_returns_saved_powertrain(db):
     assert len(db.scalars(select(models.MaterialSkuRemarkHistory)).all()) == 2
 
 
+@pytest.mark.parametrize("saved,expected", [("HEV", "HEV"), ("Other", "OTHER"), (None, "")])
+def test_powertrain_survives_name_template_and_lifecycle_edits(db, saved, expected):
+    original = sku(db, "ORIGINAL", "single", template="T**0008", model="OMODA5 HEV")
+    original.powertrain = saved
+    fob(db, original.material_code, 1000, base=1000)
+    db.commit()
+    # The same metadata path is used when editing an upgraded template.
+    repo.update_sku_metadata(db, [original.material_code], model_name="OMODA5 BEV", version="Upgraded")
+    original.bom_template = "T**0011"
+    original.lifecycle_status = "historical"
+    db.commit()
+    db.expire_all()
+    rows, _ = repo.list_bom_with_fob(db)
+    assert rows[0]["powertrain"] == expected
+    assert original.powertrain == saved
+    assert repo.get_sku_by_material_code(db, original.material_code).powertrain == saved
+
+
 @pytest.mark.parametrize("source_tier", ["single", "dual", "special"])
 @pytest.mark.parametrize("target_tier", ["single", "dual", "special"])
 @pytest.mark.parametrize("brand,amount", [("OMODA", 200), ("JAECOO", 300)])

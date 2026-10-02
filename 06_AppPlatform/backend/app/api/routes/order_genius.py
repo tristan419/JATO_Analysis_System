@@ -1784,7 +1784,9 @@ def create_material_sku(
     colour = clean_text(body.get("colour"))
     colour_code = clean_text(body.get("colourCode")).upper()
     colour_type = clean_text(body.get("colourType")) or "single"
-    powertrain = clean_text(body.get("powertrain")) or "Other"
+    powertrain = clean_text(body.get("powertrain"))
+    if not powertrain:
+        raise HTTPException(status_code=400, detail="Choose a powertrain / 请选择动力类型")
     bom_template = clean_text(body.get("bomTemplate")).upper() or material_code
     source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
     source_material_code = clean_text(body.get("sourceMaterialCode")).upper()

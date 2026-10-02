@@ -521,7 +521,7 @@ const EMPTY_ADD_MATERIAL: AddMaterialFormState = {
   colour: "",
   colourCode: "",
   colourBatch: "",
-  powertrain: "ICE",
+  powertrain: "",
 };
 
 function splitColourBatchLines(value: string): string[] {
@@ -587,6 +587,7 @@ function buildMaterialDrafts(form: AddMaterialFormState): {
     ["Brand", form.brand],
     ["Model", form.modelName],
     ["Version", form.version],
+    ["Powertrain", form.powertrain],
   ].filter(([, value]) => !String(value).trim()).map(([label]) => label);
   if (baseMissing.length > 0) {
     return { drafts: [], errors: [`Missing: ${baseMissing.join(", ")}`], isBatch: false };
@@ -606,7 +607,7 @@ function buildMaterialDrafts(form: AddMaterialFormState): {
       colour: colour.colour,
       colourCode: colour.colourCode,
       colourHex: colour.colourHex,
-      powertrain: form.powertrain.trim() || "ICE",
+      powertrain: form.powertrain.trim(),
     }));
     return { drafts, errors, isBatch: true };
   }
@@ -631,7 +632,7 @@ function buildMaterialDrafts(form: AddMaterialFormState): {
       colour: form.colour.trim(),
       colourCode,
       colourHex: null,
-      powertrain: form.powertrain.trim() || "ICE",
+      powertrain: form.powertrain.trim(),
     }],
     errors: [],
     isBatch: false,
@@ -1115,9 +1116,9 @@ export function OrderGeniusPage() {
       return row;
     };
 
-    // The saved product field is authoritative; names only fill legacy missing values.
+    // Only the saved product field supplies the group and its colour.
     const canonPt = (row: MatrixRowWithCountry): string => {
-      return getBomAdminPowertrainGroup(row.modelName, row.powertrain);
+      return getBomAdminPowertrainGroup(row.powertrain);
     };
 
     if (!groupByProduct) {
@@ -3593,21 +3594,17 @@ type BomAdminModelGroup = {
   versions: Map<string, any[]>;
 };
 
-function getBomAdminPowertrainGroup(modelName: unknown, powertrain?: unknown): string {
+function getBomAdminPowertrainGroup(powertrain: unknown): string {
   const saved = String(powertrain || "").trim().toUpperCase();
   if (saved === "EV") return "BEV";
-  if (["ICE", "BEV", "HEV", "PHEV", "MHEV", "REEV", "FCEV"].includes(saved)) return saved;
-  const normalized = String(modelName || "").toUpperCase();
-  if (normalized.includes("SHS") || normalized.includes("PHEV")) return "PHEV";
-  if (normalized.includes("MHEV")) return "MHEV";
-  if (normalized.includes("HEV")) return "HEV";
-  if (normalized.includes("BEV") || normalized.includes(" EV")) return "BEV";
-  if (normalized.includes("ICE")) return "ICE";
-  return "Other";
+  if (saved === "SHS") return "PHEV";
+  if (saved === "FCEV") return "FCV";
+  if (saved === "OTHER") return "Other";
+  return saved || "Needs confirmation";
 }
 
 function getBomAdminModelGroupKey(brand: unknown, modelName: unknown, powertrain?: unknown): string {
-  return `${String(brand || "")}|${String(modelName || "")}|${getBomAdminPowertrainGroup(modelName, powertrain)}`;
+  return `${String(brand || "")}|${String(modelName || "")}|${getBomAdminPowertrainGroup(powertrain)}`;
 }
 
 function getBomTemplateSearchText(bomTemplate: string): string {
@@ -5432,6 +5429,12 @@ export function BomAdminPanel({
     sourceDisplayLabel?: string,
     selectedCountryCodes?: string[],
   ) => {
+    if (!String(ref.powertrain || "").trim()) {
+      setProductSaveMessages((current) => ({ ...current, [draftKey]: {
+        kind: "error", text: "Choose and save the source template powertrain before copying / 请先确认并保存源模板动力类型",
+      } }));
+      return;
+    }
     const initialTemplate = String(
       bomTemplate || deriveMaterialTemplate(allSkus.map((sku: any) => String(sku.materialCode || "")).filter(Boolean)) || ref.materialCode || "",
     ).trim().toUpperCase();
@@ -5455,7 +5458,7 @@ export function BomAdminPanel({
       brand: String(ref.brand || ""),
       modelName,
       version: String(ref.version || ""),
-      powertrain: String(ref.powertrain || "ICE"),
+      powertrain: String(ref.powertrain),
       interiorColorName: String(ref.interiorColorName || ""),
       editionTag: ref.editionTag ? String(ref.editionTag) : null,
       lifecycleStatus: String(ref.lifecycleStatus || "active"),
@@ -5506,6 +5509,10 @@ export function BomAdminPanel({
   const handleSaveCopiedBom = async (draftKey: string) => {
     const draft = copyDrafts[draftKey];
     if (!draft) return;
+    if (!draft.powertrain.trim()) {
+      setCopyDraftErrors((prev) => ({ ...prev, [draftKey]: "Choose a powertrain before saving / 请先选择动力类型" }));
+      return;
+    }
     const normalizedTemplate = draft.bomTemplate.trim().toUpperCase();
     if (!normalizedTemplate) {
       setCopyDraftErrors((prev) => ({ ...prev, [draftKey]: "BOM template is required." }));
@@ -5561,7 +5568,7 @@ export function BomAdminPanel({
           colourCode: sku.colourCode,
           colourType: sku.colourType || effectiveColourTier || "single",
           colourTier: effectiveColourTier,
-          powertrain: draft.powertrain || "ICE",
+          powertrain: draft.powertrain,
           sourceBomTemplate: draft.sourceBomTemplate,
           lifecycleStatus: draft.lifecycleStatus || "active",
           effectiveFrom: draft.effectiveFrom,
@@ -5604,7 +5611,7 @@ export function BomAdminPanel({
           colourType: sku.colourType || "single",
           colourTier: effectiveColourTier,
           colourHex: sku.colourHex,
-          powertrain: draft.powertrain || "ICE",
+          powertrain: draft.powertrain,
           interiorColorName: draft.interiorColorName || null,
           editionTag: draft.editionTag,
           lifecycleStatus: draft.lifecycleStatus || "active",
@@ -5950,6 +5957,13 @@ export function BomAdminPanel({
     tierSkus: any[],
     allSkus: any[],
   ) => {
+    if (!String(ref?.powertrain || "").trim()) {
+      const saveKey = buildBomEditScopeKey(getBomAdminModelGroupKey(ref.brand, ref.modelName, ref.powertrain), ref.version || "Default", bomTemplate);
+      setProductSaveMessages((current) => ({ ...current, [saveKey]: {
+        kind: "error", text: "Choose and save the source template powertrain before adding a colour / 请先确认并保存源模板动力类型",
+      } }));
+      return;
+    }
     const fobSourceSku = pickFobSourceSkuForNewColour(tierSkus, allSkus);
     const fobSourceCountries = Object.values((fobSourceSku?.fobByCountry as Record<string, BomDraftFobEntry>) || {})
       .filter((fob) => getDraftBaseFob(fob) != null)
@@ -5965,7 +5979,7 @@ export function BomAdminPanel({
       brand: String(ref?.brand || ""),
       modelName: String(ref?.modelName || ""),
       version: String(ref?.version || ""),
-      powertrain: String(ref?.powertrain || "ICE"),
+      powertrain: String(ref?.powertrain || ""),
       interiorColorName: String(ref?.interiorColorName || ""),
       editionTag: ref?.editionTag ? String(ref.editionTag) : null,
       fobSourceSku,
@@ -6525,7 +6539,7 @@ export function BomAdminPanel({
   const modelGroups = useMemo(() => {
     const map = new Map<string, BomAdminModelGroup>();
     for (const s of skus) {
-      const pt = getBomAdminPowertrainGroup(s.modelName, s.powertrain);
+      const pt = getBomAdminPowertrainGroup(s.powertrain);
       const mk = getBomAdminModelGroupKey(s.brand, s.modelName, s.powertrain);
       if (!map.has(mk)) map.set(mk, { brand: s.brand, modelName: s.modelName, pt, versions: new Map() });
       const vk = s.version || 'Default';
@@ -7685,6 +7699,7 @@ export function BomAdminPanel({
 	          <CommandSelect
 	            value={newMaterial.powertrain}
 	            options={POWERTRAIN_COMMAND_OPTIONS}
+	            placeholder="Choose powertrain"
 	            searchPlaceholder="Search powertrain..."
 	            className="bom-add-powertrain-select"
 	            onValueChange={(powertrain) => setNewMaterial({...newMaterial, powertrain})}
@@ -8481,8 +8496,9 @@ export function BomAdminPanel({
                                           />
                                           <CommandSelect
                                             name="powertrain"
-                                            defaultValue={(ref as any).powertrain || mg.pt || "ICE"}
+                                            defaultValue={ref.powertrain ? getBomAdminPowertrainGroup(ref.powertrain) : ""}
                                             options={POWERTRAIN_COMMAND_OPTIONS}
+                                            placeholder="Needs confirmation"
                                             searchPlaceholder="Search powertrain..."
                                             className="bom-edit-powertrain-select"
                                           />
