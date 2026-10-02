@@ -10,12 +10,14 @@ import sqlite3
 import shutil
 import subprocess
 import threading
+import tempfile
 import uuid
 import zipfile
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from fastapi import HTTPException, UploadFile
 from upload_toolkit.file_utils import allowed_extension
@@ -308,13 +310,131 @@ def read_excel_rows(excel_path: Path) -> list[dict[str, str]]:
 
 # ── Archive → file set ─────────────────────────────────────────────
 
+class CocArchiveMember(TypedDict):
+    memberPath: list[str]
+    stem: str
+
+
+def _is_archive_sidecar(member_name: str) -> bool:
+    parts = member_name.replace("\\", "/").split("/")
+    return any(part == "__MACOSX" or part.startswith("._") for part in parts)
+
+
+def _rar_member_listing(archive_path: Path, tool: str) -> list[tuple[str, int]]:
+    try:
+        result = subprocess.run(
+            [tool, "l", "-slt", "-ba", str(archive_path)],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("RAR tool failed/timed out: retry / RAR 工具失败或超时，请重试") from exc
+    if result.returncode != 0:
+        raise ValueError("Cannot read RAR: check corruption/password / 无法读取 RAR，请检查损坏或密码")
+    members: list[tuple[str, int]] = []
+    for block in result.stdout.replace("\r\n", "\n").split("\n\n"):
+        fields = dict(line.split(" = ", 1) for line in block.splitlines() if " = " in line)
+        name = fields.get("Path")
+        if not name or fields.get("Folder") == "+" or fields.get("Attributes", "").startswith("D"):
+            continue
+        try:
+            size = int(fields["Size"])
+        except (KeyError, ValueError):
+            raise ValueError("Unreadable RAR member size / 无法读取 RAR 文件大小，请重新打包") from None
+        members.append((name, size))
+    return members
+
+
+def list_archive_members(
+    archive_path: Path,
+    extensions: list[str] | None = None,
+    *,
+    max_depth: int = 4,
+    max_members: int = 20_000,
+    max_nested_bytes: int = 512 * 1024 * 1024,
+) -> list[CocArchiveMember]:
+    """Keep each matching member's archive path chain; never read PDF contents.
+
+    Directory depth is unrestricted. max_depth counts embedded archives only.
+    Only embedded archives are materialized, inside an automatically cleaned temp.
+    """
+    extensions = extensions if extensions is not None else [".pdf"]
+    if max_depth < 0 or max_members < 1 or max_nested_bytes < 0:
+        raise ValueError("Invalid archive scan limits / 压缩包扫描限额无效")
+    members: list[CocArchiveMember] = []
+    seen_members = 0
+    nested_bytes = 0
+    rar_tool = shutil.which("7z") or shutil.which("7zz")
+
+    with tempfile.TemporaryDirectory(prefix="jato-coc-archive-") as temporary:
+        def scan(path: Path, chain: list[str], depth: int) -> None:
+            nonlocal seen_members, nested_bytes
+
+            def handle(name: str, size: int, read_child: Callable[[], bytes]) -> None:
+                nonlocal seen_members, nested_bytes
+                seen_members += 1
+                if seen_members > max_members:
+                    raise ValueError("Archive scan limit reached: split the upload / 压缩包文件数超限，请拆分上传")
+                if _is_archive_sidecar(name) or name.endswith("/"):
+                    return
+                member_chain = [*chain, name.replace("\\", "/")]
+                suffix = Path(name).suffix.lower()
+                if suffix in ALLOWED_ARCHIVE_EXTENSIONS:
+                    if depth >= max_depth:
+                        raise ValueError("Nested archive depth exceeded: unpack one level / 子压缩包嵌套超限，请先展开一层")
+                    if size < 0 or nested_bytes + size > max_nested_bytes:
+                        raise ValueError("Nested archives too large: split the upload / 子压缩包大小超限，请拆分上传")
+                    data = read_child()
+                    if len(data) != size:
+                        raise ValueError("Incomplete nested archive: upload again / 子压缩包读取不完整，请重新上传")
+                    nested_bytes += size
+                    child = Path(temporary) / f"{seen_members}{suffix}"
+                    child.write_bytes(data)
+                    try:
+                        scan(child, member_chain, depth + 1)
+                    finally:
+                        child.unlink(missing_ok=True)
+                else:
+                    stem = _archive_member_stem(name, extensions)
+                    if stem:
+                        members.append({"memberPath": member_chain, "stem": stem})
+
+            if path.suffix.lower() == ".zip":
+                try:
+                    with zipfile.ZipFile(path) as archive:
+                        for info in archive.infolist():
+                            handle(info.filename, info.file_size, lambda info=info: archive.read(info))
+                except (zipfile.BadZipFile, RuntimeError) as exc:
+                    raise ValueError("Cannot read ZIP: check corruption/password / 无法读取 ZIP，请检查损坏或密码") from exc
+            elif path.suffix.lower() == ".rar":
+                if not rar_tool:
+                    raise ValueError("RAR extraction unavailable: upload ZIP instead / RAR 解包不可用，请改传 ZIP")
+                for name, size in _rar_member_listing(path, rar_tool):
+                    def read_child(name: str = name) -> bytes:
+                        try:
+                            result = subprocess.run(
+                                [rar_tool, "x", "-so", "-y", "-spd", str(path), "--", name],
+                                capture_output=True, stdin=subprocess.DEVNULL, timeout=60,
+                            )
+                        except (OSError, subprocess.TimeoutExpired) as exc:
+                            raise ValueError("RAR extraction failed/timed out: retry / RAR 子包读取失败或超时，请重试") from exc
+                        if result.returncode != 0:
+                            raise ValueError("Cannot extract nested RAR member / 无法读取 RAR 子包，请重新打包")
+                        return result.stdout
+                    handle(name, size, read_child)
+            else:
+                raise ValueError("Unsupported archive: use ZIP/RAR / 压缩包格式不支持，请使用 ZIP/RAR")
+
+        scan(archive_path, [], 0)
+    return members
+
+
 def list_archive_files(
     archive_path: Path,
     extensions: list[str] | None = None,
 ) -> set[str]:
     """List files in RAR or ZIP archive. Returns set of basenames without extension.
 
-    Auto-detects archive type by file extension.
+    Auto-detects archive type and includes embedded ZIP/RAR members.
     """
     if extensions is None:
         extensions = [".pdf"]
@@ -328,18 +448,22 @@ def list_archive_files(
 
 
 def _list_rar_files(rar_path: Path, extensions: list[str]) -> set[str]:
+    if shutil.which("7z") or shutil.which("7zz"):
+        return {member["stem"] for member in list_archive_members(rar_path, extensions)}
     for command in (
         ["lsar", str(rar_path)],
         ["bsdtar", "-tf", str(rar_path)],
         ["unar", "-l", str(rar_path)],
         ["unrar", "lb", str(rar_path)],
-        ["7z", "l", "-ba", str(rar_path)],
-        ["7zz", "l", "-ba", str(rar_path)],
     ):
         listed = _list_archive_files_with_command(command, extensions)
         if listed is not None:
+            if _list_archive_files_with_command(command, list(ALLOWED_ARCHIVE_EXTENSIONS)):
+                raise ValueError("Nested RAR needs 7z: upload unpacked ZIP / RAR 内含子包但解包不可用，请展开后改传 ZIP")
             return listed
 
+    if _list_rar_files_python(rar_path, list(ALLOWED_ARCHIVE_EXTENSIONS)):
+        raise ValueError("Nested RAR needs 7z: upload unpacked ZIP / RAR 内含子包但解包不可用，请展开后改传 ZIP")
     listed = _list_rar_files_python(rar_path, extensions)
     if listed:
         return listed
@@ -377,19 +501,13 @@ def _list_archive_files_with_command(
 
 
 def _list_zip_files(zip_path: Path, extensions: list[str]) -> set[str]:
-    names: set[str] = set()
-    with zipfile.ZipFile(zip_path) as zf:
-        for member in zf.namelist():
-            stem = _archive_member_stem(member, extensions)
-            if stem:
-                names.add(stem)
-    return names
+    return {member["stem"] for member in list_archive_members(zip_path, extensions)}
 
 
 def _archive_member_stem(member_name: str, extensions: list[str]) -> str | None:
     """Return archive member basename without suffix when it matches extensions."""
     normalized = member_name.strip().replace("\\", "/")
-    if not normalized or normalized.endswith("/"):
+    if not normalized or normalized.endswith("/") or _is_archive_sidecar(normalized):
         return None
     lower = normalized.lower()
     matched_ext = next((ext for ext in extensions if lower.endswith(ext.lower())), None)
