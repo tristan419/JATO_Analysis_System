@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from calendar import monthrange
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import HTTPException
@@ -595,6 +595,8 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
         vehicles = [v for v in vehicles if v.car_code in code_set]
 
     field_payload = _bulk_field_payload(payload.get("fields"))
+    if {"freightEur", "insuranceEur"} & field_payload.keys() and not car_codes:
+        raise HTTPException(400, "Select vehicle rows before updating costs / 更新运保费前请明确勾选车辆")
     vin_list = _bulk_vin_list(payload.get("vinList") or payload.get("vins"))
     if not field_payload and not vin_list:
         raise HTTPException(status_code=400, detail="No VINs or bulk fields provided")
@@ -876,9 +878,23 @@ def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_c
             "removedUnits": preview.get("removedUnits", 0), "skippedUnits": preview["skippedUnits"], "warnings": []}
 
 
-def export_vehicle_units(session: Session, **filters):
-    vehicles = list_vehicle_units(session, **filters)["items"]
-    return generate_vehicle_allocation_excel(vehicles)
+def export_vehicle_units(session: Session, *, columns: list[str] | None = None, car_codes: list[str] | None = None, **filters):
+    result = list_vehicle_units(session, **filters)
+    if result["total"] > len(result["items"]):
+        raise HTTPException(400, "Export too large: narrow the view / 导出范围过大，请缩小筛选")
+    vehicles = result["items"]
+    if car_codes is not None:
+        codes = set(car_codes)
+        vehicles = [vehicle for vehicle in vehicles if vehicle["carCode"] in codes]
+    if columns and "cocPdf" in columns:
+        from app.services.coc_library_service import lookup_vins
+        available = lookup_vins([vehicle["vin"] for vehicle in vehicles if vehicle["vin"]])
+        for vehicle in vehicles:
+            vehicle["cocPdf"] = "Awaiting VIN / 待录 VIN" if not vehicle["vin"] else "Available / 有 PDF" if vehicle["vin"] in available else "Missing / 缺 PDF"
+    try:
+        return generate_vehicle_allocation_excel(vehicles, columns)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def header_to_dict(header: PiOrderHeader) -> dict:
@@ -986,6 +1002,8 @@ def vehicle_to_dict(
         "carCode": vehicle.car_code,
         "vin": vehicle.vin,
         "fobEur": prices[key],
+        "freightEur": _float(vehicle.freight_eur),
+        "insuranceEur": _float(vehicle.insurance_eur),
         "materialCode": vehicle.material_code,
         "bom": vehicle.bom,
         "brand": vehicle.brand,
@@ -1517,6 +1535,17 @@ def _sync_default_line_allocation(session: Session, header: PiOrderHeader, line:
 
 
 def _apply_vehicle_updates(session: Session, vehicle: PiVehicleUnit, payload: dict[str, Any], username: str) -> None:
+    costs = {}
+    for attr, key in (("freight_eur", "freightEur"), ("insurance_eur", "insuranceEur")):
+        if key in payload:
+            raw = payload[key]
+            try:
+                amount = None if raw in (None, "") else Decimal(str(raw))
+                if amount is not None and (not amount.is_finite() or amount < 0 or amount >= 10**12 or amount != amount.quantize(Decimal("0.01"))):
+                    raise InvalidOperation
+            except (InvalidOperation, ValueError):
+                raise HTTPException(400, "Use non-negative EUR amounts with up to 2 decimals / EUR金额须非负且最多两位小数") from None
+            costs[attr] = amount
     vin = _clean(payload.get("vin")) if "vin" in payload else vehicle.vin
     if vin and vin != vehicle.vin:
         existing = repo.get_vehicle_by_vin(session, vin)
@@ -1549,6 +1578,8 @@ def _apply_vehicle_updates(session: Session, vehicle: PiVehicleUnit, payload: di
         vehicle.logistics_status = _status(payload.get("logisticsStatus"), LOGISTICS_STATUSES, vehicle.logistics_status)
     _validate_dates(vehicle.etd, vehicle.eta, vehicle.ready_for_pickup_date, errors=True)
     vehicle.updated_by = username
+    for attr, amount in costs.items():
+        setattr(vehicle, attr, amount)
     if vehicle.vehicle_unit_id is None:
         vehicle.row_version = vehicle.row_version or 1
     else:
@@ -1572,6 +1603,8 @@ def _bulk_field_payload(raw_fields: Any) -> dict[str, Any]:
         "allocationStatus",
         "logisticsStatus",
         "remark",
+        "freightEur",
+        "insuranceEur",
     }
     return {key: raw_fields.get(key) for key in allowed_fields if key in raw_fields}
 

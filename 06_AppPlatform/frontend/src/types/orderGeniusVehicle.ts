@@ -73,6 +73,12 @@ export interface PiOrderHeader {
   updatedAtUtc: string | null;
 }
 
+export interface PiMonthSummary {
+  month: string;
+  piCount: number;
+  vehicleCount: number;
+}
+
 export interface PiOrderLine {
   piLineId: string;
   piCode: string;
@@ -110,6 +116,8 @@ export interface PiLineAllocation {
 
 export interface PiVehicleUnit {
   fobEur: number | null;
+  freightEur: number | null;
+  insuranceEur: number | null;
   vehicleUnitId: string;
   piCode: string;
   officialPiNo: string | null;
@@ -350,6 +358,8 @@ export interface VehicleVinListExtract {
 }
 
 export interface UpdateVehiclePayload {
+  freightEur?: number | null;
+  insuranceEur?: number | null;
   vin?: string | null;
   productionDate?: string | null;
   etd?: string | null;

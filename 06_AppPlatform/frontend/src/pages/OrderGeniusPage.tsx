@@ -2749,6 +2749,9 @@ export function OrderGeniusPage() {
         {!isAdmin ? (
           <div className="order-genius-muted-note">Admin tools are available to admin users only.</div>
         ) : null}
+        {canFillOrders && user?.role !== "order_filler" ? (
+          <a className="btn btn-sm btn-ghost" href="/product/order-genius/cbu">CBU Finance</a>
+        ) : null}
       </div>
       </div>
       ) : null}

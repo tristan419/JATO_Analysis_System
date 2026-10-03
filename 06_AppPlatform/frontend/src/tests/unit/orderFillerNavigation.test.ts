@@ -25,6 +25,13 @@ function collectMenuPaths(items: MegaMenuItem[]): string[] {
 }
 
 describe("order filler navigation", () => {
+  it("keeps CBU reachable for editors without a global navigation entry", () => {
+    expect(collectMenuPaths(filterMenuByRole(MEGA_MENU_ITEMS, "editor"))).not.toContain("/product/order-genius/cbu");
+    expect(isKnownAppRoute("/product/order-genius/cbu")).toBe(true);
+    expect(isRouteAllowedForRole("/product/order-genius/cbu", "editor")).toBe(true);
+    expect(isRouteAllowedForRole("/product/order-genius/cbu", "order_filler")).toBe(false);
+  });
+
   it("exposes viewer-visible routes plus order filler tools", () => {
     const paths = collectMenuPaths(
       filterMenuByRole(MEGA_MENU_ITEMS, "order_filler"),

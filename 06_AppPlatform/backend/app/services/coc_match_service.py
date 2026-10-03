@@ -5,6 +5,9 @@ processing and file utilities.
 """
 
 import json
+import hashlib
+import os
+from contextlib import nullcontext
 import re
 import sqlite3
 import shutil
@@ -16,8 +19,8 @@ import zipfile
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
-from typing import Any, TypedDict
+from pathlib import Path, PurePosixPath
+from typing import Any, BinaryIO, TypedDict
 
 from fastapi import HTTPException, UploadFile
 from upload_toolkit.file_utils import allowed_extension
@@ -435,6 +438,84 @@ def list_archive_members(
 
         scan(archive_path, [], 0)
     return members
+
+
+def visit_archive_files(path: Path, names: set[str], visit: Callable[[str, BinaryIO], None], *, temporary_root: Path, max_bytes: int = 100 * 1024**3) -> None:
+    """Stream selected members; RAR batch extraction is shared with the library."""
+    if not names:
+        return
+    if path.suffix.lower() == ".zip":
+        with zipfile.ZipFile(path) as archive:
+            members = [info for info in archive.infolist() if info.filename.replace("\\", "/") in names]
+            if sum(info.file_size for info in members) > max_bytes:
+                raise ValueError("PDF total too large; split source / PDF总量过大，请拆分来源")
+            for info in members:
+                with archive.open(info) as handle:
+                    visit(info.filename, handle)
+        return
+    tool = shutil.which("7zz") or shutil.which("7z")
+    if not tool:
+        raise ValueError("RAR extraction unavailable; use ZIP / 无RAR解包工具，请改传ZIP")
+    members = [(name, size) for name, size in _rar_member_listing(path, tool) if name.replace("\\", "/") in names]
+    selected_names = [name for name, _ in members]
+    if len(set(selected_names)) != len(selected_names):
+        raise ValueError("Duplicate RAR paths; repack as ZIP / RAR同路径重复，请重新打包ZIP")
+    for name in selected_names:
+        normalized = name.replace("\\", "/")
+        if '\n' in name or '\r' in name or PurePosixPath(normalized).is_absolute() or '..' in PurePosixPath(normalized).parts or ':' in normalized:
+            raise ValueError("Unsafe RAR path; repack source / RAR路径异常，请重新打包")
+    size = sum(size for _, size in members)
+    reserve = int(os.getenv("APP_COC_MIN_FREE_DISK_BYTES", str(2 * 1024**3)))
+    if size > max_bytes or shutil.disk_usage(temporary_root).free < size * 2 + reserve:
+        raise ValueError("Insufficient space for PDFs; split source / PDF空间不足，请拆分来源")
+    with tempfile.TemporaryDirectory(prefix="coc-rar-", dir=temporary_root) as temporary:
+        listing_file = Path(temporary) / "members.txt"
+        listing_file.write_text('\n'.join(selected_names), encoding="utf-8")
+        output = Path(temporary) / "pdfs"
+        result = subprocess.run([tool, "x", "-y", "-spd", "-scsUTF-8", f"-o{output}", str(path), f"@{listing_file}"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
+        if result.returncode:
+            raise ValueError("Cannot extract PDFs; use ZIP or retry / 无法提取PDF，请改传ZIP或重试")
+        for name in selected_names:
+            target = output / name.replace("\\", "/")
+            if target.is_symlink() or not target.is_file() or not target.resolve().is_relative_to(output.resolve()):
+                raise ValueError("Invalid extracted PDF / 提取的PDF无效，请重新打包")
+            with target.open("rb") as handle:
+                visit(name, handle)
+
+
+def build_match_pdf_package(archive_path: Path, target: Path, vins: set[str]) -> tuple[set[str], set[str]]:
+    """Scan once and retain only registry VIN PDFs inside this job, not the library."""
+    required = {vin.upper() for vin in vins if _VIN_VALUE_RE.fullmatch(vin)}
+    hashes: dict[str, str] = {}
+    total_bytes = 0
+    reserve = int(os.getenv("APP_COC_MIN_FREE_DISK_BYTES", str(2 * 1024**3)))
+    try:
+        with zipfile.ZipFile(target, "w", allowZip64=True) as output:
+            def visit(path: Path, members: list[CocArchiveMember]) -> None:
+                by_name = {member["memberPath"][-1]: member for member in members if member["stem"].upper() in required}
+                def save(name: str, handle: BinaryIO) -> None:
+                    nonlocal total_bytes
+                    vin = by_name[name.replace("\\", "/")]["stem"].upper()
+                    digest = hashlib.sha256()
+                    duplicate = vin in hashes
+                    with (output.open(f"{vin}.pdf", "w", force_zip64=True) if not duplicate else nullcontext()) as dst:
+                        while chunk := handle.read(1024 * 1024):
+                            total_bytes += len(chunk)
+                            if total_bytes > 100 * 1024**3 or shutil.disk_usage(target.parent).free < len(chunk) + reserve:
+                                raise ValueError("PDF space limit reached; split upload / PDF空间限额不足，请拆分上传")
+                            digest.update(chunk)
+                            if dst is not None:
+                                dst.write(chunk)
+                    if duplicate and hashes[vin] != digest.hexdigest():
+                        raise ValueError("Conflicting PDFs for the same VIN; choose one source / 同VIN存在不同PDF，请保留正确文件后重传")
+                    hashes[vin] = digest.hexdigest()
+                visit_archive_files(path, set(by_name), save, temporary_root=target.parent, max_bytes=100 * 1024**3 - total_bytes)
+            members = list_archive_members(archive_path, [".pdf"], on_archive=visit, temporary_root=target.parent)
+        return {member["stem"].upper() for member in members}, set(hashes)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
 
 
 def list_archive_files(
@@ -1230,12 +1311,24 @@ class CocMatchJobRunner(BaseJobRunner):
             # Step 2: List archive
             self._set_phase("listing_archive")
             self.log(f"Listing archive (ext={self.file_ext})...")
-            file_set = list_archive_files(self.archive_path, extensions)
+            package_path = self.state_dir / self.job_id / "matched-pdfs.zip"
+            local_vins: set[str] = set()
+            if self.file_ext.lower() == ".pdf":
+                file_set, local_vins = build_match_pdf_package(self.archive_path, package_path, {r["chassis"] for r in rows})
+            else:
+                file_set = list_archive_files(self.archive_path, extensions)
             if state.get("useLibrary"):
                 from app.services.coc_library_service import lookup_vins
                 # Only registry VINs are relevant; other shared-library VINs
                 # must not become hundreds of thousands of archive-only rows.
-                file_set.update(lookup_vins([r["chassis"] for r in rows]))
+                library_matches = lookup_vins([r["chassis"] for r in rows])
+                file_set.update(library_matches)
+                if self.file_ext.lower() == ".pdf":
+                    from app.services.coc_library_service import write_pdf_zip
+                    library_vins = set(library_matches) - local_vins
+                    if library_vins:
+                        write_pdf_zip(list(library_vins), package_path, mode="a")
+                        local_vins.update(library_vins)
             self.log(f"  {len(file_set)} unique filenames")
             input_warning = None
             if not file_set:
@@ -1302,6 +1395,7 @@ class CocMatchJobRunner(BaseJobRunner):
             state["hasBidirectionalMismatch"] = difference_type == "bidirectional_mismatch"
             state["coverageRate"] = round(len(matched) / len(rows) * 100, 1) if rows else 0
             state["inputWarning"] = input_warning
+            state["pdfDownloadCount"] = len(local_vins)
             if prev:
                 state["previousRun"] = {"month": prev[1], "matched": prev[3], "total": prev[2]}
                 state["diffSummary"] = {
@@ -1312,6 +1406,7 @@ class CocMatchJobRunner(BaseJobRunner):
             self.persist_state(state)
             self.log("Done!")
         except Exception as exc:
+            (self.state_dir / self.job_id / "matched-pdfs.zip").unlink(missing_ok=True)
             state = self.load_state()
             state["failureResult"] = _build_coc_match_failure_result(state, exc)
             self.persist_state(state)
@@ -1669,6 +1764,16 @@ def get_coc_match_report_path(job_id: str) -> Path:
     if not report.exists():
         raise HTTPException(status_code=404, detail="报告尚未生成。")
     return report
+
+
+def get_coc_match_pdf_package_path(job_id: str) -> Path:
+    if not re.fullmatch(r"coc-match-[a-f0-9]{8}", job_id):
+        raise HTTPException(400, "Invalid job ID / 任务编号无效")
+    job = get_coc_match_job(job_id)
+    path = COC_MATCH_JOB_ROOT / job_id / "matched-pdfs.zip"
+    if job.get("status") != "success" or not job.get("pdfDownloadCount") or not path.is_file():
+        raise HTTPException(409, "No PDF package: run the PDF comparison again / 无可下载PDF包，请重新运行PDF比对")
+    return path
 
 
 def retry_failed_coc_match_job(

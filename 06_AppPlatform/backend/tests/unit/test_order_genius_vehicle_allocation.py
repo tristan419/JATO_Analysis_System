@@ -266,6 +266,17 @@ def test_vehicle_allocation_import_parser_maps_eta(tmp_path: Path) -> None:
     ]
 
 
+def test_export_visible_columns_preserves_order_and_price_snapshot():
+    buffer = generate_vehicle_allocation_excel([{"carCode": "CAR-1", "fobEur": 12345, "remark": "=unsafe", "modelName": "JAECOO5", "version": "Select"}], ["remark", "fobEur", "config", "carCode"])
+    workbook = openpyxl.load_workbook(buffer, data_only=False)
+    try:
+        assert list(workbook.active.values) == [("Note / 备注", "FOB (EUR)", "Config", "Car Code"), ("'=unsafe", 12345, "JAECOO5 / Select", "CAR-1")]
+    finally:
+        workbook.close()
+    with pytest.raises(ValueError, match="Invalid export columns"):
+        generate_vehicle_allocation_excel([], ["not-a-column"])
+
+
 def test_vehicle_allocation_vin_list_parser_reads_single_column_without_header(tmp_path: Path) -> None:
     workbook = openpyxl.Workbook()
     ws = workbook.active
@@ -1273,8 +1284,104 @@ def _vin_fill_pi(session, materials=("BOM-A",), quantity=3):
     return header["piCode"], vehicle_repo.list_vehicles_for_bulk_update(session, pi_code=header["piCode"])
 
 
+def test_vehicle_costs_single_and_checked_batch_keep_fob_vin_and_quantities(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=2)
+    first, second = cars
+    result = vehicle_service.update_vehicle_unit(vehicle_db, first.car_code, {"freightEur": 123.45, "insuranceEur": 10}, "tester")
+    assert (result["freightEur"], result["insuranceEur"], result["fobEur"]) == (123.45, 10, 12345)
+    bulk_update_vehicle_units(vehicle_db, {"piCode": pi, "carCodes": [first.car_code], "fields": {"freightEur": 0}}, "tester")
+    assert first.freight_eur == 0 and first.insurance_eur == 10
+    assert second.freight_eur is None and second.insurance_eur is None
+    assert first.vin is None and second.vin is None
+    vehicle_service.update_vehicle_unit(vehicle_db, first.car_code, {"insuranceEur": None}, "tester")
+    assert first.insurance_eur is None
+    line = vehicle_repo.get_line_by_code(vehicle_db, first.pi_line_code)
+    assert line.quantity == 2 and line.fob_eur == 12345
+    with pytest.raises(HTTPException, match="Select vehicle rows"):
+        bulk_update_vehicle_units(vehicle_db, {"piCode": pi, "fields": {"freightEur": 99}}, "tester")
+
+
+@pytest.mark.parametrize("value", [-1, "NaN", "Infinity", "1.234", 10**12, True])
+def test_invalid_vehicle_cost_is_rejected_before_any_row_change(vehicle_db, value):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=1)
+    with pytest.raises(HTTPException, match="non-negative EUR"):
+        vehicle_service.update_vehicle_unit(vehicle_db, cars[0].car_code, {"freightEur": value, "remark": "must not persist"}, "tester")
+    assert cars[0].freight_eur is None and cars[0].remark is None
+
+
+def test_vehicle_cost_export_uses_visible_order_and_keeps_fob_separate():
+    workbook = openpyxl.load_workbook(generate_vehicle_allocation_excel([
+        {"carCode": "CAR-1", "fobEur": 12345, "freightEur": 123.45, "insuranceEur": 0},
+    ], ["insuranceEur", "carCode", "freightEur", "fobEur"]))
+    try:
+        assert list(workbook.active.values) == [
+            ("Insurance / 保费 (EUR)", "Car Code", "Freight / 运费 (EUR)", "FOB (EUR)"),
+            (0, "CAR-1", 123.45, 12345),
+        ]
+    finally:
+        workbook.close()
+
+
+def test_vehicle_keyword_matches_suffix_and_existing_detail_fields(vehicle_db):
+    pi_code, cars = _vin_fill_pi(vehicle_db, materials=("T71607VBWMM0007",), quantity=1)
+    cars[0].remark = "Priority customer"
+    cars[0].ship_name = "Atlantic vessel"
+    cars[0].dealer_code = "D-123"
+    vehicle_db.flush()
+    for keyword in ("0007", "priority", "atlantic", "D-123", "HEV"):
+        assert vehicle_service.list_vehicle_units(vehicle_db, keyword=keyword, pi_code=pi_code)["total"] == 1
+    assert vehicle_service.list_vehicle_units(vehicle_db, keyword="0007", country="SE")["total"] == 0
+
+
 def _vin_rows(material, count, offset=0):
     return [{"sourceRow": index + 2, "bom": material, "vin": f"LVTDB21B9RD{index + offset:06d}"} for index in range(count)]
+
+
+def test_pi_month_summary_counts_before_pagination_and_keeps_empty_pis(vehicle_db, monkeypatch):
+    # This fixture is SQLite. Verify the shared production JSONB predicate separately;
+    # the test below exercises aggregation with direct-country headers, not JSONB emulation.
+    from sqlalchemy.dialects.postgresql import dialect
+    predicate = vehicle_repo._header_country_filter("CH")
+    compiled = predicate.compile(dialect=dialect())
+    assert "market_country_codes @>" in str(compiled)
+    assert ["CH"] in compiled.params.values()
+    monkeypatch.setattr(vehicle_repo, "_header_country_filter", lambda country: models.PiOrderHeader.country_code == country)
+    pi, cars = _vin_fill_pi(vehicle_db, materials=("BOM-A", "BOM-B"), quantity=3)
+    for car in cars[:2]:
+        car.country_code = "SE"
+    for _ in range(51):
+        vehicle_service.create_pi_header(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 9}, "tester")
+    vehicle_service.create_pi_header(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 10}, "tester")
+    vehicle_service.create_pi_header(vehicle_db, {"countryCode": "SE", "orderYear": 2026, "orderMonth": 9}, "tester")
+    vehicle_service.create_pi_header(vehicle_db, {"countryCode": "CH", "orderYear": 2025, "orderMonth": 9}, "tester")
+    vehicle_db.flush()
+    assert vehicle_repo.pi_month_summary(vehicle_db, 2026, "CH") == {"year": 2026, "items": [
+        {"month": "2026-09", "piCount": 52, "vehicleCount": 4},
+        {"month": "2026-10", "piCount": 1, "vehicleCount": 0},
+    ]}
+    assert vehicle_repo.pi_month_summary(vehicle_db, 2026)["items"][0] == {
+        "month": "2026-09", "piCount": 53, "vehicleCount": 6,
+    }
+    assert vehicle_repo.pi_month_summary(vehicle_db, 2024, "CH")["items"] == []
+    assert vehicle_repo.list_headers(vehicle_db, country="CH", month="2026-09", page_size=50)[1] == 52
+    assert vehicle_repo.get_header_by_code(vehicle_db, pi).order_month == "2026-09"
+
+
+def test_pi_month_route_validates_country_before_query(monkeypatch):
+    calls = []
+    def validate(session, name, role, country):
+        calls.append(country)
+        if country != "CH":
+            raise HTTPException(403, "Country access denied")
+    monkeypatch.setattr(vehicle_route, "validate_country_access", validate)
+    monkeypatch.setattr(vehicle_repo, "pi_month_summary", lambda session, **kw: kw)
+    user = SimpleNamespace(name="filler", role="order_filler")
+    assert vehicle_route.list_pi_months(year=2026, country="ch", session=object(), user=user) == {"year": 2026, "country": "CH"}
+    for country in ("SE", None):
+        with pytest.raises(HTTPException) as exc:
+            vehicle_route.list_pi_months(year=2026, country=country, session=object(), user=user)
+        assert exc.value.status_code == 403
+    assert calls == ["CH", "SE", ""]
 
 
 def test_clear_vins_preserves_slots_and_skips_already_cleared(vehicle_db):

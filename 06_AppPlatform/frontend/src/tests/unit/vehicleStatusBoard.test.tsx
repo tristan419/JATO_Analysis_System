@@ -50,6 +50,8 @@ function vehicle(overrides: Partial<PiVehicleUnit>): PiVehicleUnit {
   return {
     vehicleUnitId: "unit-1",
     fobEur: null,
+    freightEur: null,
+    insuranceEur: null,
     piCode: "PI-DK-202607-001",
     officialPiNo: null,
     orderingAccountCode: "NCG",
@@ -109,12 +111,12 @@ describe("VehicleStatusBoard", () => {
       />,
     );
 
-    expect(screen.getByText("PI-DK-202607-001")).toBeTruthy();
-    expect(screen.getByText("Flow ordering_account · DK · NCG")).toBeTruthy();
+    expect(screen.getByText(/PI-DK-202607-001 ·/)).toBeTruthy();
+    expect(screen.getByTitle("Flow ordering_account · DK · NCG")).toBeTruthy();
     expect(screen.getByLabelText("Logistics Ordered 2 vehicles")).toBeTruthy();
     expect(screen.getByLabelText("Logistics In shipping 0 vehicles")).toBeTruthy();
     expect(screen.getByLabelText("Allocation Unallocated 2 vehicles")).toBeTruthy();
-    expect(screen.getByText("No VIN")).toBeTruthy();
+    expect(screen.getByText(/awaiting VIN \/ 待录 VIN/)).toBeTruthy();
   });
 
   it("renders an empty state when no status flow is available", () => {

@@ -53,13 +53,29 @@ THIN_BORDER = Border(
 CENTER_ALIGN = Alignment(horizontal="center", vertical="center")
 LEFT_ALIGN = Alignment(horizontal="left", vertical="center")
 
+COLUMN_LABELS = dict(zip([
+    "piCode", "officialPiNo", "carCode", "vin", "bom", "materialCode", "brand", "modelName", "version", "powertrain",
+    "exteriorColorName", "interiorColorName", "orderDate", "productionDate", "etd", "eta", "shipName", "countryCode",
+    "dealerCode", "dealerName", "customerRef", "allocationStatus", "logisticsStatus", "readyForPickupDate",
+    "shippingScheduleUrl", "feishuTrackingUrl", "remark",
+], HEADERS))
+COLUMN_LABELS.update({"config": "Config", "fobEur": "FOB (EUR)", "cocPdf": "COC PDF",
+                      "freightEur": "Freight / 运费 (EUR)", "insuranceEur": "Insurance / 保费 (EUR)",
+                      "actualDepartureDate": "Actual departure", "actualArrivalDate": "Actual arrival",
+                      "piCode": "PI", "materialCode": "Material", "exteriorColorName": "Exterior",
+                      "interiorColorName": "Interior", "remark": "Note / 备注",
+                      "readyForPickupDate": "Ready for pickup / 可提车"})
 
-def generate_vehicle_allocation_excel(vehicles: list[dict]) -> io.BytesIO:
+
+def generate_vehicle_allocation_excel(vehicles: list[dict], columns: list[str] | None = None) -> io.BytesIO:
+    if columns is not None and (not columns or len(columns) != len(set(columns)) or any(key not in COLUMN_LABELS for key in columns)):
+        raise ValueError("Invalid export columns / 导出列无效，请恢复默认列后重试")
+    headers = [COLUMN_LABELS[key] for key in columns] if columns is not None else HEADERS
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Vehicle Allocation"
 
-    for col_idx, header in enumerate(HEADERS, 1):
+    for col_idx, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_idx, value=header)
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
@@ -67,7 +83,7 @@ def generate_vehicle_allocation_excel(vehicles: list[dict]) -> io.BytesIO:
         cell.border = THIN_BORDER
 
     for row_idx, vehicle in enumerate(vehicles, start=2):
-        row_values = [
+        row_values = ([f"{vehicle.get('modelName') or '-'} / {vehicle.get('version') or '-'}" if key == "config" else vehicle.get(key) for key in columns] if columns is not None else [
             vehicle.get("piCode"),
             vehicle.get("officialPiNo"),
             vehicle.get("carCode"),
@@ -95,7 +111,7 @@ def generate_vehicle_allocation_excel(vehicles: list[dict]) -> io.BytesIO:
             vehicle.get("shippingScheduleUrl"),
             vehicle.get("feishuTrackingUrl"),
             vehicle.get("remark"),
-        ]
+        ])
         row_fill = STRIPED_FILL if row_idx % 2 == 0 else None
         for col_idx, value in enumerate(row_values, 1):
             cell = ws.cell(row=row_idx, column=col_idx, value=_excel_value(value))
@@ -106,8 +122,8 @@ def generate_vehicle_allocation_excel(vehicles: list[dict]) -> io.BytesIO:
             cell.border = THIN_BORDER
 
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(HEADERS))}{max(1, len(vehicles) + 1)}"
-    for col_idx, header in enumerate(HEADERS, 1):
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(1, len(vehicles) + 1)}"
+    for col_idx, header in enumerate(headers, 1):
         width = max(12, min(28, len(header) + 4))
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
@@ -118,6 +134,8 @@ def generate_vehicle_allocation_excel(vehicles: list[dict]) -> io.BytesIO:
 
 
 def _excel_value(value: object) -> object:
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+        return "'" + value
     if isinstance(value, datetime):
         return value.date().isoformat()
     if isinstance(value, date):

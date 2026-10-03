@@ -67,7 +67,7 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20261001_0052"]
+    assert sorted(revisions - parent_revisions) == ["20261004_0053"]
 
 
 def test_fob_period_deletion_intent_revision_preserves_active_periods_and_history() -> None:

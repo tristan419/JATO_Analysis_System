@@ -5,7 +5,11 @@ import { api } from "../../api/client";
 import { OrderGeniusVehicleAllocationPage } from "../../pages/OrderGeniusVehicleAllocationPage";
 import type { PiOrderDetail, PiOrderLine, PiVehicleUnit, VehicleImportPreview } from "../../types/orderGeniusVehicle";
 
-vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: "admin", primaryCountry: "CH" } }) }));
+// Multi-step full-page workflows exceed 5 seconds on the shared CI runner.
+vi.setConfig({ testTimeout: 15_000 });
+
+const testRole = vi.hoisted(() => ({ value: "admin" }));
+vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: testRole.value, primaryCountry: "CH" } }) }));
 vi.mock("../../hooks/useAccountCountryOptions", () => ({ useAccountCountryOptions: () => ({ countryOptions: [] }) }));
 vi.mock("../../components/CommandSelect", () => ({
   CommandSelect: (props: { value: string; placeholder: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) => (
@@ -19,7 +23,7 @@ vi.mock("../../components/CommandSelect", () => ({
 const PI = "PI-CH-202609-001";
 function vehicle(index: number): PiVehicleUnit {
   return {
-    fobEur: 15000, vehicleUnitId: `unit-${index}`, piCode: PI, officialPiNo: null, orderingAccountCode: "CH",
+    fobEur: 15000, freightEur: null, insuranceEur: null, vehicleUnitId: `unit-${index}`, piCode: PI, officialPiNo: null, orderingAccountCode: "CH",
     orderingAccountName: null, shipmentBatchCode: null, portOfDischarge: null,
     piLineCode: `${PI}-L${index < 75 ? "01" : "02"}`, carCode: `CAR-${index}`,
     vin: index < 20 ? `LVTDB21B9RD${String(index).padStart(6, "0")}` : null,
@@ -61,8 +65,12 @@ function detail(): PiOrderDetail {
 }
 
 beforeEach(() => {
+  testRole.value = "admin";
   window.history.replaceState({}, "", "/product/order-genius/vehicle-allocation");
   vi.spyOn(api, "getVehicleAllocationPis").mockResolvedValue({ items: [detail().header], total: 1 });
+  vi.spyOn(api, "getVehicleAllocationPiMonths").mockImplementation(async (year) => ({ year,
+    items: [{ month: `${year}-09`, piCount: 60, vehicleCount: 450 }],
+  }));
   vi.spyOn(api, "getVehicleAllocationPi").mockImplementation(async () => detail());
   vi.spyOn(api, "getVehicleAllocationStatusFlow").mockResolvedValue({ countryCode: "CH", orderingAccountCode: "CH", source: "default", allocation: [], logistics: [] });
   vi.spyOn(api, "listVehicleAllocationVehicles").mockImplementation(async (filters) => ({
@@ -70,14 +78,120 @@ beforeEach(() => {
   }));
   vi.spyOn(api, "bulkUpdateVehicleAllocationVehicles").mockResolvedValue({ piCode: PI, piLineCode: null, matchedUnits: 150, updatedUnits: 150, vinAssigned: 0, fieldsUpdated: ["etd"] });
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function selectPi() {
   render(<OrderGeniusVehicleAllocationPage />);
-  fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${PI}`) }));
+  await waitFor(() => expect(api.getVehicleAllocationPis).toHaveBeenCalled());
+  fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${PI}`) }, { timeout: 5000 }));
   await screen.findByText("150 units / 台");
   await waitFor(() => expect(screen.getAllByRole("row").length).toBe(6));
 }
+
+async function chooseOctober() {
+  fireEvent.click(screen.getByText("All months", { selector: "summary" }));
+  fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2026" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Oct 2026" }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Oct 2026" }));
+}
+
+describe("vehicle detail search and view", () => {
+  it("makes vehicle notes read-only for viewer accounts", async () => {
+    testRole.value = "viewer";
+    await selectPi();
+    fireEvent.click(screen.getByRole("cell", { name: "CAR-1" }));
+    expect((screen.getByLabelText("Note / 备注") as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(screen.getByRole("button", { name: "Save Vehicle" }).hasAttribute("disabled")).toBe(true);
+  });
+  it("filters material suffixes through the existing list query", async () => {
+    const locate = vi.spyOn(api, "searchVehicleAllocation");
+    await selectPi();
+    fireEvent.change(screen.getByPlaceholderText(/Search PI, Car Code/), { target: { value: "0007" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await waitFor(() => expect(vi.mocked(api.listVehicleAllocationVehicles).mock.calls.at(-1)?.[0]).toMatchObject({ keyword: "0007", piCode: PI, page: 1 }));
+    expect(locate).not.toHaveBeenCalled();
+  });
+
+  it("matches full VINs across pages and updates only explicitly selected results", async () => {
+    await selectPi(); openView();
+    fireEvent.change(screen.getByLabelText("VIN batch search / VIN 批量搜索"), { target: { value: `${vehicle(0).vin}\n${vehicle(18).vin},${vehicle(0).vin};LVTDB21B9RD999999` } });
+    fireEvent.click(screen.getByRole("button", { name: "Search VIN batch / 搜索 VIN" }));
+    expect(screen.getByRole("cell", { name: "CAR-18" })).toBeTruthy();
+    expect(screen.getByText(/2 matched.*1 not found/)).toBeTruthy();
+    expect(screen.getByLabelText("Select CAR-18").hasAttribute("checked")).toBe(false);
+    fireEvent.click(screen.getByRole("tab", { name: /Update status/ }));
+    expect(screen.getByRole("button", { name: "Update status" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("tab", { name: /View/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Select matches / 勾选全部匹配" }));
+    fireEvent.click(screen.getByRole("button", { name: /Update selected status/ }));
+    fireEvent.change(screen.getByLabelText("ETD"), { target: { value: "2026-10-12" } });
+    fireEvent.click(screen.getByRole("button", { name: "Update status" }));
+    await waitFor(() => expect(api.bulkUpdateVehicleAllocationVehicles).toHaveBeenCalledWith({ piCode: PI, piLineCode: undefined, carCodes: ["CAR-0", "CAR-18"], fields: { etd: "2026-10-12" } }));
+    fireEvent.click(screen.getByRole("tab", { name: /View/ }));
+    fireEvent.change(screen.getByLabelText("VIN batch search / VIN 批量搜索"), { target: { value: `${vehicle(18).vin}` } });
+    fireEvent.click(screen.getByRole("button", { name: "Search VIN batch / 搜索 VIN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select matches / 勾选全部匹配" }));
+    fireEvent.click(screen.getByLabelText("VIN missing"));
+    expect(screen.queryByText(/matched.*not found/)).toBeNull();
+    expect(screen.queryByText(/selected \/ 已勾选/)).toBeNull();
+    await waitFor(() => expect(vi.mocked(api.listVehicleAllocationVehicles).mock.calls.at(-1)?.[0]).toMatchObject({ vinMissingOnly: true }));
+  });
+
+  it("exports visible columns in reordered sequence and exposes existing vehicle notes", async () => {
+    const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
+    vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:export"; static revokeObjectURL = vi.fn(); });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    await selectPi(); openView();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Note / 备注" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move VIN left" }));
+    fireEvent.click(screen.getByRole("button", { name: "Export current view / 导出" }));
+    await waitFor(() => expect(download).toHaveBeenCalled());
+    expect(download.mock.calls[0][0]?.columns?.slice(0, 2)).toEqual(["vin", "carCode"]);
+    expect(download.mock.calls[0][0]?.columns).toContain("remark");
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "关闭" })).toBeNull();
+  });
+});
+
+describe("PI month browsing", () => {
+  it("uses whole-year counts, preserves selected PI/year independence and can reset to all months", async () => {
+    await selectPi();
+    expect(screen.getByRole("link", { name: "Create PI in Order Genius" }).getAttribute("href")).toBe("/product/order-genius");
+    await chooseOctober();
+    expect(screen.getByRole("button", { name: "Sep 2026" }).getAttribute("title")).toBe("60 PIs · 450 vehicles");
+    expect(screen.getByRole("button", { name: "Sep 2026" }).textContent).toBe("Sep60");
+    expect(vi.mocked(api.getVehicleAllocationPis).mock.calls.at(-1)?.[0]?.month).toBe("2026-10");
+    fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2025" } });
+    expect(screen.getByText("2026-10", { selector: "summary" })).toBeTruthy();
+    await waitFor(() => expect(api.getVehicleAllocationPiMonths).toHaveBeenLastCalledWith(2025, "CH"));
+    expect(screen.getByText("150 units / 台")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "All months" }));
+    await waitFor(() => expect(vi.mocked(api.getVehicleAllocationPis).mock.calls.at(-1)?.[0]?.month).toBe(""));
+    expect(screen.getByText("All months", { selector: "summary" })).toBeTruthy();
+  });
+
+  it("shows retry instead of false zero counts when summary fails", async () => {
+    vi.mocked(api.getVehicleAllocationPiMonths).mockRejectedValueOnce(new Error("Network unavailable"));
+    render(<OrderGeniusVehicleAllocationPage />);
+    fireEvent.click(screen.getByText("All months", { selector: "summary" }));
+    await screen.findByRole("button", { name: "Retry months" });
+    expect(screen.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).getAttribute("title")).toBe("Counts unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Retry months" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).hasAttribute("disabled")).toBe(false));
+  });
+
+  it("ignores a stale annual response after changing the year", async () => {
+    let resolveOld: (value: { year: number; items: [] }) => void = () => {};
+    vi.mocked(api.getVehicleAllocationPiMonths).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    render(<OrderGeniusVehicleAllocationPage />);
+    fireEvent.click(screen.getByText("All months", { selector: "summary" }));
+    fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2025" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sep 2025" }).textContent).toBe("Sep60"));
+    resolveOld({ year: 2026, items: [] });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sep 2025" }).textContent).toBe("Sep60"));
+  });
+});
 
 describe("COC library lookup and downloads", () => {
   it("searches the whole PI only on request, filters results and downloads selected PDFs", async () => {
@@ -219,7 +333,7 @@ describe("PI-scoped BOM + VIN import", () => {
     fireEvent.click(screen.getByLabelText(/Remove these VINs from file/));
     const file = new File(["mock workbook"], "original.xlsx");
     fireEvent.change(screen.getByLabelText("BOM and VIN XLSX"), { target: { files: [file] } });
-    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 }));
     await screen.findByText(/VIN cleared: 1/);
     expect(preview).toHaveBeenCalledWith(file, { piCode: PI, allowReplacing: false, removeVins: true });
     expect(apply).toHaveBeenCalledTimes(1);
@@ -247,7 +361,7 @@ describe("PI-scoped BOM + VIN import", () => {
     await waitFor(() => expect(repreview).toHaveBeenCalledWith(expect.objectContaining({ piCode: PI, allowReplacing: false,
       rows: expect.arrayContaining([expect.objectContaining({ sourceRow: 2, car_code: "CAR-21", material_code: "BOM-ONE" })]),
     })));
-    await screen.findByRole("button", { name: "Apply 1" });
+    await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByLabelText(/Allow replacing existing VINs/));
     await waitFor(() => expect(repreview).toHaveBeenLastCalledWith(expect.objectContaining({ piCode: PI, allowReplacing: true })));
   });
@@ -257,7 +371,7 @@ describe("PI-scoped BOM + VIN import", () => {
     const apply = vi.spyOn(api, "applyVehicleAllocationImport").mockResolvedValue({ createdUnits: 0, updatedUnits: 1, warnings: [] });
     await selectPi(); await uploadVinFile();
     vi.mocked(api.getVehicleAllocationPi).mockRejectedValueOnce(new Error("refresh unavailable"));
-    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 }));
     await screen.findByText(/VIN 已保存，但 PI 页面刷新失败/);
     expect(screen.queryByText(/VIN 导入未完成/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Apply 1" })).toBeNull();
@@ -269,7 +383,7 @@ describe("PI-scoped BOM + VIN import", () => {
     const apply = vi.spyOn(api, "applyVehicleAllocationImport").mockResolvedValue({ createdUnits: 0, updatedUnits: 1, warnings: [] });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await selectPi(); await uploadVinFile();
-    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 }));
     expect(confirm).toHaveBeenCalled(); expect(apply).not.toHaveBeenCalled();
   });
 
@@ -326,21 +440,21 @@ describe("PI allocation layout and scope", () => {
   it("confirms the whole PI deletion and removes stale scope without touching browse month", async () => {
     const remove = vi.spyOn(api, "deleteVehicleAllocationPi").mockResolvedValue({ pi_code: PI, deleted: true });
     await selectPi();
-    fireEvent.change(screen.getByLabelText("Browse Month"), { target: { value: "2026-10" } });
+    await chooseOctober();
     fireEvent.click(screen.getByRole("button", { name: "Delete PI" }));
     expect(screen.getByText(/Delete 150 units \+ VINs/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     await screen.findByText(/月需求保留，占用已释放/);
     expect(remove).toHaveBeenCalledWith(PI);
     expect(screen.queryByRole("button", { name: /PI lines/ })).toBeNull();
-    expect((screen.getByLabelText("Browse Month") as HTMLInputElement).value).toBe("2026-10");
+    expect(screen.getByText("2026-10", { selector: "summary" })).toBeTruthy();
   });
   it("has no duplicate creation or generic creation-import path", async () => {
     await selectPi();
     expect(screen.queryByRole("button", { name: /^Create PI$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Generate$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /Add Line/i })).toBeNull();
-    expect(screen.getByRole("link", { name: /前往选品/ }).getAttribute("href")).toBe("/product/order-genius");
+    expect(screen.getByRole("link", { name: "Create PI in Order Genius" }).getAttribute("href")).toBe("/product/order-genius");
     fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
     expect(screen.getByRole("button", { name: "Import File" }).hasAttribute("disabled")).toBe(false);
     expect(screen.getByLabelText(/Allow replacing existing VINs/).hasAttribute("checked")).toBe(false);
@@ -349,13 +463,13 @@ describe("PI allocation layout and scope", () => {
 
   it("keeps browsing independent and loads the whole PI instead of its first line", async () => {
     render(<OrderGeniusVehicleAllocationPage />);
-    fireEvent.change(screen.getByLabelText("Browse Month"), { target: { value: "2026-10" } });
+    await chooseOctober();
     fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${PI}`) }));
     await screen.findByText("150 units / 台");
-    expect((screen.getByLabelText("Browse Month") as HTMLInputElement).value).toBe("2026-10");
+    expect(screen.getByText("2026-10", { selector: "summary" })).toBeTruthy();
     expect(vi.mocked(api.listVehicleAllocationVehicles).mock.calls.at(-1)?.[0]?.piLineCode).toBeUndefined();
     expect(screen.getByText("130 no VIN / 待录")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /50 ready · 50 allocated/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /50 ready for pickup · 50 allocated/ })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "PI lines" })).toBeNull();
   });
 
@@ -380,7 +494,7 @@ describe("PI allocation layout and scope", () => {
     await selectPi();
     openView();
     const columns = within(screen.getByRole("group", { name: "Columns / 显示列" }));
-    const table = screen.getByRole("table");
+    const table = screen.getByRole("table", { name: "Vehicle details" });
     const headers = within(table.querySelector("thead")!);
     fireEvent.click(columns.getByRole("checkbox", { name: "Interior" }));
     expect(headers.queryByRole("columnheader", { name: "Interior" })).toBeNull();
@@ -434,12 +548,35 @@ describe("PI allocation layout and scope", () => {
     expect(screen.getByText("75 units / 台")).toBeTruthy();
   });
 
+  it("requires checked rows for costs and batches zero without touching FOB or VIN", async () => {
+    await selectPi();
+    fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Update status/ }));
+    fireEvent.change(screen.getByLabelText("Freight / 运费 (EUR)"), { target: { value: "0" } });
+    expect(screen.getByRole("button", { name: /^Update status$/ }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select CAR-1" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Update status$/ }));
+    await waitFor(() => expect(api.bulkUpdateVehicleAllocationVehicles).toHaveBeenCalledWith({
+      piCode: PI, piLineCode: undefined, carCodes: ["CAR-1"], fields: { freightEur: 0 },
+    }));
+  });
+
+  it("saves single vehicle costs and explicitly clears a blank insurance", async () => {
+    const update = vi.spyOn(api, "updateVehicleAllocationVehicle").mockResolvedValue(vehicle(1));
+    await selectPi();
+    fireEvent.click(screen.getByRole("cell", { name: "CAR-1" }));
+    fireEvent.change(screen.getByLabelText("Freight / 运费 (EUR)"), { target: { value: "123.45" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Vehicle" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("CAR-1", expect.objectContaining({ freightEur: 123.45, insuranceEur: null })));
+    expect(update.mock.calls[0][1]).not.toHaveProperty("fobEur");
+  });
+
   it("updates the scope summary after saving an individual vehicle", async () => {
     vi.spyOn(api, "updateVehicleAllocationVehicle").mockResolvedValue({ ...vehicle(1), vin: null, logisticsStatus: "ready_for_pickup" });
     await selectPi();
     fireEvent.click(screen.getByRole("cell", { name: "CAR-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Vehicle" }));
     await screen.findByText("131 no VIN / 待录");
-    expect(screen.getByRole("button", { name: /51 ready · 50 allocated/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /51 ready for pickup · 50 allocated/ })).toBeTruthy();
   });
 });

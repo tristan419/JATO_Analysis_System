@@ -3093,6 +3093,7 @@ export interface CocMatchJob {
   matchedCount?: number;
   missingCount?: number;
   extraFileCount?: number;
+  pdfDownloadCount?: number;
   differenceType?: string | null;
   hasBidirectionalMismatch?: boolean;
   coverageRate?: number;
