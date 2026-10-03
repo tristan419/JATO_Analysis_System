@@ -44,6 +44,7 @@ export function CocLibraryPanel() {
     <div style={{ maxHeight: 300, overflow: "auto" }}>
       {library?.items.map((source) => <div key={source.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px solid #dbe6f4" }}>
         <span style={{ flex: 1 }}>{source.filename} · {source.job.pdfCount ?? source.pdfCount} PDF · {({ indexing: "Indexing / 索引中", review: "Review / 待确认", active: "Active / 可查找", failed: "Failed / 失败" })[source.status]}</span>
+        {source.job.invalidCount ? <small>{source.job.invalidCount} invalid VIN filenames / 名称待处理，未入索引；请检查原包后重传。</small> : null}
         {source.status === "failed" || source.job.status === "failed" ? <small>Indexing failed; delete and re-upload ZIP or ask admin to check RAR decoder / 索引失败，请删除后改传 ZIP，或联系管理员检查 RAR 解码器。</small> : null}
         {source.status === "review" ? <button type="button" disabled={busy} onClick={() => void action(async () => { setPreview(await api.cocLibraryPreview(source.id)); setDeletion(null); setReplacements(new Set()); })}>Preview / 预览</button> : null}
         <button type="button" disabled={busy || (source.status === "indexing" && source.job.status !== "failed")} onClick={() => void action(async () => { setDeletion(await api.cocLibraryDeletePreview(source.id)); setPreview(null); })}>Delete source / 删除来源</button>

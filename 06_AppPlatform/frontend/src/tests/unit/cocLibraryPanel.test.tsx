@@ -8,7 +8,7 @@ import type { CocSourcePreview } from "../../types/cocLibrary";
 const preview: CocSourcePreview = { sourceId: "s", fingerprint: "f", affectedPis: ["PI-CH-1"], affectedVehicles: 2,
   items: [{ vin: "LVUGTB220TDE99425", status: "conflict", oldSha: "old", newSha: "new" }] };
 beforeEach(() => {
-  vi.spyOn(api, "cocLibrary").mockResolvedValue({ configured: true, vinCount: 1, items: [{ id: "s", filename: "source.zip", status: "review", pdfCount: 1, job: {} }] });
+  vi.spyOn(api, "cocLibrary").mockResolvedValue({ configured: true, vinCount: 1, items: [{ id: "s", filename: "source.zip", status: "review", pdfCount: 1, job: { invalidCount: 2 } }] });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -17,6 +17,7 @@ it("requires explicit replacement selection and preview before append", async ()
   const activate = vi.spyOn(api, "cocLibraryActivate").mockResolvedValue({ status: "active" });
   render(<CocLibraryPanel />);
   fireEvent.click(await screen.findByRole("button", { name: "Preview / 预览" }));
+  expect(screen.getByText(/2 invalid VIN filenames/)).toBeTruthy();
   await screen.findByText(/PI-CH-1/);
   expect(activate).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("checkbox"));
