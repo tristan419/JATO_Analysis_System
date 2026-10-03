@@ -20,6 +20,7 @@ import type {
   LogisticsStatus,
   PiOrderDetail,
   PiOrderHeader,
+  PiMonthSummary,
   PiVehicleUnit,
   UpdateVehiclePayload,
   VehicleAllocationFilters,
@@ -51,6 +52,7 @@ const LOGISTICS_STATUSES: LogisticsStatus[] = [
 ];
 
 type PiToolTab = "import" | "status" | "view";
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const PI_TOOL_TABS: Array<DeckControlTabItem<PiToolTab>> = [
   { key: "import", label: "Import VINs", caption: "导入 VIN" },
@@ -302,6 +304,10 @@ export function OrderGeniusVehicleAllocationPage() {
   const [piHeaderTotal, setPiHeaderTotal] = useState(0);
   const [piBrowseCountry, setPiBrowseCountry] = useState(defaultCountry);
   const [piBrowseMonth, setPiBrowseMonth] = useState("");
+  const [piBrowseYear, setPiBrowseYear] = useState(new Date().getFullYear());
+  const [piMonths, setPiMonths] = useState<PiMonthSummary[] | null>(null);
+  const [piMonthsError, setPiMonthsError] = useState<string | null>(null);
+  const [piMonthsRetry, setPiMonthsRetry] = useState(0);
   const [piBrowsePage, setPiBrowsePage] = useState(1);
   const [piListError, setPiListError] = useState<string | null>(null);
   const [selectedPi, setSelectedPi] = useState<PiOrderDetail | null>(null);
@@ -518,6 +524,18 @@ export function OrderGeniusVehicleAllocationPage() {
       cancelled = true;
     };
   }, [piBrowseCountry, piBrowseMonth, piBrowsePage, refreshKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPiMonths(null);
+    setPiMonthsError(null);
+    api.getVehicleAllocationPiMonths(piBrowseYear, piBrowseCountry)
+      .then((result) => { if (!cancelled) setPiMonths(result.items); })
+      .catch((err: unknown) => {
+        if (!cancelled) setPiMonthsError(actionableError(err, "Could not load months. Retry / 无法读取月份，请重试。"));
+      });
+    return () => { cancelled = true; };
+  }, [piBrowseCountry, piBrowseYear, piMonthsRetry, refreshKey]);
 
   useEffect(() => {
     const piCode = new URLSearchParams(window.location.search).get("pi")?.trim().toUpperCase();
@@ -1180,16 +1198,40 @@ export function OrderGeniusVehicleAllocationPage() {
                 />
               </div>
               <div className="va-form-row">
-                <label htmlFor="pi-browse-month">Browse Month</label>
-                <input
-                  id="pi-browse-month"
-                  type="month"
-                  value={piBrowseMonth}
-                  onChange={(event) => {
-                    setPiBrowseMonth(event.target.value);
-                    setPiBrowsePage(1);
-                  }}
-                />
+                <label>Browse Month</label>
+                <details className="va-month-browser">
+                  <summary>{piBrowseMonth || "All months"}</summary>
+                  <div className="va-month-controls">
+                    <input type="number" aria-label="Browse Year" min={1} max={9999} value={piBrowseYear}
+                      onChange={(event) => {
+                        const year = Number(event.target.value);
+                        if (Number.isInteger(year) && year >= 1 && year <= 9999) setPiBrowseYear(year);
+                      }} />
+                    <button type="button" className="btn btn-sm btn-ghost" aria-pressed={!piBrowseMonth}
+                      onClick={() => { setPiBrowseMonth(""); setPiBrowsePage(1); }}>All months</button>
+                  </div>
+                  {piMonthsError ? (
+                    <div className="alert alert-error" role="alert">{piMonthsError}
+                      <button type="button" className="btn btn-sm btn-ghost"
+                        onClick={() => setPiMonthsRetry((value) => value + 1)}>Retry months</button>
+                    </div>
+                  ) : piMonths === null ? <p role="status">Loading months…</p> : null}
+                  <div className="va-month-grid">
+                    {MONTH_NAMES.map((name, index) => {
+                      const month = `${String(piBrowseYear).padStart(4, "0")}-${String(index + 1).padStart(2, "0")}`;
+                      const counts = piMonths?.find((item) => item.month === month);
+                      const piCount = counts?.piCount ?? 0;
+                      return <button key={month} type="button" disabled={piMonths === null}
+                        className={piCount ? "has-pis" : "is-empty"} aria-pressed={piBrowseMonth === month}
+                        aria-label={`${name} ${piBrowseYear}`}
+                        title={piMonths === null ? "Counts unavailable" : `${piCount} PIs · ${counts?.vehicleCount ?? 0} vehicles`}
+                        onClick={() => { setPiBrowseMonth(month); setPiBrowsePage(1); }}>
+                        {name}{piCount > 0 ? <small>{piCount}</small> : null}
+                      </button>;
+                    })}
+                  </div>
+                  <small>PI order month · vehicle counts in browse country</small>
+                </details>
               </div>
               {piListError ? (
                 <div className="alert alert-error">
@@ -1200,7 +1242,7 @@ export function OrderGeniusVehicleAllocationPage() {
                 </div>
               ) : null}
             </div>
-            <a className="va-selection-link" href="/product/order-genius">Go to selection / 前往选品创建 PI</a>
+            <a className="va-selection-link" href="/product/order-genius">Create PI in Order Genius</a>
             <div className="va-pi-list">
               {piHeaders.map((pi) => (
                 <button
@@ -1470,6 +1512,16 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-form{display:grid;gap:10px;margin-top:12px}
         .va-form-row{display:grid;gap:4px}
         .va-form-row label{font-size:12px;font-weight:700;color:#475467}
+        .va-month-browser{border:1px solid #cfd6df;border-radius:6px;padding:9px 10px;min-width:0}
+        .va-month-browser summary{cursor:pointer;font-weight:600}
+        .va-month-controls{display:flex;gap:8px;margin:10px 0;align-items:center}
+        .va-month-controls input{width:90px}
+        .va-month-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin-bottom:8px}
+        .va-month-grid button{display:flex;align-items:center;justify-content:center;gap:4px;border:1px solid transparent;border-radius:5px;padding:8px 2px;background:#f8fafc;color:#334155;cursor:pointer;min-width:0}
+        .va-month-grid button.is-empty{color:#64748b;background:transparent}
+        .va-month-grid button[aria-pressed="true"]{border-color:#2563eb;background:#eff6ff;color:#1d4ed8}
+        .va-month-grid button:disabled{color:#94a3b8;cursor:wait}
+        .va-month-grid small{font-size:10px;background:#e2e8f0;border-radius:8px;padding:1px 4px}
         .va-pi-list{display:grid;gap:8px;margin-top:12px;max-height:280px;overflow:auto}
         .va-pi-list button{background:#fff;color:#111827;border-color:#d8dee6;text-align:left;display:grid;gap:2px}
         .va-pi-list button.is-active{border-color:#1c69d4;background:#eef5ff}

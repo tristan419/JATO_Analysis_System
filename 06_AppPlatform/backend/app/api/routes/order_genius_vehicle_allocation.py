@@ -311,6 +311,18 @@ def _vehicle_filters(
     }
 
 
+@router.get("/pi-months")
+def list_pi_months(
+    year: int = Query(ge=1, le=9999),
+    country: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    user: UserContext = Depends(require_min_role("viewer")),
+) -> dict:
+    selected_country = _country(country)
+    _validate_optional_country(session, user, selected_country)
+    return vehicle_repo.pi_month_summary(session, year=year, country=selected_country)
+
+
 @router.get("/pi")
 def list_pi_orders(
     country: str | None = Query(default=None),

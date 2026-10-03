@@ -191,6 +191,7 @@ import type {
   PiOrderDetail,
   PiOrderFilters,
   PiOrderHeader,
+  PiMonthSummary,
   PiOrderLine,
   PiVehicleUnit,
   UpdateVehiclePayload,
@@ -5285,6 +5286,14 @@ export const api = {
       `/order-genius/import-quantities/${encodeURIComponent(importId)}/apply`,
       { method: "POST" },
     ),
+
+  getVehicleAllocationPiMonths: (year: number, country: string) => {
+    const qs = new URLSearchParams({ year: String(year) });
+    appendSearchParam(qs, "country", country);
+    return request<{ year: number; items: PiMonthSummary[] }>(
+      `/order-genius/vehicle-allocation/pi-months?${qs.toString()}`,
+    );
+  },
 
   getVehicleAllocationPis: (params: PiOrderFilters = {}) => {
     const qs = new URLSearchParams();

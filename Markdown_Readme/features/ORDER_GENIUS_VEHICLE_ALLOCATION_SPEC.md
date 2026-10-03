@@ -1,4 +1,6 @@
-# Order Genius — PI Vehicle Allocation & Delivery Tracker 最终规格
+# Order Genius — PI Vehicle Allocation & Delivery Tracker 历史基础规格
+
+> 历史基础规格，不再作为新开发的完整执行指令。当前唯一业务规则维护在交接文档的ORDER_GENIUS_GOAL_EXECUTE_2026-09-28.md 4.1：只有选品创建PI；分车不保留Create PI/Generate/Add line。2026-10-04本批只收口CBU导航入口、英文选品链接与独立月份浏览，旧创建建议及常驻明细布局已失效。字段/接口历史定义保留，不据此恢复旧入口。
 
 > 目标：在现有 Order Genius 选品/PI 导出能力后，新增一个“PI 车辆池 + 虚拟车号 + VIN 绑定 + 物流交付查询”页面。
 >

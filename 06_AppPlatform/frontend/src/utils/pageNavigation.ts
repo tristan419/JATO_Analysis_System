@@ -297,7 +297,6 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
         title: "Product Toolkit / 产品工具包",
         items: [
           { label: "Order Genius", sublabel: "订单矩阵", to: "/product/order-genius", minRole: "order_filler" },
-          { label: "CBU Finance", sublabel: "CBU 明细", to: "/product/order-genius/cbu", minRole: "editor" },
           { label: "Vehicle Allocation", sublabel: "PI 分车", to: "/product/order-genius/vehicle-allocation", minRole: "order_filler" },
           { label: "COC Match", sublabel: "COC 比对", to: "/product/coc-match", minRole: "editor" },
         ],

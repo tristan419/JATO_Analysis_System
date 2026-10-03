@@ -1277,6 +1277,53 @@ def _vin_rows(material, count, offset=0):
     return [{"sourceRow": index + 2, "bom": material, "vin": f"LVTDB21B9RD{index + offset:06d}"} for index in range(count)]
 
 
+def test_pi_month_summary_counts_before_pagination_and_keeps_empty_pis(vehicle_db, monkeypatch):
+    # This fixture is SQLite. Verify the shared production JSONB predicate separately;
+    # the test below exercises aggregation with direct-country headers, not JSONB emulation.
+    from sqlalchemy.dialects.postgresql import dialect
+    predicate = vehicle_repo._header_country_filter("CH")
+    compiled = predicate.compile(dialect=dialect())
+    assert "market_country_codes @>" in str(compiled)
+    assert ["CH"] in compiled.params.values()
+    monkeypatch.setattr(vehicle_repo, "_header_country_filter", lambda country: models.PiOrderHeader.country_code == country)
+    pi, cars = _vin_fill_pi(vehicle_db, materials=("BOM-A", "BOM-B"), quantity=3)
+    for car in cars[:2]:
+        car.country_code = "SE"
+    for _ in range(51):
+        vehicle_service.create_pi_header(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 9}, "tester")
+    vehicle_service.create_pi_header(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 10}, "tester")
+    vehicle_service.create_pi_header(vehicle_db, {"countryCode": "SE", "orderYear": 2026, "orderMonth": 9}, "tester")
+    vehicle_service.create_pi_header(vehicle_db, {"countryCode": "CH", "orderYear": 2025, "orderMonth": 9}, "tester")
+    vehicle_db.flush()
+    assert vehicle_repo.pi_month_summary(vehicle_db, 2026, "CH") == {"year": 2026, "items": [
+        {"month": "2026-09", "piCount": 52, "vehicleCount": 4},
+        {"month": "2026-10", "piCount": 1, "vehicleCount": 0},
+    ]}
+    assert vehicle_repo.pi_month_summary(vehicle_db, 2026)["items"][0] == {
+        "month": "2026-09", "piCount": 53, "vehicleCount": 6,
+    }
+    assert vehicle_repo.pi_month_summary(vehicle_db, 2024, "CH")["items"] == []
+    assert vehicle_repo.list_headers(vehicle_db, country="CH", month="2026-09", page_size=50)[1] == 52
+    assert vehicle_repo.get_header_by_code(vehicle_db, pi).order_month == "2026-09"
+
+
+def test_pi_month_route_validates_country_before_query(monkeypatch):
+    calls = []
+    def validate(session, name, role, country):
+        calls.append(country)
+        if country != "CH":
+            raise HTTPException(403, "Country access denied")
+    monkeypatch.setattr(vehicle_route, "validate_country_access", validate)
+    monkeypatch.setattr(vehicle_repo, "pi_month_summary", lambda session, **kw: kw)
+    user = SimpleNamespace(name="filler", role="order_filler")
+    assert vehicle_route.list_pi_months(year=2026, country="ch", session=object(), user=user) == {"year": 2026, "country": "CH"}
+    for country in ("SE", None):
+        with pytest.raises(HTTPException) as exc:
+            vehicle_route.list_pi_months(year=2026, country=country, session=object(), user=user)
+        assert exc.value.status_code == 403
+    assert calls == ["CH", "SE", ""]
+
+
 def test_clear_vins_preserves_slots_and_skips_already_cleared(vehicle_db):
     pi, cars = _vin_fill_pi(vehicle_db)
     rows = _vin_rows("BOM-A", 2)

@@ -63,6 +63,9 @@ function detail(): PiOrderDetail {
 beforeEach(() => {
   window.history.replaceState({}, "", "/product/order-genius/vehicle-allocation");
   vi.spyOn(api, "getVehicleAllocationPis").mockResolvedValue({ items: [detail().header], total: 1 });
+  vi.spyOn(api, "getVehicleAllocationPiMonths").mockImplementation(async (year) => ({ year,
+    items: [{ month: `${year}-09`, piCount: 60, vehicleCount: 450 }],
+  }));
   vi.spyOn(api, "getVehicleAllocationPi").mockImplementation(async () => detail());
   vi.spyOn(api, "getVehicleAllocationStatusFlow").mockResolvedValue({ countryCode: "CH", orderingAccountCode: "CH", source: "default", allocation: [], logistics: [] });
   vi.spyOn(api, "listVehicleAllocationVehicles").mockImplementation(async (filters) => ({
@@ -78,6 +81,53 @@ async function selectPi() {
   await screen.findByText("150 units / 台");
   await waitFor(() => expect(screen.getAllByRole("row").length).toBe(6));
 }
+
+async function chooseOctober() {
+  fireEvent.click(screen.getByText("All months", { selector: "summary" }));
+  fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2026" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Oct 2026" }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Oct 2026" }));
+}
+
+describe("PI month browsing", () => {
+  it("uses whole-year counts, preserves selected PI/year independence and can reset to all months", async () => {
+    await selectPi();
+    expect(screen.getByRole("link", { name: "Create PI in Order Genius" }).getAttribute("href")).toBe("/product/order-genius");
+    await chooseOctober();
+    expect(screen.getByRole("button", { name: "Sep 2026" }).getAttribute("title")).toBe("60 PIs · 450 vehicles");
+    expect(screen.getByRole("button", { name: "Sep 2026" }).textContent).toBe("Sep60");
+    expect(vi.mocked(api.getVehicleAllocationPis).mock.calls.at(-1)?.[0]?.month).toBe("2026-10");
+    fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2025" } });
+    expect(screen.getByText("2026-10", { selector: "summary" })).toBeTruthy();
+    await waitFor(() => expect(api.getVehicleAllocationPiMonths).toHaveBeenLastCalledWith(2025, "CH"));
+    expect(screen.getByText("150 units / 台")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "All months" }));
+    await waitFor(() => expect(vi.mocked(api.getVehicleAllocationPis).mock.calls.at(-1)?.[0]?.month).toBe(""));
+    expect(screen.getByText("All months", { selector: "summary" })).toBeTruthy();
+  });
+
+  it("shows retry instead of false zero counts when summary fails", async () => {
+    vi.mocked(api.getVehicleAllocationPiMonths).mockRejectedValueOnce(new Error("Network unavailable"));
+    render(<OrderGeniusVehicleAllocationPage />);
+    fireEvent.click(screen.getByText("All months", { selector: "summary" }));
+    await screen.findByRole("button", { name: "Retry months" });
+    expect(screen.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).getAttribute("title")).toBe("Counts unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Retry months" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).hasAttribute("disabled")).toBe(false));
+  });
+
+  it("ignores a stale annual response after changing the year", async () => {
+    let resolveOld: (value: { year: number; items: [] }) => void = () => {};
+    vi.mocked(api.getVehicleAllocationPiMonths).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    render(<OrderGeniusVehicleAllocationPage />);
+    fireEvent.click(screen.getByText("All months", { selector: "summary" }));
+    fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2025" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sep 2025" }).textContent).toBe("Sep60"));
+    resolveOld({ year: 2026, items: [] });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sep 2025" }).textContent).toBe("Sep60"));
+  });
+});
 
 describe("COC library lookup and downloads", () => {
   it("searches the whole PI only on request, filters results and downloads selected PDFs", async () => {
@@ -326,21 +376,21 @@ describe("PI allocation layout and scope", () => {
   it("confirms the whole PI deletion and removes stale scope without touching browse month", async () => {
     const remove = vi.spyOn(api, "deleteVehicleAllocationPi").mockResolvedValue({ pi_code: PI, deleted: true });
     await selectPi();
-    fireEvent.change(screen.getByLabelText("Browse Month"), { target: { value: "2026-10" } });
+    await chooseOctober();
     fireEvent.click(screen.getByRole("button", { name: "Delete PI" }));
     expect(screen.getByText(/Delete 150 units \+ VINs/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     await screen.findByText(/月需求保留，占用已释放/);
     expect(remove).toHaveBeenCalledWith(PI);
     expect(screen.queryByRole("button", { name: /PI lines/ })).toBeNull();
-    expect((screen.getByLabelText("Browse Month") as HTMLInputElement).value).toBe("2026-10");
+    expect(screen.getByText("2026-10", { selector: "summary" })).toBeTruthy();
   });
   it("has no duplicate creation or generic creation-import path", async () => {
     await selectPi();
     expect(screen.queryByRole("button", { name: /^Create PI$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Generate$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /Add Line/i })).toBeNull();
-    expect(screen.getByRole("link", { name: /前往选品/ }).getAttribute("href")).toBe("/product/order-genius");
+    expect(screen.getByRole("link", { name: "Create PI in Order Genius" }).getAttribute("href")).toBe("/product/order-genius");
     fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
     expect(screen.getByRole("button", { name: "Import File" }).hasAttribute("disabled")).toBe(false);
     expect(screen.getByLabelText(/Allow replacing existing VINs/).hasAttribute("checked")).toBe(false);
@@ -349,10 +399,10 @@ describe("PI allocation layout and scope", () => {
 
   it("keeps browsing independent and loads the whole PI instead of its first line", async () => {
     render(<OrderGeniusVehicleAllocationPage />);
-    fireEvent.change(screen.getByLabelText("Browse Month"), { target: { value: "2026-10" } });
+    await chooseOctober();
     fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${PI}`) }));
     await screen.findByText("150 units / 台");
-    expect((screen.getByLabelText("Browse Month") as HTMLInputElement).value).toBe("2026-10");
+    expect(screen.getByText("2026-10", { selector: "summary" })).toBeTruthy();
     expect(vi.mocked(api.listVehicleAllocationVehicles).mock.calls.at(-1)?.[0]?.piLineCode).toBeUndefined();
     expect(screen.getByText("130 no VIN / 待录")).toBeTruthy();
     expect(screen.getByRole("button", { name: /50 ready · 50 allocated/ })).toBeTruthy();

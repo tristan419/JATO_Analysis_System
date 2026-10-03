@@ -73,6 +73,12 @@ export interface PiOrderHeader {
   updatedAtUtc: string | null;
 }
 
+export interface PiMonthSummary {
+  month: string;
+  piCount: number;
+  vehicleCount: number;
+}
+
 export interface PiOrderLine {
   piLineId: string;
   piCode: string;

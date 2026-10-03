@@ -79,6 +79,12 @@ async function openOctober() {
 }
 
 describe("quantity save → PI readiness", () => {
+  it("exposes the existing CBU route in the BOM tools", async () => {
+    await openOctober();
+    fireEvent.click(screen.getByRole("tab", { name: /BOM Admin/i }));
+    expect(screen.getByRole("link", { name: "CBU Finance" }).getAttribute("href")).toBe("/product/order-genius/cbu");
+  });
+
   it("keeps common toggles outside More filters and applies them without reopening advanced filters", async () => {
     const update = vi.spyOn(api, "updateQuantityCell");
     await openOctober();
