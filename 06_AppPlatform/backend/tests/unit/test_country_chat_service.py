@@ -378,6 +378,32 @@ def test_snapshot_includes_market_scan_panels() -> None:
     assert snapshot["drilldown"]["fuelPanels"]
 
 
+def test_market_metric_scopes_distinguish_ytd_rankings_from_month_cross_tabs() -> None:
+    scopes = country_chat_service._build_market_metric_scopes(
+        {
+            "analysisMeta": {
+                "selectedYear": 2026,
+                "selectedMonth": None,
+                "defaultLatestYearApplied": True,
+            },
+        },
+        {"resolvedPeriod": "2026-03"},
+    )
+
+    assert scopes["powertrainMix"] == {
+        "periodType": "ytd",
+        "periodLabel": "2026 YTD（截至 2026-03）",
+        "periodStart": "2026-01",
+        "periodEnd": "2026-03",
+    }
+    assert scopes["crossTabs"] == {
+        "periodType": "month",
+        "periodLabel": "2026-03 当月",
+        "periodStart": "2026-03",
+        "periodEnd": "2026-03",
+    }
+
+
 @pytest.mark.usefixtures("_patch_base")
 def test_snapshot_includes_country_news_digest() -> None:
     snapshot = country_chat_service.build_country_snapshot("Germany")
