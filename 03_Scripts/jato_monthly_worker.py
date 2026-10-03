@@ -293,7 +293,11 @@ def _supervise_digest_upload(
             )
             while True:
                 polled = child.poll()
-                rss_bytes = _read_process_group_rss_bytes(child.pid) if worker_command is not None else _read_process_rss_bytes(child.pid)
+                rss_bytes = (
+                    _read_process_group_rss_bytes(child.pid)
+                    if worker_command is not None
+                    else _read_process_rss_bytes(child.pid)
+                )
                 if rss_bytes is not None:
                     peak_rss_bytes = max(peak_rss_bytes, rss_bytes)
                     if warning_bytes > 0 and rss_bytes >= warning_bytes:
@@ -329,9 +333,14 @@ def _supervise_digest_upload(
                     _terminate_child(child, process_group=worker_command is not None)
                     polled = child.poll()
                 if on_sample:
-                    on_sample({"status": "running" if polled is None else "finished", "workerPid": child.pid,
-                               "rssBytes": rss_bytes if polled is None else 0, "peakRssBytes": peak_rss_bytes if peak_rss_bytes else None,
-                               "rssWarningBytes": warning_bytes, "rssLimitBytes": limit_bytes})
+                    on_sample({
+                        "status": "running" if polled is None else "finished",
+                        "workerPid": child.pid,
+                        "rssBytes": rss_bytes if polled is None else 0,
+                        "peakRssBytes": peak_rss_bytes if peak_rss_bytes else None,
+                        "rssWarningBytes": warning_bytes,
+                        "rssLimitBytes": limit_bytes,
+                    })
                 if polled is not None:
                     return_code = child.wait()
                     if worker_command is not None and return_code != 0:
