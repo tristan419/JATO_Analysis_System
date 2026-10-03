@@ -1247,6 +1247,8 @@ class FixedReleaseController:
             lines["APP_COC_MATCH_JOB_ROOT"] = str(
                 CANDIDATE_RUNTIME_ROOT / "coc_match"
             )
+            lines["APP_COC_LIBRARY_ROOT"] = str(CANDIDATE_RUNTIME_ROOT / "coc_library")
+            lines["PATH"] = "/opt/jato/tools/coc/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         return "".join(f"{key}={value}\n" for key, value in lines.items())
 
     def _write_slot_env(self, slot: str, identity: ReleaseIdentity, *, active: bool) -> None:

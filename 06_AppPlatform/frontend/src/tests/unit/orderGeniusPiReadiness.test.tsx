@@ -74,7 +74,7 @@ async function openOctober() {
   if (!monthSelect) throw new Error("Missing month selector");
   fireEvent.change(monthSelect, { target: { value: "10" } });
   await waitFor(() => expect(screen.getByText("PI ready · 0 units available")).toBeTruthy());
-  fireEvent.click(screen.getByText("Expand rows"));
+  fireEvent.click(await screen.findByText("Expand rows"));
   await waitFor(() => expect(screen.getByText("Save 15")).toBeTruthy());
 }
 
