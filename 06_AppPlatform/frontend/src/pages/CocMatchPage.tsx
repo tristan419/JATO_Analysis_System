@@ -6,6 +6,8 @@ import {
   type CSSProperties,
 } from "react";
 import { api } from "../api/client";
+import { CocLibraryPanel } from "../components/CocLibraryPanel";
+import { useAuth } from "../contexts/AuthContext";
 import {
   EmptyState,
   FileDropzone,
@@ -247,6 +249,8 @@ function MatchMetaItem({ label, value }: { label: string; value: string | number
 }
 
 export function CocMatchPage() {
+  const { user } = useAuth();
+  const [matchSource, setMatchSource] = useState<"upload" | "library" | "both">("upload");
   const [activeMode, setActiveMode] = useState<CocWorkspaceMode>("fill");
   const [controlOpen, setControlOpen] = useState(true);
 
@@ -380,7 +384,7 @@ export function CocMatchPage() {
   }, [currentFillJob?.jobId]);
 
   const handleMatchUpload = async () => {
-    if (!matchExcelFile || !archiveFile) return;
+    if (!matchExcelFile || (matchSource !== "library" && !archiveFile)) return;
     if (!country.trim()) {
       setMatchError("请输入国家代码");
       return;
@@ -390,7 +394,7 @@ export function CocMatchPage() {
     setMatchError(null);
     setCurrentMatchJob(null);
     setMatchUploadDetail(
-      matchExcelFile.size >= 50 * 1024 * 1024 || archiveFile.size >= 50 * 1024 * 1024
+      matchExcelFile.size >= 50 * 1024 * 1024 || (archiveFile?.size ?? 0) >= 50 * 1024 * 1024
         ? "文件较大，使用分片上传。"
         : null,
     );
@@ -398,10 +402,11 @@ export function CocMatchPage() {
     try {
       const res = await api.cocMatchUploadAndCreateJob(
         matchExcelFile,
-        archiveFile,
+        matchSource === "library" ? null : archiveFile,
         country.toUpperCase(),
         fileExt,
         month || undefined,
+        matchSource !== "upload",
       );
       setCurrentMatchJob(res.item);
       setMatchPollId(res.item.jobId);
@@ -713,7 +718,7 @@ export function CocMatchPage() {
     }
   };
 
-  const matchReady = Boolean(matchExcelFile && archiveFile && country.trim());
+  const matchReady = Boolean(matchExcelFile && (matchSource === "library" || archiveFile) && country.trim());
   const fillReady = Boolean(fillExcelFile && fillPdfFile);
   const displayMatchJob = currentMatchJob ?? matchJobList[0] ?? null;
   const displayFillJob = currentFillJob ?? fillJobList[0] ?? null;
@@ -763,6 +768,11 @@ export function CocMatchPage() {
         </div>
       </header>
 
+      {user?.role === "admin" || user?.role === "editor" ? <details style={{ ...panelStyle, marginBottom: 16 }}>
+        <summary>COC online library / 共享 COC 在线库 · 管理来源包</summary>
+        <CocLibraryPanel />
+      </details> : null}
+
       {activeMode === "match" && matchError ? (
         <div className="alert alert-error" style={{ marginBottom: 14 }}>{matchError}</div>
       ) : null}
@@ -799,6 +809,12 @@ export function CocMatchPage() {
   function renderMatchControls() {
     return (
       <div style={controlPanelStyle}>
+        <label style={fieldStyle}><span>PDF source / PDF 来源</span><select value={matchSource} onChange={(event) => {
+          const value = event.target.value;
+          if (value === "upload" || value === "library" || value === "both") { setMatchSource(value); if (value !== "upload") setFileExt(".pdf"); }
+        }}>
+          <option value="upload">Uploaded ZIP/RAR / 上传文件包</option><option value="library">Online library / 仅在线库</option><option value="both">Upload + library / 上传＋在线库</option>
+        </select></label>
         <div style={dropGridStyle}>
           <FileDropzone
             accept=".xlsx,.xlsm,.xls"
@@ -808,14 +824,14 @@ export function CocMatchPage() {
             onFile={setMatchExcelFile}
             onClear={() => setMatchExcelFile(null)}
           />
-          <FileDropzone
+          {matchSource !== "library" ? <FileDropzone
             accept=".zip,.rar"
             label="ZIP/RAR 文件包"
             hint="拖拽 / 点击选择压缩包"
             file={archiveFile}
             onFile={setArchiveFile}
             onClear={() => setArchiveFile(null)}
-          />
+          /> : null}
         </div>
         <label style={fieldStyle}>
           <span>国家代码</span>
@@ -836,6 +852,7 @@ export function CocMatchPage() {
             <button
               key={ext}
               type="button"
+              disabled={matchSource !== "upload" && ext === ".xml"}
               className={`btn btn-sm ${fileExt === ext ? "btn-primary" : "btn-secondary"}`}
               onClick={() => setFileExt(ext)}
             >

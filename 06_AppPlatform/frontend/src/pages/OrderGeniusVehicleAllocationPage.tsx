@@ -13,6 +13,7 @@ import {
   type DeckControlTabItem,
 } from "../components/deckControls";
 import { useAuth } from "../contexts/AuthContext";
+import type { PiCocLookup } from "../types/cocLibrary";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import type {
   AllocationStatus,
@@ -253,13 +254,14 @@ function buildDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-type VehicleColumnKey = keyof PiVehicleUnit | "config";
+type VehicleColumnKey = keyof PiVehicleUnit | "config" | "cocPdf";
 const VEHICLE_COLUMNS: Array<{ key: VehicleColumnKey; label: string; optional?: boolean }> = [
   { key: "carCode", label: "Car Code" }, { key: "vin", label: "VIN" },
   { key: "piCode", label: "PI" }, { key: "countryCode", label: "Country" },
   { key: "materialCode", label: "Material" }, { key: "config", label: "Config" },
   { key: "exteriorColorName", label: "Exterior" }, { key: "interiorColorName", label: "Interior" },
   { key: "fobEur", label: "FOB (EUR)" },
+  { key: "cocPdf", label: "COC PDF", optional: true },
   { key: "allocationStatus", label: "Allocation" }, { key: "logisticsStatus", label: "Logistics" },
   { key: "shipName", label: "Ship" }, { key: "eta", label: "ETA" },
   { key: "readyForPickupDate", label: "Ready" },
@@ -276,6 +278,7 @@ const EMPTY_BULK_FORM: BulkVehicleForm = {
 };
 
 function vehicleCell(vehicle: PiVehicleUnit, key: VehicleColumnKey): ReactNode {
+  if (key === "cocPdf") return "—";
   if (key === "fobEur") return <span title={vehicle.fobEur == null ? "No confirmed market price snapshot; check PI details / 缺已确认的市场价格快照，请核对 PI 明细" : "Confirmed PI market price snapshot; not today's BOM price / 已确认的 PI 市场价格快照；不是当前 BOM 价格"}>{vehicle.fobEur == null ? "—" : vehicle.fobEur.toLocaleString("en-GB")}</span>;
   if (key === "config") return `${display(vehicle.modelName)} / ${display(vehicle.version)}`;
   if (key === "allocationStatus" || key === "logisticsStatus") {
@@ -302,9 +305,18 @@ export function OrderGeniusVehicleAllocationPage() {
   const [piBrowsePage, setPiBrowsePage] = useState(1);
   const [piListError, setPiListError] = useState<string | null>(null);
   const [selectedPi, setSelectedPi] = useState<PiOrderDetail | null>(null);
+  const [cocLookup, setCocLookup] = useState<{ piCode: string; result: PiCocLookup } | null>(null);
+  const [cocBusy, setCocBusy] = useState(false);
+  const [cocError, setCocError] = useState("");
+  const [cocDownloadConfirm, setCocDownloadConfirm] = useState<{ piCode: string; request: number; codes: string[]; missing: number; awaiting: number } | null>(null);
+  const [cocFilter, setCocFilter] = useState<"all" | "available" | "missing" | "awaiting_vin">("all");
+  const cocRequest = useRef(0);
+  const cocResult = cocLookup?.piCode === selectedPi?.header.piCode ? cocLookup?.result : null;
+  useEffect(() => { cocRequest.current += 1; setCocLookup(null); setCocError(""); setCocDownloadConfirm(null); setCocFilter("all"); }, [selectedPi]);
   const [deleteConfirmPi, setDeleteConfirmPi] = useState<string | null>(null);
   // Multi-select state
   const [selectedCarCodes, setSelectedCarCodes] = useState<Set<string>>(new Set());
+  useEffect(() => { setCocDownloadConfirm(null); }, [selectedCarCodes]);
   const [selectedLineCode, setSelectedLineCode] = useState<string | null>(null);
   const [selectedVehicle, setSelectedVehicle] = useState<PiVehicleUnit | null>(null);
   const [editForm, setEditForm] = useState<EditableVehicleForm | null>(null);
@@ -709,6 +721,48 @@ export function OrderGeniusVehicleAllocationPage() {
     }
   }
 
+  async function searchCocLibrary(): Promise<void> {
+    if (!selectedPi || cocBusy) return;
+    const request = cocRequest.current;
+    const piCode = selectedPi.header.piCode;
+    setCocBusy(true); setCocError(""); setCocDownloadConfirm(null);
+    try {
+      const result = await api.piCocLookup(piCode);
+      if (request === cocRequest.current) {
+        setCocLookup({ piCode, result });
+        setVisibleColumnKeys((old) => new Set([...old, "cocPdf"]));
+      }
+    } catch (reason) {
+      if (request === cocRequest.current) setCocError(actionableError(reason, "Could not search COC library. Retry, or ask admin to check library configuration / 查库未完成，请重试或联系管理员检查在线库配置。"));
+    } finally { setCocBusy(false); }
+  }
+
+  async function downloadCocs(codes: string[], confirmed = false): Promise<void> {
+    if (!selectedPi || cocBusy || scopeBusy || !codes.length || !cocResult) return;
+    const request = cocRequest.current;
+    const piCode = selectedPi.header.piCode;
+    const statuses = new Map(cocResult.items.map((item) => [item.carCode, item.status]));
+    const available = codes.filter((code) => statuses.get(code) === "available");
+    setCocError("");
+    if (!available.length) {
+      setCocError("No selected vehicles have a PDF. Search the library or record missing VINs first / 勾选车辆均无可下载 PDF，请重新查库或先补录 VIN。");
+      return;
+    }
+    if (!confirmed && available.length !== codes.length) {
+      const awaiting = codes.filter((code) => statuses.get(code) === "awaiting_vin").length;
+      setCocDownloadConfirm({ piCode, request, codes: available, awaiting, missing: codes.length - available.length - awaiting });
+      return;
+    }
+    setCocDownloadConfirm(null);
+    setCocBusy(true); setCocError("");
+    try {
+      const blob = await api.piCocDownload(piCode, available);
+      if (request === cocRequest.current) buildDownload(blob, `${piCode}-COC.zip`);
+    }
+    catch (reason) { if (request === cocRequest.current) setCocError(actionableError(reason, "Could not download; search library again and select available rows / 下载未完成，请重新查库并勾选有 PDF 的车辆。")); }
+    finally { setCocBusy(false); }
+  }
+
   function selectLineScope(lineCode: string | null): void {
     if (!selectedPi) {
       return;
@@ -876,6 +930,16 @@ export function OrderGeniusVehicleAllocationPage() {
           </div> : null}
         </div>
       )}
+      {cocError ? <div className="va-message is-error" role="alert">{cocError}
+        <div className="va-button-row"><button type="button" disabled={cocBusy || scopeBusy} onClick={() => void searchCocLibrary()}>Retry / 重试</button>
+          {user?.role === "admin" || user?.role === "editor" ? <a href="/product/coc-match">Open COC workbench / 打开 COC 工作台</a> : null}
+        </div></div> : null}
+      {cocDownloadConfirm ? <div className="va-message is-notice" role="alert">
+        Download {cocDownloadConfirm.codes.length} available PDFs only? Missing PDF {cocDownloadConfirm.missing} · Awaiting VIN {cocDownloadConfirm.awaiting} / 仅下载 {cocDownloadConfirm.codes.length} 份可用 PDF？缺 PDF {cocDownloadConfirm.missing} · 待录 VIN {cocDownloadConfirm.awaiting}。不会把不完整下载标成整批。
+        <div className="va-button-row"><button type="button" disabled={cocBusy || scopeBusy} onClick={() => {
+          if (cocDownloadConfirm.request === cocRequest.current && cocDownloadConfirm.piCode === selectedPi?.header.piCode) void downloadCocs(cocDownloadConfirm.codes, true);
+        }}>Confirm available only / 确认仅下载可用</button><button type="button" onClick={() => setCocDownloadConfirm(null)}>Cancel / 取消</button></div>
+      </div> : null}
 
       <DeckFloatingDrawer
         showTrigger={false}
@@ -899,6 +963,23 @@ export function OrderGeniusVehicleAllocationPage() {
         <div className="va-tool-tab-body">
           {activeToolTab === "import" ? (
             <>
+              <section className="va-tool-card">
+                <strong>COC online library / 共享在线库</strong>
+                <p>Search whole PI by VIN; no changes to VINs or orders / 按 VIN 查整批 PI，不修改 VIN 或订单。</p>
+                <button type="button" disabled={!selectedPi || cocBusy || scopeBusy} onClick={() => void searchCocLibrary()}>{cocBusy ? "Working / 处理中…" : "Search library / 在库里查找"}</button>
+                <button type="button" disabled={!cocResult || cocBusy || !selectedCarCodes.size} onClick={() => void downloadCocs([...selectedCarCodes])}>Download selected COCs / 下载勾选 COC</button>
+                {cocResult ? <>
+                  <p role="status">COC PDF {cocResult.available}/{cocResult.total} · Awaiting VIN / 待录 VIN {cocResult.awaitingVin} · Missing PDF / 缺 PDF {cocResult.missing}</p>
+                  <label>COC results / 查库结果 <select value={cocFilter} onChange={(event) => { const value = event.target.value; if (value === "all" || value === "available" || value === "missing" || value === "awaiting_vin") setCocFilter(value); }}>
+                    <option value="all">All / 全部</option><option value="available">PDF available / 有 PDF</option><option value="missing">Missing PDF / 缺 PDF</option><option value="awaiting_vin">Awaiting VIN / 待录 VIN</option>
+                  </select></label>
+                  <div style={{ maxHeight: 220, overflow: "auto" }}>
+                    {cocResult.items.filter((item) => cocFilter === "all" || item.status === cocFilter).map((item) => <div key={item.carCode}>
+                      <button type="button" onClick={() => { setFilters({ piCode: selectedPi?.header.piCode, carCode: item.carCode, page: 1, pageSize }); setToolDrawerOpen(false); }}>{item.carCode}</button> · {item.vin || "Awaiting VIN / 待录 VIN"} · {item.status === "available" ? "PDF available / 有 PDF" : item.status === "missing" ? "Missing PDF / 缺 PDF" : "—"}
+                    </div>)}
+                  </div>
+                </> : null}
+              </section>
               <section className="va-tool-card">
                 <strong>BOM + VIN file import / 物料号与 VIN 文件导入</strong>
                 <p>{selectedPi ? `Whole PI: ${selectedPi.header.piCode} / 匹配整批 PI，不受所选明细或车辆页码限制。` : "Select a PI first / 请先选择 PI"}</p>
@@ -1217,6 +1298,7 @@ export function OrderGeniusVehicleAllocationPage() {
                 </div>
                 <div className="va-pi-metrics">
                   <span>{vinPasteScopeVehicles.length} units / 台</span>
+                  <button type="button" onClick={() => openPiTool("import")}>{cocResult ? `COC PDF ${cocResult.available}/${cocResult.total} · 待录 VIN ${cocResult.awaitingVin} · 缺 PDF ${cocResult.missing}` : "COC library / 在线库"}</button>
                   <span>{tableSummary.vinMissing} no VIN / 待录</span>
                   <button type="button" className="btn-secondary" onClick={() => openPiTool("status")}>
                     Status / 状态 · {tableSummary.ready} ready · {tableSummary.allocated} allocated
@@ -1288,7 +1370,10 @@ export function OrderGeniusVehicleAllocationPage() {
                           style={{ margin: 0 }} />
                       </td>
                       {visibleColumns.map((column) => (
-                        <td key={column.key} onClick={() => selectVehicle(vehicle)}>{vehicleCell(vehicle, column.key)}</td>
+                        <td key={column.key} onClick={() => selectVehicle(vehicle)}>{column.key === "cocPdf" ? (() => {
+                          const status = cocResult?.items.find((item) => item.carCode === vehicle.carCode)?.status;
+                          return status === "available" ? <button type="button" disabled={cocBusy} onClick={(event) => { event.stopPropagation(); void downloadCocs([vehicle.carCode]); }}>PDF ↓</button> : status === "missing" ? "Missing / 缺 PDF" : status === "awaiting_vin" ? "Awaiting VIN / 待录" : "Search library / 查库";
+                        })() : vehicleCell(vehicle, column.key)}</td>
                       ))}
                     </tr>
                   );})}

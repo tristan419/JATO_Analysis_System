@@ -10,12 +10,14 @@ import sqlite3
 import shutil
 import subprocess
 import threading
+import tempfile
 import uuid
 import zipfile
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from fastapi import HTTPException, UploadFile
 from upload_toolkit.file_utils import allowed_extension
@@ -308,13 +310,140 @@ def read_excel_rows(excel_path: Path) -> list[dict[str, str]]:
 
 # ── Archive → file set ─────────────────────────────────────────────
 
+class CocArchiveMember(TypedDict):
+    memberPath: list[str]
+    stem: str
+
+
+def _is_archive_sidecar(member_name: str) -> bool:
+    parts = member_name.replace("\\", "/").split("/")
+    return any(part == "__MACOSX" or part.startswith("._") for part in parts)
+
+
+def _rar_member_listing(archive_path: Path, tool: str) -> list[tuple[str, int]]:
+    try:
+        result = subprocess.run(
+            [tool, "l", "-slt", "-ba", str(archive_path)],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("RAR tool failed/timed out: retry / RAR 工具失败或超时，请重试") from exc
+    if result.returncode != 0:
+        raise ValueError("Cannot read RAR: check corruption/password / 无法读取 RAR，请检查损坏或密码")
+    members: list[tuple[str, int]] = []
+    for block in result.stdout.replace("\r\n", "\n").split("\n\n"):
+        fields = dict(line.split(" = ", 1) for line in block.splitlines() if " = " in line)
+        name = fields.get("Path")
+        if not name or fields.get("Folder") == "+" or fields.get("Attributes", "").startswith("D"):
+            continue
+        try:
+            size = int(fields["Size"])
+        except (KeyError, ValueError):
+            raise ValueError("Unreadable RAR member size / 无法读取 RAR 文件大小，请重新打包") from None
+        members.append((name, size))
+    return members
+
+
+def list_archive_members(
+    archive_path: Path,
+    extensions: list[str] | None = None,
+    *,
+    max_depth: int = 4,
+    max_members: int = 20_000,
+    max_nested_bytes: int = 512 * 1024 * 1024,
+    on_archive: Callable[[Path, list[CocArchiveMember]], None] | None = None,
+    temporary_root: Path | None = None,
+) -> list[CocArchiveMember]:
+    """Keep each matching member's archive path chain; never read PDF contents.
+
+    Directory depth is unrestricted. max_depth counts embedded archives only.
+    Only embedded archives are materialized, inside an automatically cleaned temp.
+    """
+    extensions = extensions if extensions is not None else [".pdf"]
+    if max_depth < 0 or max_members < 1 or max_nested_bytes < 0:
+        raise ValueError("Invalid archive scan limits / 压缩包扫描限额无效")
+    members: list[CocArchiveMember] = []
+    seen_members = 0
+    nested_bytes = 0
+    rar_tool = shutil.which("7zz") or shutil.which("7z")
+
+    with tempfile.TemporaryDirectory(prefix="jato-coc-archive-", dir=temporary_root) as temporary:
+        def scan(path: Path, chain: list[str], depth: int) -> None:
+            nonlocal seen_members, nested_bytes
+            local_members: list[CocArchiveMember] = []
+
+            def handle(name: str, size: int, extract_child: Callable[[Path], None]) -> None:
+                nonlocal seen_members, nested_bytes
+                seen_members += 1
+                if seen_members > max_members:
+                    raise ValueError("Archive scan limit reached: split the upload / 压缩包文件数超限，请拆分上传")
+                if _is_archive_sidecar(name) or name.endswith("/"):
+                    return
+                member_chain = [*chain, name.replace("\\", "/")]
+                suffix = Path(name).suffix.lower()
+                if suffix in ALLOWED_ARCHIVE_EXTENSIONS:
+                    if depth >= max_depth:
+                        raise ValueError("Nested archive depth exceeded: unpack one level / 子压缩包嵌套超限，请先展开一层")
+                    if size < 0 or nested_bytes + size > max_nested_bytes:
+                        raise ValueError("Nested archives too large: split the upload / 子压缩包大小超限，请拆分上传")
+                    child = Path(temporary) / f"{seen_members}{suffix}"
+                    try:
+                        extract_child(child)
+                        if child.stat().st_size != size:
+                            raise ValueError("Incomplete nested archive: upload again / 子压缩包读取不完整，请重新上传")
+                        nested_bytes += size
+                        scan(child, member_chain, depth + 1)
+                    finally:
+                        child.unlink(missing_ok=True)
+                else:
+                    stem = _archive_member_stem(name, extensions)
+                    if stem:
+                        member = {"memberPath": member_chain, "stem": stem}
+                        members.append(member)
+                        local_members.append(member)
+
+            if path.suffix.lower() == ".zip":
+                try:
+                    with zipfile.ZipFile(path) as archive:
+                        for info in archive.infolist():
+                            def extract_zip_child(target: Path, info=info) -> None:
+                                with archive.open(info) as src, target.open("wb") as dst:
+                                    shutil.copyfileobj(src, dst, length=1024 * 1024)
+                            handle(info.filename, info.file_size, extract_zip_child)
+                except (zipfile.BadZipFile, RuntimeError) as exc:
+                    raise ValueError("Cannot read ZIP: check corruption/password / 无法读取 ZIP，请检查损坏或密码") from exc
+            elif path.suffix.lower() == ".rar":
+                if not rar_tool:
+                    raise ValueError("RAR extraction unavailable: upload ZIP instead / RAR 解包不可用，请改传 ZIP")
+                for name, size in _rar_member_listing(path, rar_tool):
+                    def extract_rar_child(target: Path, name: str = name) -> None:
+                        try:
+                            with target.open("wb") as dst:
+                                result = subprocess.run(
+                                    [rar_tool, "x", "-so", "-y", "-spd", str(path), "--", name],
+                                    stdout=dst, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=60,
+                                )
+                        except (OSError, subprocess.TimeoutExpired) as exc:
+                            raise ValueError("RAR extraction failed/timed out: retry / RAR 子包读取失败或超时，请重试") from exc
+                        if result.returncode != 0:
+                            raise ValueError("Cannot extract nested RAR member / 无法读取 RAR 子包，请重新打包")
+                    handle(name, size, extract_rar_child)
+            else:
+                raise ValueError("Unsupported archive: use ZIP/RAR / 压缩包格式不支持，请使用 ZIP/RAR")
+            if on_archive and local_members:
+                on_archive(path, local_members)
+
+        scan(archive_path, [], 0)
+    return members
+
+
 def list_archive_files(
     archive_path: Path,
     extensions: list[str] | None = None,
 ) -> set[str]:
     """List files in RAR or ZIP archive. Returns set of basenames without extension.
 
-    Auto-detects archive type by file extension.
+    Auto-detects archive type and includes embedded ZIP/RAR members.
     """
     if extensions is None:
         extensions = [".pdf"]
@@ -328,18 +457,22 @@ def list_archive_files(
 
 
 def _list_rar_files(rar_path: Path, extensions: list[str]) -> set[str]:
+    if shutil.which("7z") or shutil.which("7zz"):
+        return {member["stem"] for member in list_archive_members(rar_path, extensions)}
     for command in (
         ["lsar", str(rar_path)],
         ["bsdtar", "-tf", str(rar_path)],
         ["unar", "-l", str(rar_path)],
         ["unrar", "lb", str(rar_path)],
-        ["7z", "l", "-ba", str(rar_path)],
-        ["7zz", "l", "-ba", str(rar_path)],
     ):
         listed = _list_archive_files_with_command(command, extensions)
         if listed is not None:
+            if _list_archive_files_with_command(command, list(ALLOWED_ARCHIVE_EXTENSIONS)):
+                raise ValueError("Nested RAR needs 7z: upload unpacked ZIP / RAR 内含子包但解包不可用，请展开后改传 ZIP")
             return listed
 
+    if _list_rar_files_python(rar_path, list(ALLOWED_ARCHIVE_EXTENSIONS)):
+        raise ValueError("Nested RAR needs 7z: upload unpacked ZIP / RAR 内含子包但解包不可用，请展开后改传 ZIP")
     listed = _list_rar_files_python(rar_path, extensions)
     if listed:
         return listed
@@ -377,19 +510,13 @@ def _list_archive_files_with_command(
 
 
 def _list_zip_files(zip_path: Path, extensions: list[str]) -> set[str]:
-    names: set[str] = set()
-    with zipfile.ZipFile(zip_path) as zf:
-        for member in zf.namelist():
-            stem = _archive_member_stem(member, extensions)
-            if stem:
-                names.add(stem)
-    return names
+    return {member["stem"] for member in list_archive_members(zip_path, extensions)}
 
 
 def _archive_member_stem(member_name: str, extensions: list[str]) -> str | None:
     """Return archive member basename without suffix when it matches extensions."""
     normalized = member_name.strip().replace("\\", "/")
-    if not normalized or normalized.endswith("/"):
+    if not normalized or normalized.endswith("/") or _is_archive_sidecar(normalized):
         return None
     lower = normalized.lower()
     matched_ext = next((ext for ext in extensions if lower.endswith(ext.lower())), None)
@@ -1104,6 +1231,11 @@ class CocMatchJobRunner(BaseJobRunner):
             self._set_phase("listing_archive")
             self.log(f"Listing archive (ext={self.file_ext})...")
             file_set = list_archive_files(self.archive_path, extensions)
+            if state.get("useLibrary"):
+                from app.services.coc_library_service import lookup_vins
+                # Only registry VINs are relevant; other shared-library VINs
+                # must not become hundreds of thousands of archive-only rows.
+                file_set.update(lookup_vins([r["chassis"] for r in rows]))
             self.log(f"  {len(file_set)} unique filenames")
             input_warning = None
             if not file_set:
@@ -1195,11 +1327,12 @@ def _normalize_filename(filename: str) -> str:
 def create_coc_match_job(
     *,
     excel_file: UploadFile,
-    archive_file: UploadFile,
+    archive_file: UploadFile | None,
     country: str,
     month: str | None,
     file_ext: str,
     triggered_by: str,
+    use_library: bool = False,
 ) -> dict[str, Any]:
     """Create a COC match job. Validates files, saves them, queues background job."""
     country = country.strip().upper()
@@ -1216,7 +1349,11 @@ def create_coc_match_job(
         raise HTTPException(status_code=400, detail="文件类型仅支持 .pdf 或 .xml。")
 
     excel_name = _normalize_filename(excel_file.filename or "upload.xlsx")
-    archive_name = _normalize_filename(archive_file.filename or "archive.zip")
+    if archive_file is None and not use_library:
+        raise HTTPException(400, "Upload an archive or select library / 请上传压缩包或选择在线库")
+    if use_library and file_ext != ".pdf":
+        raise HTTPException(400, "Online library supports PDF / 在线库只支持PDF")
+    archive_name = _normalize_filename(archive_file.filename or "archive.zip") if archive_file else "library.zip"
 
     if not allowed_extension(excel_name, allowed=ALLOWED_EXCEL_EXTENSIONS):
         raise HTTPException(
@@ -1240,14 +1377,19 @@ def create_coc_match_job(
 
     # Save uploaded files
     excel_bytes = excel_file.file.read()
-    archive_bytes = archive_file.file.read()
     excel_dst.write_bytes(excel_bytes)
-    archive_dst.write_bytes(archive_bytes)
+    if archive_file:
+        with archive_dst.open("wb") as handle:
+            shutil.copyfileobj(archive_file.file, handle, length=1024 * 1024)
+    else:
+        with zipfile.ZipFile(archive_dst, "w"):
+            pass
 
     # Initialize job state
     initial_state: dict[str, Any] = {
         "jobId": job_id,
         "jobType": "match",
+        "useLibrary": use_library,
         "status": "queued",
         "phase": "pending",
         "country": country,
@@ -1348,7 +1490,7 @@ def initiate_coc_match_upload(
             filename=filename,
             size_bytes=size_bytes,
         )
-        if existing:
+        if existing and existing.get("triggeredBy") == triggered_by:
             return existing
 
     return _toolkit_create(
@@ -1408,6 +1550,7 @@ def create_coc_match_job_from_upload(
     month: str | None,
     file_ext: str,
     triggered_by: str,
+    use_library: bool = False,
 ) -> dict[str, Any]:
     """Create a COC match job from two completed chunked uploads."""
     country = country.strip().upper()
@@ -1424,7 +1567,11 @@ def create_coc_match_job_from_upload(
         raise HTTPException(status_code=400, detail="文件类型仅支持 .pdf 或 .xml。")
 
     excel_path = _get_assembled_path(excel_upload_id)
-    archive_path = _get_assembled_path(archive_upload_id)
+    archive_path = _get_assembled_path(archive_upload_id) if archive_upload_id else None
+    if archive_path is None and not use_library:
+        raise HTTPException(400, "Upload an archive or select library / 请上传压缩包或选择在线库")
+    if use_library and file_ext != ".pdf":
+        raise HTTPException(400, "Online library supports PDF / 在线库只支持PDF")
 
     job_id = f"coc-match-{uuid.uuid4().hex[:8]}"
     state_dir = COC_MATCH_JOB_ROOT / job_id
@@ -1432,16 +1579,21 @@ def create_coc_match_job_from_upload(
 
     # Copy assembled files into job directory
     excel_name = _normalize_filename(excel_filename)
-    archive_name = _normalize_filename(archive_filename)
+    archive_name = _normalize_filename(archive_filename) if archive_path else "library.zip"
     excel_dst = state_dir / f"excel-{excel_name}"
     archive_dst = state_dir / f"archive-{archive_name}"
-    excel_dst.write_bytes(excel_path.read_bytes())
-    archive_dst.write_bytes(archive_path.read_bytes())
+    shutil.copyfile(excel_path, excel_dst)
+    if archive_path:
+        shutil.copyfile(archive_path, archive_dst)
+    else:
+        with zipfile.ZipFile(archive_dst, "w"):
+            pass
 
     # Initialize job state
     initial_state: dict[str, Any] = {
         "jobId": job_id,
         "jobType": "match",
+        "useLibrary": use_library,
         "status": "queued",
         "phase": "pending",
         "country": country,
@@ -1564,4 +1716,5 @@ def retry_failed_coc_match_job(
         month=str(source_state.get("month", "")),
         file_ext=str(source_state.get("fileExt", ".pdf")),
         triggered_by=triggered_by,
+        use_library=bool(source_state.get("useLibrary")),
     )

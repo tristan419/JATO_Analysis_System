@@ -1,9 +1,27 @@
+import io
+import subprocess
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from upload_toolkit.job_engine import load_job_state, persist_job_state, state_path
+
+
+def test_same_name_size_new_selection_and_owner_scoped_resume(tmp_path, monkeypatch):
+    from app.services import coc_match_service as match
+    monkeypatch.setattr(match, "_COC_UPLOAD_SESSION_ROOT", tmp_path / "uploads")
+    old = match.initiate_coc_match_upload(filename="same.zip", size_bytes=3, resume_key="legacy", triggered_by="admin")
+    match.upload_coc_match_chunk(old["uploadId"], 1, b"old")
+    match.complete_coc_match_upload(old["uploadId"])
+    fresh = match.initiate_coc_match_upload(filename="same.zip", size_bytes=3, triggered_by="admin")
+    match.upload_coc_match_chunk(fresh["uploadId"], 1, b"new")
+    match.complete_coc_match_upload(fresh["uploadId"])
+    assert fresh["uploadId"] != old["uploadId"]
+    assert match._get_assembled_path(fresh["uploadId"]).read_bytes() == b"new"
+    other = match.initiate_coc_match_upload(filename="same.zip", size_bytes=3, resume_key="legacy", triggered_by="editor")
+    assert other["uploadId"] != old["uploadId"] and other["triggeredBy"] == "editor"
 
 import app.services.coc_match_service as coc_match_service
 from app.services.coc_match_service import (
@@ -12,6 +30,7 @@ from app.services.coc_match_service import (
     classify_coc_difference,
     find_archive_only_files,
     list_archive_files,
+    list_archive_members,
     match_cocs,
     read_excel_rows,
     _list_rar_files_python,
@@ -287,3 +306,181 @@ def test_rar5_python_fallback_reads_sample_archive_when_available() -> None:
 
     assert "LVUGTB220TDE99425" in names
     assert len(names) >= 1
+
+
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, "w") as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    return content.getvalue()
+
+
+def test_archive_paths_keep_duplicates_and_ignore_sidecars_without_reading_pdfs(tmp_path, monkeypatch):
+    path = tmp_path / "photos.zip"
+    path.write_bytes(_zip_bytes({
+        "country/trim/A001.pdf": b"one",
+        "other/A001.PDF": b"two",
+        "__MACOSX/country/._A001.pdf": b"sidecar",
+        "nested/._B002.pdf": b"sidecar",
+        "ignore.xlsx": b"not a coc",
+    }))
+    monkeypatch.setattr(zipfile.ZipFile, "read", lambda *args: pytest.fail("PDF body must not be read"))
+    assert list_archive_members(path) == [
+        {"memberPath": ["country/trim/A001.pdf"], "stem": "A001"},
+        {"memberPath": ["other/A001.PDF"], "stem": "A001"},
+    ]
+    assert list_archive_files(path) == {"A001"}
+
+
+def test_nested_zip_works_in_existing_match_entry_and_retains_path_chain(tmp_path):
+    path = tmp_path / "outer.zip"
+    path.write_bytes(_zip_bytes({
+        "market/group/inner.ZIP": _zip_bytes({"deeper/level/A001.pdf": b"pdf"}),
+        "A002.pdf": b"pdf",
+    }))
+    assert list_archive_members(path)[0] == {
+        "memberPath": ["market/group/inner.ZIP", "deeper/level/A001.pdf"], "stem": "A001",
+    }
+    assert list_archive_files(path) == {"A001", "A002"}
+
+
+@pytest.mark.parametrize("limits, message", [
+    ({"max_depth": 0}, "嵌套超限"),
+    ({"max_members": 1}, "文件数超限"),
+    ({"max_nested_bytes": 1}, "大小超限"),
+])
+def test_nested_limits_fail_instead_of_returning_partial_missing(tmp_path, limits, message):
+    path = tmp_path / "outer.zip"
+    path.write_bytes(_zip_bytes({"A001.pdf": b"pdf", "inner.zip": _zip_bytes({"A002.pdf": b"pdf"})}))
+    with pytest.raises(ValueError, match=message):
+        list_archive_members(path, **limits)
+
+
+def test_nested_bytes_are_cumulative_and_directory_depth_is_not_archive_depth(tmp_path):
+    child = _zip_bytes({"a/b/c/d/e/f/g/A001.pdf": b"pdf"})
+    path = tmp_path / "outer.zip"
+    path.write_bytes(_zip_bytes({"one.zip": child, "two.zip": child}))
+    assert len(list_archive_members(path, max_depth=1, max_nested_bytes=len(child) * 2)) == 2
+    with pytest.raises(ValueError, match="大小超限"):
+        list_archive_members(path, max_nested_bytes=len(child) * 2 - 1)
+
+
+def test_failed_nested_scan_cleans_temporary_archives(tmp_path, monkeypatch):
+    real_temporary = coc_match_service.tempfile.TemporaryDirectory
+    monkeypatch.setattr(coc_match_service.tempfile, "TemporaryDirectory", lambda **kw: real_temporary(**{**kw, "dir": tmp_path}))
+    path = tmp_path / "outer.zip"
+    path.write_bytes(_zip_bytes({"../child.zip": b"not a zip"}))
+    with pytest.raises(ValueError, match="无法读取 ZIP"):
+        list_archive_members(path)
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_zip_inside_rar_inside_zip_uses_exact_member_and_never_reads_pdf(tmp_path, monkeypatch):
+    child = _zip_bytes({"A001.pdf": b"pdf"})
+    path = tmp_path / "outer.zip"
+    path.write_bytes(_zip_bytes({"market/inner.rar": b"rar"}))
+    monkeypatch.setattr(coc_match_service.shutil, "which", lambda name: "/usr/bin/7z" if name == "7z" else None)
+    monkeypatch.setattr(coc_match_service, "_rar_member_listing", lambda path, tool: [
+        ("COC/A002.pdf", 3), ("-group*/inner.zip", len(child)),
+    ])
+    calls = []
+    def extract(command, **kwargs):
+        calls.append(command)
+        assert command[-2:] == ["--", "-group*/inner.zip"]
+        assert "-spd" in command and kwargs["timeout"] == 60
+        kwargs["stdout"].write(child)
+        return SimpleNamespace(returncode=0, stdout=child)
+    monkeypatch.setattr(coc_match_service.subprocess, "run", extract)
+    result = list_archive_members(path)
+    assert result == [
+        {"memberPath": ["market/inner.rar", "COC/A002.pdf"], "stem": "A002"},
+        {"memberPath": ["market/inner.rar", "-group*/inner.zip", "A001.pdf"], "stem": "A001"},
+    ]
+    assert len(calls) == 1
+
+
+def test_nested_zip_is_streamed_not_read_into_memory(tmp_path, monkeypatch):
+    path = tmp_path / "outer.zip"
+    path.write_bytes(_zip_bytes({"inner.zip": _zip_bytes({"A001.pdf": b"pdf"})}))
+    def reject_read(*args, **kwargs):
+        raise AssertionError("Nested archives must stream through open(), not read()")
+    monkeypatch.setattr(zipfile.ZipFile, "read", reject_read)
+    assert list_archive_files(path) == {"A001"}
+
+
+def test_rar_technical_listing_preserves_names_and_skips_directories(monkeypatch, tmp_path):
+    monkeypatch.setattr(coc_match_service.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout="Path = folder\nSize = 0\nFolder = +\n\nPath = folder/A = 1.pdf\nSize = 123\nAttributes = A\n",
+    ))
+    assert coc_match_service._rar_member_listing(tmp_path / "input.rar", "7z") == [("folder/A = 1.pdf", 123)]
+
+
+def test_nested_rar_without_extractor_is_explicit_error(tmp_path, monkeypatch):
+    path = tmp_path / "outer.zip"
+    path.write_bytes(_zip_bytes({"inner.rar": b"rar"}))
+    monkeypatch.setattr(coc_match_service.shutil, "which", lambda name: None)
+    with pytest.raises(ValueError, match="改传 ZIP"):
+        list_archive_members(path)
+
+
+def test_legacy_rar_header_listing_cannot_silently_skip_embedded_archive(tmp_path, monkeypatch):
+    monkeypatch.setattr(coc_match_service.shutil, "which", lambda name: None)
+    monkeypatch.setattr(coc_match_service, "_list_rar_files_python", lambda path, extensions: {"inner"})
+    with pytest.raises(ValueError, match="RAR 内含子包"):
+        list_archive_files(tmp_path / "input.rar")
+
+
+def test_rar_command_failure_and_incomplete_nested_output_reject_scan(tmp_path, monkeypatch):
+    path = tmp_path / "input.rar"
+    path.write_bytes(b"rar")
+    monkeypatch.setattr(coc_match_service.shutil, "which", lambda name: "/usr/bin/7z")
+    monkeypatch.setattr(coc_match_service.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=2, stdout=""))
+    with pytest.raises(ValueError, match="无法读取 RAR"):
+        list_archive_members(path)
+    monkeypatch.setattr(coc_match_service, "_rar_member_listing", lambda path, tool: [("inner.zip", 100)])
+    monkeypatch.setattr(coc_match_service.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout=b"short"))
+    with pytest.raises(ValueError, match="不完整"):
+        list_archive_members(path)
+
+
+def test_rar_timeout_is_actionable_and_retryable(tmp_path, monkeypatch):
+    def timed_out(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, 60)
+    monkeypatch.setattr(coc_match_service.subprocess, "run", timed_out)
+    with pytest.raises(ValueError, match="超时") as failure:
+        coc_match_service._rar_member_listing(tmp_path / "input.rar", "7z")
+    result = _build_coc_match_failure_result({"phase": "listing_archive"}, failure.value)
+    assert result["retryable"] is True
+    assert result["actionLabel"] == "重试"
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_existing_job_reads_nested_archive_or_fails_without_partial_report(tmp_path, monkeypatch, broken):
+    job_id = "nested-job"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    monkeypatch.setattr(coc_match_service, "COC_MATCH_JOB_ROOT", tmp_path)
+    monkeypatch.setattr(coc_match_service, "COC_DB_PATH", tmp_path / "history.db")
+    monkeypatch.setattr(coc_match_service, "read_excel_rows", lambda path: [
+        {"chassis": "A001", "model": "test", "country": "CZ"},
+        {"chassis": "A002", "model": "test", "country": "CZ"},
+    ])
+    archive = job_dir / "input.zip"
+    archive.write_bytes(_zip_bytes({
+        "A001.pdf": b"pdf",
+        "inner.zip": b"broken" if broken else _zip_bytes({"deep/A002.pdf": b"pdf"}),
+    }))
+    persist_job_state(state_path(tmp_path, job_id), {"jobId": job_id, "status": "queued", "phase": "pending"})
+    runner = CocMatchJobRunner(job_id=job_id, state_dir=tmp_path, excel_path=job_dir / "registry",
+        archive_path=archive, country="CZ", month="2026-09", file_ext=".pdf", triggered_by="test")
+    if broken:
+        runner._run_wrapper()
+        state = load_job_state(state_path(tmp_path, job_id))
+        assert state["status"] == "failed" and state["failureResult"]["stage"] == "listing_archive"
+        assert not (job_dir / "report.html").exists()
+    else:
+        runner.run()
+        state = load_job_state(state_path(tmp_path, job_id))
+        assert state["status"] == "success" and state["matchedCount"] == 2 and state["missingCount"] == 0
+        assert (job_dir / "report.html").exists()

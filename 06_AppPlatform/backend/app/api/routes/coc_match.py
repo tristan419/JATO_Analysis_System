@@ -2,8 +2,11 @@
 
 import re
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
+from sqlalchemy.orm import Session
+from app.db.session import get_db_session
+from app.infra.order_genius_vehicle_repository import list_vehicles_by_vins
 
 from app.core.security import UserContext, require_min_role
 from app.services.coc_fill_service import (
@@ -31,6 +34,50 @@ from app.services.coc_match_service import (
 )
 
 router = APIRouter(prefix="/coc-match", tags=["coc-match"])
+
+
+@router.get("/library")
+def get_coc_library(_user: UserContext = Depends(require_min_role("editor"))) -> dict:
+    from app.services.coc_library_service import library_sources
+    return library_sources()
+
+
+@router.post("/library/sources")
+def post_library_source(payload: dict, user: UserContext = Depends(require_min_role("editor"))) -> dict:
+    from app.services.coc_library_service import import_library_upload
+    return import_library_upload(str(payload.get("uploadId", "")), user.name)
+
+
+@router.get("/library/sources/{source_id}/preview")
+def get_library_preview(source_id: str, session: Session = Depends(get_db_session), _user: UserContext = Depends(require_min_role("editor"))) -> dict:
+    from app.services.coc_library_service import preview_source
+    result = preview_source(source_id)
+    vehicles = list_vehicles_by_vins(session, {r["vin"] for r in result["items"] if r["status"] == "conflict"})
+    result["affectedPis"] = sorted({v.pi_code for v in vehicles})
+    result["affectedVehicles"] = len(vehicles)
+    return result
+
+
+@router.post("/library/sources/{source_id}/activate")
+def activate_library_source(source_id: str, payload: dict, _user: UserContext = Depends(require_min_role("editor"))) -> dict:
+    from app.services.coc_library_service import activate_source
+    return activate_source(source_id, str(payload.get("fingerprint", "")), payload.get("replaceVins", []))
+
+
+@router.post("/library/sources/{source_id}/delete-preview")
+def preview_library_delete(source_id: str, session: Session = Depends(get_db_session), _user: UserContext = Depends(require_min_role("editor"))) -> dict:
+    from app.services.coc_library_service import delete_source
+    result = delete_source(source_id)
+    vehicles = list_vehicles_by_vins(session, set(result["lostVins"]))
+    result["affectedPis"] = sorted({v.pi_code for v in vehicles})
+    result["affectedVehicles"] = len(vehicles)
+    return result
+
+
+@router.delete("/library/sources/{source_id}")
+def delete_library_source(source_id: str, payload: dict, _user: UserContext = Depends(require_min_role("editor"))) -> dict:
+    from app.services.coc_library_service import delete_source
+    return delete_source(source_id, str(payload.get("fingerprint", "")))
 
 
 def _parse_sheet_names(value: object) -> list[str] | None:
@@ -207,10 +254,11 @@ def get_coc_fill_workbook(
 @router.post("/jobs")
 async def post_coc_match_job(
     excel: UploadFile = File(...),
-    archive: UploadFile = File(...),
+    archive: UploadFile | None = File(default=None),
     country: str = Form(...),
     month: str | None = Form(default=None),
     file_ext: str = Form(default=".pdf"),
+    use_library: bool = Form(default=False),
     user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     """Create a COC match job with two uploaded files (Excel + ZIP/RAR).
@@ -225,6 +273,7 @@ async def post_coc_match_job(
             month=month,
             file_ext=file_ext,
             triggered_by=user.name,
+            use_library=use_library,
         )
     }
 
@@ -248,6 +297,7 @@ def post_coc_match_job_batch(
             month=str(payload.get("month")) if payload.get("month") else None,
             file_ext=str(payload.get("fileExt", ".pdf")),
             triggered_by=user.name,
+            use_library=bool(payload.get("useLibrary")),
         )
     }
 
@@ -297,6 +347,23 @@ def post_coc_upload_complete(
 ) -> dict[str, object]:
     """Mark a chunked upload session as complete and assemble the file."""
     return {"item": complete_coc_match_upload(upload_id)}
+
+
+@router.delete("/upload-sessions/{upload_id}")
+def delete_coc_upload_session(upload_id: str, user: UserContext = Depends(require_min_role("editor"))) -> dict:
+    """Discard only this account's interrupted transfer, not library sources."""
+    from app.services.coc_match_service import _COC_UPLOAD_SESSION_ROOT
+    from upload_toolkit.upload_engine import get_upload_session, cleanup_upload_session
+    if not re.fullmatch(r"upload-[a-f0-9]{12}", upload_id):
+        raise HTTPException(400, "Invalid upload / 上传编号无效")
+    try:
+        state = get_upload_session(_COC_UPLOAD_SESSION_ROOT, upload_id)
+    except FileNotFoundError:
+        return {"deleted": True}
+    if state.get("triggeredBy") != user.name:
+        raise HTTPException(403, "Upload belongs to another account / 上传不属于当前账号")
+    cleanup_upload_session(_COC_UPLOAD_SESSION_ROOT, upload_id)
+    return {"deleted": True}
 
 
 @router.get("/jobs")

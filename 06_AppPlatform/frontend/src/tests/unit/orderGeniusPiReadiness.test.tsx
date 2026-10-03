@@ -133,7 +133,7 @@ describe("quantity save → PI readiness", () => {
     const requestsBeforeRefresh = vi.mocked(api.getOrderGeniusMatrixBatch).mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(api.getOrderGeniusMatrixBatch).toHaveBeenCalledTimes(requestsBeforeRefresh + 1));
-    expect(groupKeys()).toEqual(expectedKeys);
+    await waitFor(() => expect(groupKeys()).toEqual(expectedKeys));
     expect(response.matrices.CH.rows.map((row) => row.powertrain)).toEqual(identities.map((identity) => identity.powertrain));
   });
 

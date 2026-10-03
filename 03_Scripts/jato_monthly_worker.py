@@ -9,11 +9,12 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +100,24 @@ def _cgroup_memory_snapshot() -> dict[str, Any] | None:
         return None
 
 
+def _read_process_group_rss_bytes(group_id: int) -> int | None:
+    """Include extraction children of an isolated archive worker on Linux."""
+    total = 0
+    observed = False
+    for entry in Path("/proc").glob("[0-9]*"):
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            if int(fields[2]) != group_id:
+                continue
+            rss = _read_process_rss_bytes(int(entry.name))
+            if rss is not None:
+                total += rss
+                observed = True
+        except (OSError, ValueError, IndexError):
+            continue
+    return total if observed else None
+
+
 def _cgroup_event_delta(
     before: dict[str, Any] | None,
     after: dict[str, Any] | None,
@@ -126,14 +145,26 @@ def _signal_name(return_code: int | None) -> str | None:
         return f"SIGNAL_{abs(return_code)}"
 
 
-def _terminate_child(process: subprocess.Popen[Any]) -> None:
-    if process.poll() is not None:
+def _terminate_child(process: subprocess.Popen[Any], *, process_group: bool = False) -> None:
+    if process.poll() is not None and not process_group:
         return
-    process.terminate()
+    if process_group:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    else:
+        process.terminate()
     deadline = time.monotonic() + DIGEST_TERMINATE_GRACE_SECONDS
     while process.poll() is None and time.monotonic() < deadline:
         time.sleep(0.1)
-    if process.poll() is None:
+    if process_group:
+        # The Python leader may exit before its archive extractor does.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    elif process.poll() is None:
         process.kill()
 
 
@@ -143,6 +174,10 @@ def _supervise_digest_upload(
     attempt_id: str,
     log_path: Path,
     receipt_path: Path,
+    worker_command: list[str] | None = None,
+    worker_env: dict[str, str] | None = None,
+    on_sample: Callable[[dict[str, Any]], None] | None = None,
+    rss_limit_bytes: int | None = None,
 ) -> int:
     """Wait for one detached digest and leave durable exit/resource evidence."""
     started_at = datetime.now(UTC)
@@ -161,6 +196,9 @@ def _supervise_digest_upload(
         )
         or 0
     )
+    if rss_limit_bytes is not None:
+        limit_bytes = rss_limit_bytes
+        warning_bytes = min(warning_bytes, int(limit_bytes * 0.8))
     consecutive_limit_samples = max(
         int(
             os.getenv(
@@ -196,7 +234,7 @@ def _supervise_digest_upload(
         requested_signal = signum
 
     previous_handlers: dict[int, Any] = {}
-    for signum in (signal.SIGTERM, signal.SIGINT):
+    for signum in ((signal.SIGTERM, signal.SIGINT) if threading.current_thread() is threading.main_thread() else ()):
         previous_handlers[signum] = signal.getsignal(signum)
         signal.signal(signum, request_stop)
 
@@ -219,9 +257,11 @@ def _supervise_digest_upload(
         child_env["NUMEXPR_NUM_THREADS"] = "1"
         child_env["MALLOC_ARENA_MAX"] = "2"
         child_env["PYTHONUNBUFFERED"] = "1"
+        if worker_env:
+            child_env.update(worker_env)
         with log_path.open("ab", buffering=0) as output:
             child = subprocess.Popen(
-                [
+                worker_command or [
                     sys.executable,
                     str(Path(__file__).resolve()),
                     "--digest-upload",
@@ -233,6 +273,7 @@ def _supervise_digest_upload(
                 stderr=subprocess.STDOUT,
                 env=child_env,
                 close_fds=True,
+                start_new_session=worker_command is not None,
             )
             _atomic_write_json(
                 receipt_path,
@@ -252,7 +293,11 @@ def _supervise_digest_upload(
             )
             while True:
                 polled = child.poll()
-                rss_bytes = _read_process_rss_bytes(child.pid)
+                rss_bytes = (
+                    _read_process_group_rss_bytes(child.pid)
+                    if worker_command is not None
+                    else _read_process_rss_bytes(child.pid)
+                )
                 if rss_bytes is not None:
                     peak_rss_bytes = max(peak_rss_bytes, rss_bytes)
                     if warning_bytes > 0 and rss_bytes >= warning_bytes:
@@ -271,7 +316,7 @@ def _supervise_digest_upload(
                     termination_reason = (
                         f"supervisor_{signal.Signals(requested_signal).name.lower()}"
                     )
-                    _terminate_child(child)
+                    _terminate_child(child, process_group=worker_command is not None)
                     polled = child.poll()
                 elif (
                     polled is None
@@ -285,17 +330,28 @@ def _supervise_digest_upload(
                         f"rss={rss_bytes} limit={limit_bytes} "
                         f"samples={over_limit_samples}",
                     )
-                    _terminate_child(child)
+                    _terminate_child(child, process_group=worker_command is not None)
                     polled = child.poll()
+                if on_sample:
+                    on_sample({
+                        "status": "running" if polled is None else "finished",
+                        "workerPid": child.pid,
+                        "rssBytes": rss_bytes if polled is None else 0,
+                        "peakRssBytes": peak_rss_bytes if peak_rss_bytes else None,
+                        "rssWarningBytes": warning_bytes,
+                        "rssLimitBytes": limit_bytes,
+                    })
                 if polled is not None:
                     return_code = child.wait()
+                    if worker_command is not None and return_code != 0:
+                        _terminate_child(child, process_group=True)
                     break
                 time.sleep(sample_seconds)
     except BaseException:
         supervisor_error = traceback.format_exc(limit=12)
         _append_attempt_log(log_path, supervisor_error.rstrip())
         if child is not None:
-            _terminate_child(child)
+            _terminate_child(child, process_group=worker_command is not None)
             return_code = child.wait()
     finally:
         for signum, previous in previous_handlers.items():
