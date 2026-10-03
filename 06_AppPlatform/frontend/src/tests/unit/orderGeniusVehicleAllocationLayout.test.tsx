@@ -111,6 +111,57 @@ describe("COC library lookup and downloads", () => {
     expect(screen.queryByText(/503/)).toBeNull();
     expect(screen.getByRole("link", { name: "Open COC workbench / 打开 COC 工作台" }).getAttribute("href")).toBe("/product/coc-match");
   });
+
+  it("confirms mixed selection and downloads available PDFs only", async () => {
+    vi.spyOn(api, "piCocLookup").mockResolvedValue({ total: 150, available: 1, missing: 19, awaitingVin: 130,
+      items: [{ carCode: "CAR-0", vin: vehicle(0).vin, status: "available" }, { carCode: "CAR-1", vin: vehicle(1).vin, status: "missing" }, { carCode: "CAR-2", vin: null, status: "awaiting_vin" }] });
+    const download = vi.spyOn(api, "piCocDownload").mockRejectedValue(new Error("409"));
+    await selectPi();
+    fireEvent.click(screen.getByRole("button", { name: "COC library / 在线库" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search library / 在库里查找" }));
+    await screen.findByText(/COC PDF 1\/150 · Awaiting/);
+    for (const code of ["CAR-0", "CAR-1", "CAR-2"]) fireEvent.click(screen.getByLabelText(`Select ${code}`));
+    fireEvent.click(screen.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
+    expect(download).not.toHaveBeenCalled();
+    expect(screen.getByText(/仅下载 1 份可用 PDF/).textContent).toContain("缺 PDF 1 · 待录 VIN 1");
+    fireEvent.click(screen.getByRole("button", { name: "Confirm available only / 确认仅下载可用" }));
+    await waitFor(() => expect(download).toHaveBeenCalledWith(PI, ["CAR-0"]));
+  });
+
+  it("blocks all-missing downloads and invalidates confirmation after selection changes", async () => {
+    vi.spyOn(api, "piCocLookup").mockResolvedValue({ total: 150, available: 1, missing: 149, awaitingVin: 0,
+      items: [{ carCode: "CAR-0", vin: vehicle(0).vin, status: "available" }, { carCode: "CAR-1", vin: vehicle(1).vin, status: "missing" }] });
+    const download = vi.spyOn(api, "piCocDownload").mockResolvedValue(new Blob());
+    await selectPi();
+    fireEvent.click(screen.getByRole("button", { name: "COC library / 在线库" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search library / 在库里查找" }));
+    await screen.findByText(/COC PDF 1\/150 · Awaiting/);
+    fireEvent.click(screen.getByLabelText("Select CAR-1"));
+    fireEvent.click(screen.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
+    await screen.findByText(/勾选车辆均无可下载 PDF/);
+    expect(download).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText("Select CAR-0"));
+    fireEvent.click(screen.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
+    expect(screen.getByRole("button", { name: "Confirm available only / 确认仅下载可用" })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Select CAR-0"));
+    expect(screen.queryByRole("button", { name: "Confirm available only / 确认仅下载可用" })).toBeNull();
+  });
+
+  it("shows row download errors with the tools closed and does not show raw codes", async () => {
+    vi.spyOn(api, "piCocLookup").mockResolvedValue({ total: 150, available: 1, missing: 149, awaitingVin: 0,
+      items: [{ carCode: "CAR-0", vin: vehicle(0).vin, status: "available" }] });
+    vi.spyOn(api, "piCocDownload").mockRejectedValue(new Error("500 Internal Server Error"));
+    await selectPi();
+    fireEvent.click(screen.getByRole("button", { name: "COC library / 在线库" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search library / 在库里查找" }));
+    await screen.findByText(/COC PDF 1\/150 · Awaiting/);
+    fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+    expect(screen.queryByRole("button", { name: "Search library / 在库里查找" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "PDF ↓" }));
+    await screen.findByText(/下载未完成/);
+    expect(screen.getByRole("button", { name: "Retry / 重试" })).toBeTruthy();
+    expect(screen.queryByText(/500 Internal/)).toBeNull();
+  });
 });
 function openView() {
   fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));

@@ -2,7 +2,7 @@
 
 import re
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy.orm import Session
 from app.db.session import get_db_session
@@ -347,6 +347,23 @@ def post_coc_upload_complete(
 ) -> dict[str, object]:
     """Mark a chunked upload session as complete and assemble the file."""
     return {"item": complete_coc_match_upload(upload_id)}
+
+
+@router.delete("/upload-sessions/{upload_id}")
+def delete_coc_upload_session(upload_id: str, user: UserContext = Depends(require_min_role("editor"))) -> dict:
+    """Discard only this account's interrupted transfer, not library sources."""
+    from app.services.coc_match_service import _COC_UPLOAD_SESSION_ROOT
+    from upload_toolkit.upload_engine import get_upload_session, cleanup_upload_session
+    if not re.fullmatch(r"upload-[a-f0-9]{12}", upload_id):
+        raise HTTPException(400, "Invalid upload / 上传编号无效")
+    try:
+        state = get_upload_session(_COC_UPLOAD_SESSION_ROOT, upload_id)
+    except FileNotFoundError:
+        return {"deleted": True}
+    if state.get("triggeredBy") != user.name:
+        raise HTTPException(403, "Upload belongs to another account / 上传不属于当前账号")
+    cleanup_upload_session(_COC_UPLOAD_SESSION_ROOT, upload_id)
+    return {"deleted": True}
 
 
 @router.get("/jobs")

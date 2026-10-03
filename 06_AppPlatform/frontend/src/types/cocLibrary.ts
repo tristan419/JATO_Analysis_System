@@ -4,11 +4,14 @@ export interface CocLibrarySource {
   status: "indexing" | "review" | "active" | "failed";
   pdfCount: number;
   job: { status?: string; pdfCount?: number; invalidCount?: number; error?: string };
+  resources?: { status?: string; rssBytes?: number | null; peakRssBytes?: number | null; rssWarningBytes?: number; rssLimitBytes?: number; terminationReason?: string | null };
 }
 export interface CocLibraryState {
   configured: boolean;
   vinCount: number;
   items: CocLibrarySource[];
+  libraryBytes?: number;
+  diskFreeBytes?: number;
 }
 export interface CocSourcePreview {
   sourceId: string;

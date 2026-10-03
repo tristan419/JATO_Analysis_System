@@ -90,6 +90,156 @@ def test_conflict_without_confirmation_keeps_original(tmp_path):
     assert library.lookup_vins([VIN])[VIN]["sha"] == original
 
 
+def test_explicit_old_package_reuses_cache_but_requires_preview(tmp_path):
+    a = source(tmp_path, "old.zip", [(f"{VIN}.pdf", b"old")])
+    activate(a)
+    original = (library.LIBRARY_ROOT / a / "pdfs.zip").read_bytes()
+    b = source(tmp_path, "new.zip", [(f"{VIN}.pdf", b"new")])
+    activate(b, [VIN])
+    delete = library.delete_source(b)
+    library.delete_source(b, delete["fingerprint"])
+    result = library.import_library_source(tmp_path / "old.zip", "old.zip", "admin", background=False)
+    assert result == {"sourceId": a, "duplicate": True, "needsReview": True}
+    assert not library.lookup_vins([VIN])
+    assert (library.LIBRARY_ROOT / a / "pdfs.zip").read_bytes() == original
+    assert activate(a)["items"][0]["status"] == "new"
+    assert VIN in library.lookup_vins([VIN])
+
+
+def test_upload_cleanup_for_new_and_duplicate_sources(tmp_path, monkeypatch):
+    from upload_toolkit.upload_engine import create_upload_session, receive_chunk, complete_upload_session
+    upload_root = tmp_path / "uploads"
+    monkeypatch.setattr(match, "_COC_UPLOAD_SESSION_ROOT", upload_root)
+    monkeypatch.setattr(library.CocLibraryIndexRunner, "start", lambda self: None)
+    raw = io.BytesIO()
+    with zipfile.ZipFile(raw, "w") as z:
+        z.writestr(f"{VIN}.pdf", b"pdf")
+    data = raw.getvalue()
+    ids = []
+    for _ in range(2):
+        session = create_upload_session(upload_root, filename="source.zip", size_bytes=len(data), chunk_size=8 * 1024**2, triggered_by="admin")
+        uid = session["uploadId"]
+        receive_chunk(upload_root, uid, 1, data)
+        complete_upload_session(upload_root, uid)
+        result = library.import_library_upload(uid, "admin")
+        ids.append(result["sourceId"])
+        assert not (upload_root / uid).exists()
+    assert ids[0] == ids[1]
+    assert (library.LIBRARY_ROOT / ids[0] / "source.zip").read_bytes() == data
+    library.CocLibraryIndexRunner(ids[0], library.LIBRARY_ROOT, isolated=False)._run_wrapper()
+    deletion = library.delete_source(ids[0])
+    library.delete_source(ids[0], deletion["fingerprint"])
+    assert not (library.LIBRARY_ROOT / ids[0]).exists()
+    assert not list(upload_root.iterdir())
+
+
+def test_failed_index_cleans_cache_and_nested_work_files(tmp_path, monkeypatch):
+    def interrupted(path, **kwargs):
+        directory = kwargs["temporary_root"]
+        (directory / "jato-coc-archive-interrupted").mkdir()
+        (directory / "coc-rar-interrupted").mkdir()
+        raise ValueError("memory limit")
+    monkeypatch.setattr(library, "list_archive_members", interrupted)
+    path = tmp_path / "failed.zip"
+    path.write_bytes(b"original")
+    result = library.import_library_source(path, "failed.zip", "admin", background=False)
+    directory = library.LIBRARY_ROOT / result["sourceId"]
+    assert (directory / "source.zip").read_bytes() == b"original"
+    assert not (directory / "pdfs.zip").exists()
+    assert not list(directory.glob("*interrupted"))
+    assert library.library_sources()["items"][0]["status"] == "failed"
+
+
+def test_serial_index_and_disk_headroom_guards(tmp_path, monkeypatch):
+    monkeypatch.setattr(library.CocLibraryIndexRunner, "start", lambda self: None)
+    path = tmp_path / "a.zip"
+    path.write_bytes(b"first")
+    library.import_library_source(path, "a.zip", "admin")
+    path.write_bytes(b"second")
+    with pytest.raises(HTTPException, match="indexing"):
+        library.import_library_source(path, "a.zip", "admin")
+    monkeypatch.setattr(library.shutil, "disk_usage", lambda _: SimpleNamespace(free=1))
+    with pytest.raises(ValueError, match="disk space"):
+        library._check_disk()
+
+
+def test_discard_transfer_reuses_cleanup_and_checks_owner(tmp_path, monkeypatch):
+    from app.api.routes import coc_match as coc_route
+    monkeypatch.setattr(match, "_COC_UPLOAD_SESSION_ROOT", tmp_path / "uploads")
+    session = match.initiate_coc_match_upload(filename="a.zip", size_bytes=3, triggered_by="admin")
+    uid = session["uploadId"]
+    match.upload_coc_match_chunk(uid, 1, b"zip")
+    with pytest.raises(HTTPException) as denied:
+        coc_route.delete_coc_upload_session(uid, SimpleNamespace(name="editor"))
+    assert denied.value.status_code == 403
+    assert (tmp_path / "uploads" / uid).exists()
+    assert coc_route.delete_coc_upload_session(uid, SimpleNamespace(name="admin"))["deleted"]
+    assert not (tmp_path / "uploads" / uid).exists()
+    with pytest.raises(HTTPException):
+        coc_route.delete_coc_upload_session("..", SimpleNamespace(name="admin"))
+
+
+def test_isolated_index_reuses_monthly_supervisor_and_cleans_after_limit(tmp_path, monkeypatch):
+    worker = library._resource_worker()
+    captured = {}
+    def stop(**kwargs):
+        captured.update(kwargs)
+        directory = kwargs["receipt_path"].parent
+        (directory / "pdfs.zip").write_bytes(b"partial")
+        kwargs["on_sample"]({"rssBytes": 200, "peakRssBytes": 200, "rssLimitBytes": 150})
+        worker._atomic_write_json(kwargs["receipt_path"], {"returnCode": -15, "terminationReason": "rss_limit"})
+    monkeypatch.setattr(worker, "_supervise_digest_upload", stop)
+    monkeypatch.setattr(worker, "_cgroup_memory_snapshot", lambda: None)
+    monkeypatch.setattr(library.CocLibraryIndexRunner, "_launch_supervised", lambda self: self._run_isolated())
+    monkeypatch.setattr(library.CocLibraryIndexRunner, "start", lambda self: self._run_wrapper())
+    path = tmp_path / "a.zip"
+    path.write_bytes(b"source")
+    result = library.import_library_source(path, "a.zip", "admin")
+    assert captured["worker_command"][1] == "-c"
+    directory = library.LIBRARY_ROOT / result["sourceId"]
+    assert (directory / "source.zip").exists() and not (directory / "pdfs.zip").exists()
+    state = library.library_sources()
+    assert state["items"][0]["resources"]["peakRssBytes"] == 200
+    assert state["items"][0]["status"] == "failed"
+    assert state["diskFreeBytes"] > 0 and state["libraryBytes"] > 0
+
+
+def test_real_isolated_small_zip_indexes_without_touching_orders(tmp_path):
+    import time
+    path = tmp_path / "small.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(f"{VIN}.pdf", b"pdf bytes")
+    result = library.import_library_source(path, "small.zip", "admin")
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        state = load_job_state(state_path(library.LIBRARY_ROOT, result["sourceId"]))
+        resource_path = library.LIBRARY_ROOT / result["sourceId"] / "resources.json"
+        if state["status"] in {"success", "failed"} and resource_path.exists() and load_job_state(resource_path).get("status") == "finished":
+            break
+        time.sleep(0.05)
+    assert state["status"] == "success", state
+    resources = library.library_sources()["items"][0]["resources"]
+    assert resources["rssLimitBytes"] > 0
+    assert resources["status"] == "finished"
+    assert not library.lookup_vins([VIN])
+    activate(result["sourceId"])
+    assert VIN in library.lookup_vins([VIN])
+
+
+def test_fresh_watchdog_keeps_other_api_worker_from_marking_index_interrupted(tmp_path):
+    from datetime import datetime, timedelta, UTC
+    directory = library.LIBRARY_ROOT / "other-worker"
+    directory.mkdir(parents=True)
+    with library._db() as conn:
+        conn.execute("INSERT INTO sources(id,filename,status,owner,source_hash) VALUES('other-worker','a.zip','indexing','admin','x')")
+    old = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    (directory / "state.json").write_text(json.dumps({"status": "success", "updatedAt": old}))
+    (directory / "resources.json").write_text(json.dumps({"status": "running", "updatedAt": datetime.now(UTC).isoformat()}))
+    assert library.library_sources()["items"][0]["status"] == "indexing"
+    (directory / "resources.json").write_text(json.dumps({"status": "running", "updatedAt": old}))
+    assert library.library_sources()["items"][0]["status"] == "failed"
+
+
 def test_stale_preview_rejected(tmp_path):
     a = source(tmp_path, "a.zip", [(f"{VIN}.pdf", b"a")])
     old = library.preview_source(a)
@@ -110,7 +260,7 @@ def test_internal_different_content_requires_repack(tmp_path):
 def test_exact_source_is_not_imported_twice(tmp_path):
     sid = source(tmp_path, "a.zip", [(f"{VIN}.pdf", b"a")])
     duplicate = library.import_library_source(tmp_path / "a.zip", "renamed.zip", "admin", background=False)
-    assert duplicate == {"sourceId": sid, "duplicate": True}
+    assert duplicate == {"sourceId": sid, "duplicate": True, "needsReview": False}
 
 
 def test_missing_download_fails_before_output(tmp_path):

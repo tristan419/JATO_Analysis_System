@@ -4698,25 +4698,30 @@ export const api = {
     }).then((res) => ({ item: mapCocMatchJob(res.item) }));
   },
 
-  /**
-   * Smart upload: auto-decides simple POST vs chunked based on file size.
-   * Files >= 50 MB are uploaded via chunked sessions; smaller files use direct POST.
-   */
+  /** Shared chunked upload for COC matching and library sources. */
   cocUploadFile: async (file: File, onProgress?: (completed: number, total: number) => void): Promise<string> => {
-    const session = await api.cocMatchInitiateUpload(file.name, file.size, `coc-resume-${file.name}-${file.size}`);
+    // A newly selected file is not identified by its name/size. Content may
+    // change without either changing; source hashes handle actual deduplication.
+    const session = await api.cocMatchInitiateUpload(file.name, file.size);
     const uploadId = String(session.uploadId);
     const received = new Set(Array.isArray(session.receivedChunks) ? session.receivedChunks.filter((part): part is number => typeof part === "number") : []);
     const totalChunks = Number(session.totalChunks ?? 1);
-    for (let i = 1; i <= totalChunks; i++) {
-      if (!received.has(i)) await api.cocMatchUploadChunk(uploadId, i, file.slice((i - 1) * 8 * 1024 * 1024, i * 8 * 1024 * 1024));
-      onProgress?.(i, totalChunks);
+    try {
+      for (let i = 1; i <= totalChunks; i++) {
+        if (!received.has(i)) await api.cocMatchUploadChunk(uploadId, i, file.slice((i - 1) * 8 * 1024 * 1024, i * 8 * 1024 * 1024));
+        onProgress?.(i, totalChunks);
+      }
+      await api.cocMatchCompleteUpload(uploadId);
+    } catch (error) {
+      await api.cocDiscardUpload(uploadId).catch(() => undefined);
+      throw error;
     }
-    await api.cocMatchCompleteUpload(uploadId);
     return uploadId;
   },
+  cocDiscardUpload: (uploadId: string) => request<{ deleted: boolean }>(`/coc-match/upload-sessions/${encodeURIComponent(uploadId)}`, { method: "DELETE" }),
 
   cocLibrary: () => request<CocLibraryState>("/coc-match/library"),
-  cocLibraryImport: (uploadId: string) => request<{ sourceId: string; duplicate: boolean }>("/coc-match/library/sources", { method: "POST", body: JSON.stringify({ uploadId }) }),
+  cocLibraryImport: (uploadId: string) => request<{ sourceId: string; duplicate: boolean; needsReview?: boolean }>("/coc-match/library/sources", { method: "POST", body: JSON.stringify({ uploadId }) }),
   cocLibraryPreview: (id: string) => request<CocSourcePreview>(`/coc-match/library/sources/${encodeURIComponent(id)}/preview`),
   cocLibraryActivate: (preview: CocSourcePreview, replaceVins: string[]) => request<{ status: string }>(`/coc-match/library/sources/${encodeURIComponent(preview.sourceId)}/activate`, { method: "POST", body: JSON.stringify({ fingerprint: preview.fingerprint, replaceVins }) }),
   cocLibraryDeletePreview: (id: string) => request<CocDeletePreview>(`/coc-match/library/sources/${encodeURIComponent(id)}/delete-preview`, { method: "POST" }),

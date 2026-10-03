@@ -141,3 +141,47 @@ def test_digest_supervisor_stops_after_consecutive_actual_rss_samples(
     assert child_env["NUMEXPR_NUM_THREADS"] == "1"
     assert child_env["MALLOC_ARENA_MAX"] == "2"
     assert "RSS limit reached" in log_path.read_text(encoding="utf-8")
+
+
+def test_custom_archive_worker_reuses_rss_limit_and_process_group_cleanup(tmp_path, monkeypatch):
+    captured = {}
+    samples = []
+    signals = []
+    class Process:
+        pid = 12345
+        returncode = None
+        def poll(self):
+            return self.returncode
+        def wait(self):
+            return self.returncode
+    process = Process()
+    def launch(args, **kwargs):
+        captured.update(command=args, **kwargs)
+        return process
+    def killpg(pid, sig):
+        signals.append((pid, sig))
+        process.returncode = -int(sig)
+    monkeypatch.setattr(WORKER.subprocess, "Popen", launch)
+    monkeypatch.setattr(WORKER.os, "killpg", killpg)
+    monkeypatch.setattr(WORKER, "_read_process_group_rss_bytes", lambda _: 200)
+    monkeypatch.setattr(WORKER, "_cgroup_memory_snapshot", lambda: None)
+    monkeypatch.setattr(WORKER.time, "sleep", lambda _: None)
+    monkeypatch.setenv("APP_JATO_DIGEST_RSS_LIMIT_CONSECUTIVE_SAMPLES", "2")
+    WORKER._supervise_digest_upload(upload_id="coc", attempt_id="coc", log_path=tmp_path / "log",
+        receipt_path=tmp_path / "exit.json", worker_command=["python", "coc"],
+        worker_env={"APP_COC_LIBRARY_ROOT": "/private/test"}, on_sample=samples.append, rss_limit_bytes=150)
+    assert captured["start_new_session"] is True
+    assert captured["env"]["APP_COC_LIBRARY_ROOT"] == "/private/test"
+    assert samples[0]["rssBytes"] == 200 and samples[-1]["peakRssBytes"] == 200
+    assert {sig for _, sig in signals} == {WORKER.signal.SIGTERM, WORKER.signal.SIGKILL}
+    assert json.loads((tmp_path / "exit.json").read_text())["terminationReason"] == "rss_limit"
+
+
+def test_archive_rss_includes_extraction_children_not_other_groups(tmp_path, monkeypatch):
+    for pid, group in [(1, 100), (2, 100), (3, 200)]:
+        directory = tmp_path / str(pid)
+        directory.mkdir()
+        (directory / "stat").write_text(f"{pid} (archive worker) S 0 {group} 0")
+    monkeypatch.setattr(WORKER, "Path", lambda _: tmp_path)
+    monkeypatch.setattr(WORKER, "_read_process_rss_bytes", lambda pid: pid * 1024)
+    assert WORKER._read_process_group_rss_bytes(100) == 3072

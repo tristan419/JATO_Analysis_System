@@ -3,6 +3,10 @@ import { api } from "../api/client";
 import { FileDropzone } from "./upload/FileDropzone";
 import type { CocLibraryState, CocSourcePreview, CocDeletePreview } from "../types/cocLibrary";
 
+function memorySize(bytes: number | null | undefined): string {
+  return bytes == null ? "Unavailable / 无数据" : `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+}
+
 export function CocLibraryPanel() {
   const [library, setLibrary] = useState<CocLibraryState | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -31,21 +35,26 @@ export function CocLibraryPanel() {
 
   return <section style={{ display: "grid", gap: 12 }}>
     <p>One shared library · {library?.vinCount ?? 0} VINs / 一个共享库。支持追加嵌套 ZIP/RAR；按 PDF 文件名匹配 VIN，不读取正文。</p>
+    {library?.configured ? <p>Library disk / 库磁盘 {memorySize(library.libraryBytes)} · Disk free / 磁盘可用 {memorySize(library.diskFreeBytes)}。每次只索引一个来源；原包及 PDF 缓存保留，中间文件完成或失败后清理。</p> : null}
     {library && !library.configured ? <p role="alert">Persistent storage not configured / 在线库持久目录未配置，请联系管理员。</p> : null}
     {error ? <div role="alert">{error} <button type="button" disabled={busy} onClick={() => void action(reload)}>Refresh / 刷新</button></div> : null}
     {notice ? <p role="status">{notice}</p> : null}
     <FileDropzone accept=".zip,.rar" label="Append source / 追加来源包" hint="ZIP / RAR · nested archives supported / 支持多层嵌套" file={file} onFile={setFile} onClear={() => setFile(null)} />
-    <button type="button" disabled={busy || !file || !library?.configured} onClick={() => void action(async () => {
+    <button type="button" disabled={busy || indexing || !file || !library?.configured} onClick={() => void action(async () => {
       if (!file) return;
       const id = await api.cocUploadFile(file, (done, count) => setNotice(`Uploading ${done}/${count} / 正在上传`));
-      const result = await api.cocLibraryImport(id);
-      setFile(null); setNotice(result.duplicate ? "Source already exists / 来源包已存在，未重复导入" : "Indexing; preview when ready / 正在索引，完成后请预览确认");
+      const result = await api.cocLibraryImport(id).catch(async (reason: unknown) => {
+        await api.cocDiscardUpload(id).catch(() => undefined);
+        throw reason;
+      });
+      setFile(null); setNotice(result.needsReview ? "Existing source reused; preview to enable missing VINs / 已复用原包及缓存，请预览确认重新启用 VIN" : result.duplicate ? "Source already exists / 来源包已存在，未重复导入" : "Indexing; preview when ready / 正在索引，完成后请预览确认");
     })}>Upload & index / 上传并索引</button>
     <div style={{ maxHeight: 300, overflow: "auto" }}>
       {library?.items.map((source) => <div key={source.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px solid #dbe6f4" }}>
         <span style={{ flex: 1 }}>{source.filename} · {source.job.pdfCount ?? source.pdfCount} PDF · {({ indexing: "Indexing / 索引中", review: "Review / 待确认", active: "Active / 可查找", failed: "Failed / 失败" })[source.status]}</span>
+        {source.resources ? <small>Index RAM / 索引内存 {source.resources.status === "finished" ? "Stopped / 已结束" : memorySize(source.resources.rssBytes)} · Peak / 峰值 {memorySize(source.resources.peakRssBytes)} · Warning / 告警 {memorySize(source.resources.rssWarningBytes)} · Limit / 上限 {memorySize(source.resources.rssLimitBytes)}</small> : null}
         {source.job.invalidCount ? <small>{source.job.invalidCount} invalid VIN filenames / 名称待处理，未入索引；请检查原包后重传。</small> : null}
-        {source.status === "failed" || source.job.status === "failed" ? <small>Indexing failed; delete and re-upload ZIP or ask admin to check RAR decoder / 索引失败，请删除后改传 ZIP，或联系管理员检查 RAR 解码器。</small> : null}
+        {source.status === "failed" || source.job.status === "failed" ? <small>Indexing stopped; original source retained. Check memory/disk limits and archive decoder, delete and retry a smaller ZIP / 索引停止，原包保留；请检查内存、磁盘余量和解包工具，删除后改传较小 ZIP。</small> : null}
         {source.status === "review" ? <button type="button" disabled={busy} onClick={() => void action(async () => { setPreview(await api.cocLibraryPreview(source.id)); setDeletion(null); setReplacements(new Set()); })}>Preview / 预览</button> : null}
         <button type="button" disabled={busy || (source.status === "indexing" && source.job.status !== "failed")} onClick={() => void action(async () => { setDeletion(await api.cocLibraryDeletePreview(source.id)); setPreview(null); })}>Delete source / 删除来源</button>
       </div>)}

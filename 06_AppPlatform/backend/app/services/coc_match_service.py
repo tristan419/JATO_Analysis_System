@@ -352,6 +352,7 @@ def list_archive_members(
     max_members: int = 20_000,
     max_nested_bytes: int = 512 * 1024 * 1024,
     on_archive: Callable[[Path, list[CocArchiveMember]], None] | None = None,
+    temporary_root: Path | None = None,
 ) -> list[CocArchiveMember]:
     """Keep each matching member's archive path chain; never read PDF contents.
 
@@ -366,7 +367,7 @@ def list_archive_members(
     nested_bytes = 0
     rar_tool = shutil.which("7zz") or shutil.which("7z")
 
-    with tempfile.TemporaryDirectory(prefix="jato-coc-archive-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="jato-coc-archive-", dir=temporary_root) as temporary:
         def scan(path: Path, chain: list[str], depth: int) -> None:
             nonlocal seen_members, nested_bytes
             local_members: list[CocArchiveMember] = []
@@ -1489,7 +1490,7 @@ def initiate_coc_match_upload(
             filename=filename,
             size_bytes=size_bytes,
         )
-        if existing:
+        if existing and existing.get("triggeredBy") == triggered_by:
             return existing
 
     return _toolkit_create(

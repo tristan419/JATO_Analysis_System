@@ -8,6 +8,21 @@ import pytest
 from fastapi import HTTPException
 from upload_toolkit.job_engine import load_job_state, persist_job_state, state_path
 
+
+def test_same_name_size_new_selection_and_owner_scoped_resume(tmp_path, monkeypatch):
+    from app.services import coc_match_service as match
+    monkeypatch.setattr(match, "_COC_UPLOAD_SESSION_ROOT", tmp_path / "uploads")
+    old = match.initiate_coc_match_upload(filename="same.zip", size_bytes=3, resume_key="legacy", triggered_by="admin")
+    match.upload_coc_match_chunk(old["uploadId"], 1, b"old")
+    match.complete_coc_match_upload(old["uploadId"])
+    fresh = match.initiate_coc_match_upload(filename="same.zip", size_bytes=3, triggered_by="admin")
+    match.upload_coc_match_chunk(fresh["uploadId"], 1, b"new")
+    match.complete_coc_match_upload(fresh["uploadId"])
+    assert fresh["uploadId"] != old["uploadId"]
+    assert match._get_assembled_path(fresh["uploadId"]).read_bytes() == b"new"
+    other = match.initiate_coc_match_upload(filename="same.zip", size_bytes=3, resume_key="legacy", triggered_by="editor")
+    assert other["uploadId"] != old["uploadId"] and other["triggeredBy"] == "editor"
+
 import app.services.coc_match_service as coc_match_service
 from app.services.coc_match_service import (
     CocMatchJobRunner,
@@ -353,7 +368,7 @@ def test_nested_bytes_are_cumulative_and_directory_depth_is_not_archive_depth(tm
 
 def test_failed_nested_scan_cleans_temporary_archives(tmp_path, monkeypatch):
     real_temporary = coc_match_service.tempfile.TemporaryDirectory
-    monkeypatch.setattr(coc_match_service.tempfile, "TemporaryDirectory", lambda **kw: real_temporary(dir=tmp_path, **kw))
+    monkeypatch.setattr(coc_match_service.tempfile, "TemporaryDirectory", lambda **kw: real_temporary(**{**kw, "dir": tmp_path}))
     path = tmp_path / "outer.zip"
     path.write_bytes(_zip_bytes({"../child.zip": b"not a zip"}))
     with pytest.raises(ValueError, match="无法读取 ZIP"):
