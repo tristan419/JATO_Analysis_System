@@ -5,6 +5,9 @@ import { api } from "../../api/client";
 import { OrderGeniusVehicleAllocationPage } from "../../pages/OrderGeniusVehicleAllocationPage";
 import type { PiOrderDetail, PiOrderLine, PiVehicleUnit, VehicleImportPreview } from "../../types/orderGeniusVehicle";
 
+// Multi-step full-page workflows exceed 5 seconds on the shared CI runner.
+vi.setConfig({ testTimeout: 15_000 });
+
 const testRole = vi.hoisted(() => ({ value: "admin" }));
 vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: testRole.value, primaryCountry: "CH" } }) }));
 vi.mock("../../hooks/useAccountCountryOptions", () => ({ useAccountCountryOptions: () => ({ countryOptions: [] }) }));
