@@ -876,9 +876,23 @@ def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_c
             "removedUnits": preview.get("removedUnits", 0), "skippedUnits": preview["skippedUnits"], "warnings": []}
 
 
-def export_vehicle_units(session: Session, **filters):
-    vehicles = list_vehicle_units(session, **filters)["items"]
-    return generate_vehicle_allocation_excel(vehicles)
+def export_vehicle_units(session: Session, *, columns: list[str] | None = None, car_codes: list[str] | None = None, **filters):
+    result = list_vehicle_units(session, **filters)
+    if result["total"] > len(result["items"]):
+        raise HTTPException(400, "Export too large: narrow the view / 导出范围过大，请缩小筛选")
+    vehicles = result["items"]
+    if car_codes is not None:
+        codes = set(car_codes)
+        vehicles = [vehicle for vehicle in vehicles if vehicle["carCode"] in codes]
+    if columns and "cocPdf" in columns:
+        from app.services.coc_library_service import lookup_vins
+        available = lookup_vins([vehicle["vin"] for vehicle in vehicles if vehicle["vin"]])
+        for vehicle in vehicles:
+            vehicle["cocPdf"] = "Awaiting VIN / 待录 VIN" if not vehicle["vin"] else "Available / 有 PDF" if vehicle["vin"] in available else "Missing / 缺 PDF"
+    try:
+        return generate_vehicle_allocation_excel(vehicles, columns)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def header_to_dict(header: PiOrderHeader) -> dict:

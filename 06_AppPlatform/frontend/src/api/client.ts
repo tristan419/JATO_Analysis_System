@@ -5464,7 +5464,7 @@ export const api = {
       { method: "POST" },
     ),
 
-  exportVehicleAllocation: (params: VehicleAllocationFilters = {}) =>
+  exportVehicleAllocation: (params: VehicleAllocationFilters & { columns?: string[]; carCodes?: string[] } = {}) =>
     requestBlob("/order-genius/vehicle-allocation/export", {
       method: "POST",
       body: JSON.stringify(params),

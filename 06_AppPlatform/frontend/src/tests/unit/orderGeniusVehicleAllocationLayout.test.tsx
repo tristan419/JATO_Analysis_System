@@ -5,7 +5,8 @@ import { api } from "../../api/client";
 import { OrderGeniusVehicleAllocationPage } from "../../pages/OrderGeniusVehicleAllocationPage";
 import type { PiOrderDetail, PiOrderLine, PiVehicleUnit, VehicleImportPreview } from "../../types/orderGeniusVehicle";
 
-vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: "admin", primaryCountry: "CH" } }) }));
+const testRole = vi.hoisted(() => ({ value: "admin" }));
+vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: testRole.value, primaryCountry: "CH" } }) }));
 vi.mock("../../hooks/useAccountCountryOptions", () => ({ useAccountCountryOptions: () => ({ countryOptions: [] }) }));
 vi.mock("../../components/CommandSelect", () => ({
   CommandSelect: (props: { value: string; placeholder: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) => (
@@ -61,6 +62,7 @@ function detail(): PiOrderDetail {
 }
 
 beforeEach(() => {
+  testRole.value = "admin";
   window.history.replaceState({}, "", "/product/order-genius/vehicle-allocation");
   vi.spyOn(api, "getVehicleAllocationPis").mockResolvedValue({ items: [detail().header], total: 1 });
   vi.spyOn(api, "getVehicleAllocationPiMonths").mockImplementation(async (year) => ({ year,
@@ -73,7 +75,7 @@ beforeEach(() => {
   }));
   vi.spyOn(api, "bulkUpdateVehicleAllocationVehicles").mockResolvedValue({ piCode: PI, piLineCode: null, matchedUnits: 150, updatedUnits: 150, vinAssigned: 0, fieldsUpdated: ["etd"] });
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function selectPi() {
   render(<OrderGeniusVehicleAllocationPage />);
@@ -88,6 +90,64 @@ async function chooseOctober() {
   await waitFor(() => expect(screen.getByRole("button", { name: "Oct 2026" }).hasAttribute("disabled")).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Oct 2026" }));
 }
+
+describe("vehicle detail search and view", () => {
+  it("makes vehicle notes read-only for viewer accounts", async () => {
+    testRole.value = "viewer";
+    await selectPi();
+    fireEvent.click(screen.getByRole("cell", { name: "CAR-1" }));
+    expect((screen.getByLabelText("Note / 备注") as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(screen.getByRole("button", { name: "Save Vehicle" }).hasAttribute("disabled")).toBe(true);
+  });
+  it("filters material suffixes through the existing list query", async () => {
+    const locate = vi.spyOn(api, "searchVehicleAllocation");
+    await selectPi();
+    fireEvent.change(screen.getByPlaceholderText(/Search PI, Car Code/), { target: { value: "0007" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await waitFor(() => expect(vi.mocked(api.listVehicleAllocationVehicles).mock.calls.at(-1)?.[0]).toMatchObject({ keyword: "0007", piCode: PI, page: 1 }));
+    expect(locate).not.toHaveBeenCalled();
+  });
+
+  it("matches full VINs across pages and updates only explicitly selected results", async () => {
+    await selectPi(); openView();
+    fireEvent.change(screen.getByLabelText("VIN batch search / VIN 批量搜索"), { target: { value: `${vehicle(0).vin}\n${vehicle(18).vin},${vehicle(0).vin};LVTDB21B9RD999999` } });
+    fireEvent.click(screen.getByRole("button", { name: "Search VIN batch / 搜索 VIN" }));
+    expect(screen.getByRole("cell", { name: "CAR-18" })).toBeTruthy();
+    expect(screen.getByText(/2 matched.*1 not found/)).toBeTruthy();
+    expect(screen.getByLabelText("Select CAR-18").hasAttribute("checked")).toBe(false);
+    fireEvent.click(screen.getByRole("tab", { name: /Update status/ }));
+    expect(screen.getByRole("button", { name: "Update status" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("tab", { name: /View/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Select matches / 勾选全部匹配" }));
+    fireEvent.click(screen.getByRole("button", { name: /Update selected status/ }));
+    fireEvent.change(screen.getByLabelText("ETD"), { target: { value: "2026-10-12" } });
+    fireEvent.click(screen.getByRole("button", { name: "Update status" }));
+    await waitFor(() => expect(api.bulkUpdateVehicleAllocationVehicles).toHaveBeenCalledWith({ piCode: PI, piLineCode: undefined, carCodes: ["CAR-0", "CAR-18"], fields: { etd: "2026-10-12" } }));
+    fireEvent.click(screen.getByRole("tab", { name: /View/ }));
+    fireEvent.change(screen.getByLabelText("VIN batch search / VIN 批量搜索"), { target: { value: `${vehicle(18).vin}` } });
+    fireEvent.click(screen.getByRole("button", { name: "Search VIN batch / 搜索 VIN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select matches / 勾选全部匹配" }));
+    fireEvent.click(screen.getByLabelText("VIN missing"));
+    expect(screen.queryByText(/matched.*not found/)).toBeNull();
+    expect(screen.queryByText(/selected \/ 已勾选/)).toBeNull();
+    await waitFor(() => expect(vi.mocked(api.listVehicleAllocationVehicles).mock.calls.at(-1)?.[0]).toMatchObject({ vinMissingOnly: true }));
+  });
+
+  it("exports visible columns in reordered sequence and exposes existing vehicle notes", async () => {
+    const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
+    vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:export"; static revokeObjectURL = vi.fn(); });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    await selectPi(); openView();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Note / 备注" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move VIN left" }));
+    fireEvent.click(screen.getByRole("button", { name: "Export current view / 导出" }));
+    await waitFor(() => expect(download).toHaveBeenCalled());
+    expect(download.mock.calls[0][0]?.columns?.slice(0, 2)).toEqual(["vin", "carCode"]);
+    expect(download.mock.calls[0][0]?.columns).toContain("remark");
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "关闭" })).toBeNull();
+  });
+});
 
 describe("PI month browsing", () => {
   it("uses whole-year counts, preserves selected PI/year independence and can reset to all months", async () => {
@@ -405,7 +465,7 @@ describe("PI allocation layout and scope", () => {
     expect(screen.getByText("2026-10", { selector: "summary" })).toBeTruthy();
     expect(vi.mocked(api.listVehicleAllocationVehicles).mock.calls.at(-1)?.[0]?.piLineCode).toBeUndefined();
     expect(screen.getByText("130 no VIN / 待录")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /50 ready · 50 allocated/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /50 ready for pickup · 50 allocated/ })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "PI lines" })).toBeNull();
   });
 
@@ -430,7 +490,7 @@ describe("PI allocation layout and scope", () => {
     await selectPi();
     openView();
     const columns = within(screen.getByRole("group", { name: "Columns / 显示列" }));
-    const table = screen.getByRole("table");
+    const table = screen.getByRole("table", { name: "Vehicle details" });
     const headers = within(table.querySelector("thead")!);
     fireEvent.click(columns.getByRole("checkbox", { name: "Interior" }));
     expect(headers.queryByRole("columnheader", { name: "Interior" })).toBeNull();
@@ -490,6 +550,6 @@ describe("PI allocation layout and scope", () => {
     fireEvent.click(screen.getByRole("cell", { name: "CAR-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Vehicle" }));
     await screen.findByText("131 no VIN / 待录");
-    expect(screen.getByRole("button", { name: /51 ready · 50 allocated/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /51 ready for pickup · 50 allocated/ })).toBeTruthy();
   });
 });

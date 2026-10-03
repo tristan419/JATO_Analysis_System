@@ -70,6 +70,29 @@ def test_append_duplicates_delete_same_content_provider(tmp_path):
     assert library.delete_source(b)["lostCount"] == 2
 
 
+def test_three_nested_zips_download_required_vins_from_index_only(tmp_path, monkeypatch):
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, "w") as z:
+        z.writestr(f"cars/{VIN}.pdf", b"first original PDF")
+        z.writestr(f"cars/{VIN2}.pdf", b"second original PDF")
+    for depth in range(2):
+        outer = io.BytesIO()
+        with zipfile.ZipFile(outer, "w") as z:
+            z.writestr(f"folder-{depth}/child.zip", content.getvalue())
+        content = outer
+    sid = source(tmp_path, "three-level.zip", [("outer.zip", content.getvalue())])
+    activate(sid)
+    assert len(json.loads(library.lookup_vins([VIN2])[VIN2]["path"])) == 4
+    # Downloads must read the indexed cache, not re-scan nested source archives.
+    monkeypatch.setattr(match, "list_archive_members", lambda *_args, **_kwargs: pytest.fail("archive re-scanned"))
+    target = tmp_path / "selected.zip"
+    assert library.write_pdf_zip([VIN2, VIN2.lower()], target) == {"count": 1}
+    with zipfile.ZipFile(target) as z:
+        assert z.testzip() is None
+        assert z.namelist() == [f"{VIN2}.pdf"]
+        assert z.read(f"{VIN2}.pdf") == b"second original PDF"
+
+
 def test_conflict_confirmation_and_no_old_content_fallback(tmp_path):
     a = source(tmp_path, "a.zip", [(f"{VIN}.pdf", b"old")])
     activate(a)

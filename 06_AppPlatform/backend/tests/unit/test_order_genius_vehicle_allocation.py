@@ -266,6 +266,17 @@ def test_vehicle_allocation_import_parser_maps_eta(tmp_path: Path) -> None:
     ]
 
 
+def test_export_visible_columns_preserves_order_and_price_snapshot():
+    buffer = generate_vehicle_allocation_excel([{"carCode": "CAR-1", "fobEur": 12345, "remark": "=unsafe", "modelName": "JAECOO5", "version": "Select"}], ["remark", "fobEur", "config", "carCode"])
+    workbook = openpyxl.load_workbook(buffer, data_only=False)
+    try:
+        assert list(workbook.active.values) == [("Note / 备注", "FOB (EUR)", "Config", "Car Code"), ("'=unsafe", 12345, "JAECOO5 / Select", "CAR-1")]
+    finally:
+        workbook.close()
+    with pytest.raises(ValueError, match="Invalid export columns"):
+        generate_vehicle_allocation_excel([], ["not-a-column"])
+
+
 def test_vehicle_allocation_vin_list_parser_reads_single_column_without_header(tmp_path: Path) -> None:
     workbook = openpyxl.Workbook()
     ws = workbook.active
@@ -1271,6 +1282,17 @@ def _vin_fill_pi(session, materials=("BOM-A",), quantity=3):
         vehicle_service._ensure_vehicle_units_for_line(session, model, line, "tester")
     session.commit()
     return header["piCode"], vehicle_repo.list_vehicles_for_bulk_update(session, pi_code=header["piCode"])
+
+
+def test_vehicle_keyword_matches_suffix_and_existing_detail_fields(vehicle_db):
+    pi_code, cars = _vin_fill_pi(vehicle_db, materials=("T71607VBWMM0007",), quantity=1)
+    cars[0].remark = "Priority customer"
+    cars[0].ship_name = "Atlantic vessel"
+    cars[0].dealer_code = "D-123"
+    vehicle_db.flush()
+    for keyword in ("0007", "priority", "atlantic", "D-123", "HEV"):
+        assert vehicle_service.list_vehicle_units(vehicle_db, keyword=keyword, pi_code=pi_code)["total"] == 1
+    assert vehicle_service.list_vehicle_units(vehicle_db, keyword="0007", country="SE")["total"] == 0
 
 
 def _vin_rows(material, count, offset=0):

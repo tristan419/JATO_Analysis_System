@@ -320,6 +320,16 @@ def list_vehicles(
             PiVehicleUnit.version.ilike(pattern),
             PiVehicleUnit.exterior_color_name.ilike(pattern),
             PiVehicleUnit.interior_color_name.ilike(pattern),
+            PiVehicleUnit.brand.ilike(pattern),
+            PiVehicleUnit.powertrain.ilike(pattern),
+            PiVehicleUnit.country_code.ilike(pattern),
+            PiVehicleUnit.ship_name.ilike(pattern),
+            PiVehicleUnit.dealer_code.ilike(pattern),
+            PiVehicleUnit.dealer_name.ilike(pattern),
+            PiVehicleUnit.customer_ref.ilike(pattern),
+            PiVehicleUnit.remark.ilike(pattern),
+            PiVehicleUnit.allocation_status.ilike(pattern),
+            PiVehicleUnit.logistics_status.ilike(pattern),
         ))
     filters = {
         PiVehicleUnit.pi_code: pi_code,

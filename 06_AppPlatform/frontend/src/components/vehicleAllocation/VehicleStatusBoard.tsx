@@ -51,37 +51,15 @@ export function VehicleStatusBoard({
 
   return (
     <section className="va-tool-card">
-      <div className="va-tool-card-head">
-        <span>Status board</span>
-        <strong>{scopeLabel}</strong>
-      </div>
-      <p>{flowScopeLabel(statusFlow)}</p>
-      <div className="va-tool-status-grid">
-        <div><span>Vehicles</span><strong>{vehicles.length}</strong></div>
-        <div><span>No VIN</span><strong>{noVin}</strong></div>
-      </div>
-      <div className="va-tool-pill-grid">
-        {logistics.map((item) => (
-          <span
-            key={`logistics-${item.key}`}
-            className={item.count === 0 ? "is-empty" : undefined}
-            style={{ borderColor: item.color }}
-            aria-label={`Logistics ${item.labelEn} ${item.count} vehicles`}
-          >
-            <span>{item.labelEn} · {item.labelZh}</span>
-            <strong>{item.count}</strong>
-          </span>
-        ))}
-        {allocation.map((item) => (
-          <span
-            key={`allocation-${item.key}`}
-            className={item.count === 0 ? "is-empty" : undefined}
-            style={{ borderColor: item.color }}
-            aria-label={`Allocation ${item.labelEn} ${item.count} vehicles`}
-          >
-            <span>{item.labelEn} · {item.labelZh}</span>
-            <strong>{item.count}</strong>
-          </span>
+      <p title={flowScopeLabel(statusFlow)}>{scopeLabel} · {vehicles.length} vehicles / 台 · {noVin} awaiting VIN / 待录 VIN</p>
+      <div className="va-status-counts">
+        {[{ label: "Logistics / 物流", name: "Logistics", items: logistics }, { label: "Allocation / 分配", name: "Allocation", items: allocation }].map((group) => (
+          <section key={group.name} aria-label={group.label}><h4>{group.label}</h4>
+            {group.items.map((item) => <div className={item.count === 0 ? "is-empty" : undefined} key={item.key} aria-label={`${group.name} ${item.labelEn} ${item.count} vehicles`}>
+              <span>{item.labelEn} · {item.labelZh}</span><strong>{item.count}</strong>
+              <div className="va-count-track"><span style={{ width: `${vehicles.length ? item.count / vehicles.length * 100 : 0}%`, background: item.color }} /></div>
+            </div>)}
+          </section>
         ))}
         {logistics.length === 0 && allocation.length === 0 ? (
           <span>No selected PI scope or status flow config.</span>
