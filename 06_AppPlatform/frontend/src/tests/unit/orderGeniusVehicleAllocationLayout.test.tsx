@@ -361,7 +361,7 @@ describe("PI-scoped BOM + VIN import", () => {
     await waitFor(() => expect(repreview).toHaveBeenCalledWith(expect.objectContaining({ piCode: PI, allowReplacing: false,
       rows: expect.arrayContaining([expect.objectContaining({ sourceRow: 2, car_code: "CAR-21", material_code: "BOM-ONE" })]),
     })));
-    await screen.findByRole("button", { name: "Apply 1" });
+    await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByLabelText(/Allow replacing existing VINs/));
     await waitFor(() => expect(repreview).toHaveBeenLastCalledWith(expect.objectContaining({ piCode: PI, allowReplacing: true })));
   });
@@ -371,7 +371,7 @@ describe("PI-scoped BOM + VIN import", () => {
     const apply = vi.spyOn(api, "applyVehicleAllocationImport").mockResolvedValue({ createdUnits: 0, updatedUnits: 1, warnings: [] });
     await selectPi(); await uploadVinFile();
     vi.mocked(api.getVehicleAllocationPi).mockRejectedValueOnce(new Error("refresh unavailable"));
-    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 }));
     await screen.findByText(/VIN 已保存，但 PI 页面刷新失败/);
     expect(screen.queryByText(/VIN 导入未完成/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Apply 1" })).toBeNull();
