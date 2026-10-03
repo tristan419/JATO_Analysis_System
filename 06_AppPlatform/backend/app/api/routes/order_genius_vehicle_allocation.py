@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
+from pathlib import Path
 from datetime import date
 from uuid import uuid4
 
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session
 
 from app.core.config import COC_MATCH_JOB_ROOT
@@ -53,6 +56,66 @@ router = APIRouter(
 # Share the configured writable operations directory, not the immutable release tree.
 IMPORT_SESSION_DIR = COC_MATCH_JOB_ROOT.parent / "vehicle_allocation_imports"
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _coc_pi_vehicles(session: Session, user: UserContext, pi_code: str) -> list:
+    if not vehicle_repo.get_header_by_code(session, pi_code):
+        raise HTTPException(404, "PI not found / PI不存在")
+    vehicles = vehicle_repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
+    permitted = []
+    countries = {}
+    for vehicle in vehicles:
+        country = vehicle.country_code
+        if country not in countries:
+            try:
+                _validate_country(session, user, country)
+                countries[country] = True
+            except HTTPException as exc:
+                if exc.status_code != 403:
+                    raise
+                countries[country] = False
+        if not countries[country]:
+            continue
+        permitted.append(vehicle)
+    if not permitted:
+        raise HTTPException(403, "No accessible vehicles in this PI / 本PI没有有权访问的车辆")
+    return permitted
+
+
+@router.get("/pi/{pi_code}/coc-library")
+def lookup_pi_cocs(pi_code: str, session: Session = Depends(get_db_session),
+                   user: UserContext = Depends(require_roles("viewer", "editor", "admin", "order_filler"))) -> dict:
+    from app.services.coc_library_service import lookup_vins
+    vehicles = _coc_pi_vehicles(session, user, pi_code)
+    matches = lookup_vins([v.vin for v in vehicles if v.vin])
+    items = [{"carCode": v.car_code, "vin": v.vin,
+              "status": "awaiting_vin" if not v.vin else "available" if v.vin.upper() in matches else "missing"} for v in vehicles]
+    return {"items": items, "total": len(items),
+            "available": sum(i["status"] == "available" for i in items),
+            "awaitingVin": sum(i["status"] == "awaiting_vin" for i in items),
+            "missing": sum(i["status"] == "missing" for i in items)}
+
+
+@router.post("/pi/{pi_code}/coc-download")
+def download_pi_cocs(pi_code: str, payload: dict, session: Session = Depends(get_db_session),
+                      user: UserContext = Depends(require_roles("viewer", "editor", "admin", "order_filler"))) -> FileResponse:
+    from app.services.coc_library_service import write_pdf_zip
+    vehicles = {v.car_code: v for v in _coc_pi_vehicles(session, user, pi_code)}
+    codes = payload.get("carCodes")
+    if not isinstance(codes, list) or not codes or not all(isinstance(c, str) for c in codes) or not set(codes) <= vehicles.keys():
+        raise HTTPException(400, "Select accessible vehicles from this PI / 请勾选本PI有权访问的车辆")
+    selected = [vehicles[c] for c in codes]
+    if any(not v.vin for v in selected):
+        raise HTTPException(409, "VIN missing; select available rows / 存在未录VIN车辆，请勾选可用项")
+    temporary = tempfile.TemporaryDirectory(prefix="jato-coc-download-")
+    path = Path(temporary.name) / "coc.zip"
+    try:
+        write_pdf_zip([v.vin.upper() for v in selected], path)
+    except Exception:
+        temporary.cleanup()
+        raise
+    return FileResponse(path, media_type="application/zip", filename=f"{pi_code}-COC.zip",
+                        background=BackgroundTask(temporary.cleanup))
 
 
 def _clean(value: object) -> str | None:

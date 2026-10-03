@@ -374,6 +374,7 @@ def test_zip_inside_rar_inside_zip_uses_exact_member_and_never_reads_pdf(tmp_pat
         calls.append(command)
         assert command[-2:] == ["--", "-group*/inner.zip"]
         assert "-spd" in command and kwargs["timeout"] == 60
+        kwargs["stdout"].write(child)
         return SimpleNamespace(returncode=0, stdout=child)
     monkeypatch.setattr(coc_match_service.subprocess, "run", extract)
     result = list_archive_members(path)
@@ -382,6 +383,15 @@ def test_zip_inside_rar_inside_zip_uses_exact_member_and_never_reads_pdf(tmp_pat
         {"memberPath": ["market/inner.rar", "-group*/inner.zip", "A001.pdf"], "stem": "A001"},
     ]
     assert len(calls) == 1
+
+
+def test_nested_zip_is_streamed_not_read_into_memory(tmp_path, monkeypatch):
+    path = tmp_path / "outer.zip"
+    path.write_bytes(_zip_bytes({"inner.zip": _zip_bytes({"A001.pdf": b"pdf"})}))
+    def reject_read(*args, **kwargs):
+        raise AssertionError("Nested archives must stream through open(), not read()")
+    monkeypatch.setattr(zipfile.ZipFile, "read", reject_read)
+    assert list_archive_files(path) == {"A001"}
 
 
 def test_rar_technical_listing_preserves_names_and_skips_directories(monkeypatch, tmp_path):

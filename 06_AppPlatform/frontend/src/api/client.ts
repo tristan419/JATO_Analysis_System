@@ -1,3 +1,4 @@
+import type { CocLibraryState, CocSourcePreview, CocDeletePreview, PiCocLookup } from "../types/cocLibrary";
 import type {
   AdvancedChartResponse,
   AnalysisQuery,
@@ -4608,14 +4609,16 @@ export const api = {
   /** Simple POST — both files < 50 MB. */
   cocMatchCreateJob: (
     excel: File,
-    archive: File,
+    archive: File | null,
     country: string,
     fileExt: string,
     month?: string,
+    useLibrary = false,
   ) => {
     const fd = new FormData();
     fd.append("excel", excel);
-    fd.append("archive", archive);
+    if (archive) fd.append("archive", archive);
+    fd.append("use_library", String(useLibrary));
     fd.append("country", country);
     fd.append("file_ext", fileExt);
     if (month) fd.append("month", month);
@@ -4677,6 +4680,7 @@ export const api = {
     country: string,
     fileExt: string,
     month?: string,
+    useLibrary = false,
   ) => {
     const body: Record<string, unknown> = {
       excelUploadId,
@@ -4685,6 +4689,7 @@ export const api = {
       archiveFilename,
       country,
       fileExt,
+      useLibrary,
     };
     if (month) body.month = month;
     return request<{ item: Record<string, unknown> }>("/coc-match/jobs/batch", {
@@ -4697,58 +4702,59 @@ export const api = {
    * Smart upload: auto-decides simple POST vs chunked based on file size.
    * Files >= 50 MB are uploaded via chunked sessions; smaller files use direct POST.
    */
+  cocUploadFile: async (file: File, onProgress?: (completed: number, total: number) => void): Promise<string> => {
+    const session = await api.cocMatchInitiateUpload(file.name, file.size, `coc-resume-${file.name}-${file.size}`);
+    const uploadId = String(session.uploadId);
+    const received = new Set(Array.isArray(session.receivedChunks) ? session.receivedChunks.filter((part): part is number => typeof part === "number") : []);
+    const totalChunks = Number(session.totalChunks ?? 1);
+    for (let i = 1; i <= totalChunks; i++) {
+      if (!received.has(i)) await api.cocMatchUploadChunk(uploadId, i, file.slice((i - 1) * 8 * 1024 * 1024, i * 8 * 1024 * 1024));
+      onProgress?.(i, totalChunks);
+    }
+    await api.cocMatchCompleteUpload(uploadId);
+    return uploadId;
+  },
+
+  cocLibrary: () => request<CocLibraryState>("/coc-match/library"),
+  cocLibraryImport: (uploadId: string) => request<{ sourceId: string; duplicate: boolean }>("/coc-match/library/sources", { method: "POST", body: JSON.stringify({ uploadId }) }),
+  cocLibraryPreview: (id: string) => request<CocSourcePreview>(`/coc-match/library/sources/${encodeURIComponent(id)}/preview`),
+  cocLibraryActivate: (preview: CocSourcePreview, replaceVins: string[]) => request<{ status: string }>(`/coc-match/library/sources/${encodeURIComponent(preview.sourceId)}/activate`, { method: "POST", body: JSON.stringify({ fingerprint: preview.fingerprint, replaceVins }) }),
+  cocLibraryDeletePreview: (id: string) => request<CocDeletePreview>(`/coc-match/library/sources/${encodeURIComponent(id)}/delete-preview`, { method: "POST" }),
+  cocLibraryDelete: (preview: CocDeletePreview) => request<{ deleted: boolean }>(`/coc-match/library/sources/${encodeURIComponent(preview.sourceId)}`, { method: "DELETE", body: JSON.stringify({ fingerprint: preview.fingerprint }) }),
+  piCocLookup: (piCode: string) => request<PiCocLookup>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/coc-library`),
+  piCocDownload: (piCode: string, carCodes: string[]) => requestBlob(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/coc-download`, { method: "POST", body: JSON.stringify({ carCodes }) }),
+
   cocMatchUploadAndCreateJob: async (
     excel: File,
-    archive: File,
+    archive: File | null,
     country: string,
     fileExt: string,
     month?: string,
+    useLibrary = false,
   ): Promise<{ item: CocMatchJob }> => {
     const CHUNK_THRESHOLD = 50 * 1024 * 1024; // 50 MB
-    const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB
 
     const needsChunkedExcel = excel.size >= CHUNK_THRESHOLD;
-    const needsChunkedArchive = archive.size >= CHUNK_THRESHOLD;
+    const needsChunkedArchive = (archive?.size ?? 0) >= CHUNK_THRESHOLD;
 
     // Small files: simple POST
     if (!needsChunkedExcel && !needsChunkedArchive) {
-      return api.cocMatchCreateJob(excel, archive, country, fileExt, month);
+      return api.cocMatchCreateJob(excel, archive, country, fileExt, month, useLibrary);
     }
 
     // Large files: chunked upload per file
-    const uploadFile = async (file: File): Promise<string> => {
-      const session = await api.cocMatchInitiateUpload(
-        file.name,
-        file.size,
-        `coc-resume-${file.name}-${file.size}`,
-      );
-      const uploadId = String(session.uploadId ?? session.uploadId);
-      const received: number[] = (session.receivedChunks as number[]) || [];
-      const totalChunks = Number(session.totalChunks ?? 1);
-
-      for (let i = 1; i <= totalChunks; i++) {
-        if (received.includes(i)) continue;
-        const start = (i - 1) * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
-        const blob = file.slice(start, end);
-        await api.cocMatchUploadChunk(uploadId, i, blob);
-      }
-
-      await api.cocMatchCompleteUpload(uploadId);
-      return uploadId;
-    };
-
-    const excelUploadId = await uploadFile(excel);
-    const archiveUploadId = await uploadFile(archive);
+    const excelUploadId = await api.cocUploadFile(excel);
+    const archiveUploadId = archive ? await api.cocUploadFile(archive) : "";
 
     return api.cocMatchCreateJobFromUpload(
       excelUploadId,
       archiveUploadId,
       excel.name,
-      archive.name,
+      archive?.name ?? "",
       country,
       fileExt,
       month,
+      useLibrary,
     );
   },
 

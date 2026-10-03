@@ -78,6 +78,40 @@ async function selectPi() {
   await screen.findByText("150 units / 台");
   await waitFor(() => expect(screen.getAllByRole("row").length).toBe(6));
 }
+
+describe("COC library lookup and downloads", () => {
+  it("searches the whole PI only on request, filters results and downloads selected PDFs", async () => {
+    const lookup = vi.spyOn(api, "piCocLookup").mockResolvedValue({ total: 150, available: 1, awaitingVin: 130, missing: 19,
+      items: [{ carCode: "CAR-0", vin: vehicle(0).vin, status: "available" }, { carCode: "CAR-1", vin: vehicle(1).vin, status: "missing" }, { carCode: "CAR-20", vin: null, status: "awaiting_vin" }] });
+    const download = vi.spyOn(api, "piCocDownload").mockResolvedValue(new Blob(["zip"]));
+    const createUrl = vi.fn(() => "blob:zip");
+    vi.stubGlobal("URL", class extends URL { static createObjectURL = createUrl; static revokeObjectURL = vi.fn(); });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    await selectPi();
+    expect(lookup).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "COC library / 在线库" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search library / 在库里查找" }));
+    await screen.findByText(/COC PDF 1\/150 · Awaiting/);
+    expect(lookup).toHaveBeenCalledWith(PI);
+    fireEvent.change(screen.getByLabelText("COC results / 查库结果"), { target: { value: "missing" } });
+    expect(screen.getByRole("button", { name: "CAR-1" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "CAR-0" })).toBeNull();
+    fireEvent.click(screen.getByLabelText("Select CAR-0"));
+    fireEvent.click(screen.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
+    await waitFor(() => expect(download).toHaveBeenCalledWith(PI, ["CAR-0"]));
+    vi.unstubAllGlobals();
+  });
+
+  it("shows actionable guidance when library lookup fails", async () => {
+    vi.spyOn(api, "piCocLookup").mockRejectedValue(new Error("503 Service Unavailable"));
+    await selectPi();
+    fireEvent.click(screen.getByRole("button", { name: "COC library / 在线库" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search library / 在库里查找" }));
+    await screen.findByText(/查库未完成/);
+    expect(screen.queryByText(/503/)).toBeNull();
+    expect(screen.getByRole("link", { name: "Open COC workbench / 打开 COC 工作台" }).getAttribute("href")).toBe("/product/coc-match");
+  });
+});
 function openView() {
   fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
   fireEvent.click(screen.getByRole("tab", { name: /View/ }));
