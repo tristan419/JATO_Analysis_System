@@ -982,6 +982,7 @@ export function CocMatchPage() {
           </div>
           {job.inputWarning ? <div style={matchWarningPanelStyle}>输入提醒：{job.inputWarning}</div> : null}
           {job.pdfDownloadCount ? <div style={hintStyle}>PDF package: {job.pdfDownloadCount} VINs · Missing: {job.missingCount ?? 0} · No library import required / PDF包含 {job.pdfDownloadCount} 个VIN，缺失 {job.missingCount ?? 0} 个；无需入库。</div> : null}
+          {job.status === "success" && job.fileExt === ".pdf" && !job.pdfDownloadCount ? <div style={hintStyle}>No retained matching PDF package. Check VINs/files and run the comparison again / 无匹配的已保留PDF包，请检查VIN及文件后重新运行比对。</div> : null}
           {failureResult ? renderMatchFailurePanel(failureResult) : null}
         </div>
       </div>

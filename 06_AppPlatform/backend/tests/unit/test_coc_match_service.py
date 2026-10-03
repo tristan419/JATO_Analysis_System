@@ -1,4 +1,5 @@
 import io
+import hashlib
 import subprocess
 import zipfile
 from pathlib import Path
@@ -124,7 +125,7 @@ def test_pdf_job_local_files_override_library_and_library_only_fills_missing(tmp
         assert set(archive.namelist()) == {f"{vin}.pdf", f"{vin2}.pdf"}
         assert archive.read(f"{vin}.pdf") == b"local-new"
         assert archive.read(f"{vin2}.pdf") == b"library-fill"
-    assert library.lookup_vins([vin])[vin]["sha"] != __import__("hashlib").sha256(b"local-new").hexdigest()
+    assert library.lookup_vins([vin])[vin]["sha"] != hashlib.sha256(b"local-new").hexdigest()
 
 
 def test_match_cocs_reports_missing_excel_rows() -> None:
