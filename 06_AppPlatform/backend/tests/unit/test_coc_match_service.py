@@ -37,6 +37,96 @@ from app.services.coc_match_service import (
 )
 
 
+def test_one_off_nested_pdf_package_is_required_vin_only_and_download_never_rescans(tmp_path, monkeypatch):
+    vin, missing, extra = "LVUGTB220TDE99425", "LVUGTB220TDE99426", "LVUGTB220TDE99427"
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as archive:
+        archive.writestr(f"cars/{vin.lower()}.PDF", b"original bytes")
+        archive.writestr(f"duplicate/{vin}.pdf", b"original bytes")
+        archive.writestr(f"{extra}.pdf", b"not requested")
+    for depth in range(2):
+        outer = io.BytesIO()
+        with zipfile.ZipFile(outer, "w") as archive:
+            archive.writestr(f"nested-{depth}.zip", inner.getvalue())
+        inner = outer
+    root = tmp_path / "jobs"
+    job_id = "coc-match-1234abcd"
+    directory = root / job_id
+    directory.mkdir(parents=True)
+    path = directory / "source.zip"
+    path.write_bytes(inner.getvalue())
+    target = directory / "matched-pdfs.zip"
+    files, packed = coc_match_service.build_match_pdf_package(path, target, {vin, missing})
+    assert files == {vin, extra} and packed == {vin}
+    with zipfile.ZipFile(target) as archive:
+        assert archive.namelist() == [f"{vin}.pdf"]
+        assert archive.read(f"{vin}.pdf") == b"original bytes"
+        assert archive.testzip() is None
+    assert sorted(p.name for p in directory.iterdir()) == ["matched-pdfs.zip", "source.zip"]
+    persist_job_state(state_path(root, job_id), {"jobId": job_id, "status": "success", "pdfDownloadCount": 1})
+    monkeypatch.setattr(coc_match_service, "COC_MATCH_JOB_ROOT", root)
+    monkeypatch.setattr(coc_match_service, "list_archive_members", lambda *a, **kw: pytest.fail("download rescanned archive"))
+    from app.api.routes.coc_match import get_coc_match_pdfs
+    response = get_coc_match_pdfs(job_id, _user=SimpleNamespace(role="viewer"))
+    assert response.path == target and response.media_type == "application/zip"
+    with pytest.raises(HTTPException):
+        coc_match_service.get_coc_match_pdf_package_path("../source")
+    target.unlink()
+    with pytest.raises(HTTPException, match="run the PDF comparison again"):
+        coc_match_service.get_coc_match_pdf_package_path(job_id)
+
+
+def test_one_off_conflicting_vin_pdfs_remove_partial_package(tmp_path):
+    vin = "LVUGTB220TDE99425"
+    path = tmp_path / "source.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(f"first/{vin}.pdf", b"old")
+        archive.writestr(f"second/{vin}.pdf", b"new")
+    target = tmp_path / "matched-pdfs.zip"
+    with pytest.raises(ValueError, match="Conflicting PDFs"):
+        coc_match_service.build_match_pdf_package(path, target, {vin})
+    assert not target.exists()
+
+
+def test_pdf_job_local_files_override_library_and_library_only_fills_missing(tmp_path, monkeypatch):
+    from openpyxl import Workbook
+    from app.services import coc_library_service as library
+    vin, vin2, missing = "LVUGTB220TDE99425", "LVUGTB220TDE99426", "LVUGTB220TDE99427"
+    monkeypatch.setattr(library, "LIBRARY_ROOT", tmp_path / "library")
+    source = tmp_path / "library-source.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr(f"{vin}.pdf", b"library-old")
+        archive.writestr(f"{vin2}.pdf", b"library-fill")
+    imported = library.import_library_source(source, source.name, "tester", background=False)
+    preview = library.preview_source(imported["sourceId"])
+    library.activate_source(imported["sourceId"], preview["fingerprint"], [])
+    root = tmp_path / "jobs"
+    job_id = "coc-match-1234abcd"
+    directory = root / job_id
+    directory.mkdir(parents=True)
+    monkeypatch.setattr(coc_match_service, "COC_MATCH_JOB_ROOT", root)
+    monkeypatch.setattr(coc_match_service, "COC_DB_PATH", root / "history.db")
+    excel = directory / "registry.xlsx"
+    workbook = Workbook()
+    workbook.active.append(["VIN", "Model", "Country"])
+    for value in (vin, vin2, missing):
+        workbook.active.append([value, "J7", "CH"])
+    workbook.save(excel)
+    archive_path = directory / "upload.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(f"{vin}.pdf", b"local-new")
+    persist_job_state(state_path(root, job_id), {"jobId": job_id, "status": "queued", "useLibrary": True})
+    CocMatchJobRunner(job_id=job_id, state_dir=root, excel_path=excel, archive_path=archive_path,
+                      country="CH", month="2026-09", file_ext=".pdf", triggered_by="tester").run()
+    state = coc_match_service.get_coc_match_job(job_id)
+    assert (state["pdfDownloadCount"], state["matchedCount"], state["missingCount"]) == (2, 2, 1)
+    with zipfile.ZipFile(coc_match_service.get_coc_match_pdf_package_path(job_id)) as archive:
+        assert set(archive.namelist()) == {f"{vin}.pdf", f"{vin2}.pdf"}
+        assert archive.read(f"{vin}.pdf") == b"local-new"
+        assert archive.read(f"{vin2}.pdf") == b"library-fill"
+    assert library.lookup_vins([vin])[vin]["sha"] != __import__("hashlib").sha256(b"local-new").hexdigest()
+
+
 def test_match_cocs_reports_missing_excel_rows() -> None:
     rows = [
         {"chassis": "A001", "model": "J7", "country": "CZ"},

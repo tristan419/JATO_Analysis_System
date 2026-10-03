@@ -1,6 +1,6 @@
 # Order Genius — PI Vehicle Allocation & Delivery Tracker 历史基础规格
 
-> 历史基础规格，不再作为新开发的完整执行指令。当前唯一业务规则维护在交接文档的ORDER_GENIUS_GOAL_EXECUTE_2026-09-28.md 4.1：只有选品创建PI；分车不保留Create PI/Generate/Add line。2026-10-04本批还包含共享FloatingDeck、状态摘要、字段搜索/VIN批量勾选、明细动力色、列分组/排序及所见导出；运费/保费口径仍待确认，不改FOB。旧创建建议及常驻明细布局已失效。字段/接口历史定义保留，不据此恢复旧入口。
+> 历史基础规格，不再作为新开发的完整执行指令。当前唯一业务规则维护在交接文档的ORDER_GENIUS_GOAL_EXECUTE_2026-09-28.md 4.1：只有选品创建PI；分车不保留Create PI/Generate/Add line。2026-10-04本批还包含共享FloatingDeck、状态摘要、字段搜索/VIN批量勾选、明细动力色、列分组/排序及所见导出；运费/保费已确认按每台EUR独立保存，单车或勾选批量编辑，不改FOB。一次性比对包下载口径见Goal 5.1。旧创建建议及常驻明细布局已失效。字段/接口历史定义保留，不据此恢复旧入口。
 
 > 目标：在现有 Order Genius 选品/PI 导出能力后，新增一个“PI 车辆池 + 虚拟车号 + VIN 绑定 + 物流交付查询”页面。
 >

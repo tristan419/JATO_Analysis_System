@@ -60,6 +60,7 @@ COLUMN_LABELS = dict(zip([
     "shippingScheduleUrl", "feishuTrackingUrl", "remark",
 ], HEADERS))
 COLUMN_LABELS.update({"config": "Config", "fobEur": "FOB (EUR)", "cocPdf": "COC PDF",
+                      "freightEur": "Freight / 运费 (EUR)", "insuranceEur": "Insurance / 保费 (EUR)",
                       "actualDepartureDate": "Actual departure", "actualArrivalDate": "Actual arrival",
                       "piCode": "PI", "materialCode": "Material", "exteriorColorName": "Exterior",
                       "interiorColorName": "Interior", "remark": "Note / 备注",

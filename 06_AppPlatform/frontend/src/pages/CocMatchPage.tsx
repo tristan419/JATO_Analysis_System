@@ -705,6 +705,25 @@ export function CocMatchPage() {
     }
   };
 
+  const handleDownloadPdfs = async (jobId: string) => {
+    setReportAction(`${jobId}:pdfs`);
+    setMatchError(null);
+    try {
+      downloadBlob(await api.cocMatchGetPdfPackage(jobId), `COC_${jobId}.zip`);
+    } catch {
+      setMatchError("PDF download unavailable. Run the PDF comparison again / PDF包暂不可下载，请重新运行PDF比对。");
+    } finally {
+      setReportAction(null);
+    }
+  };
+
+  function renderPdfDownload(job: CocMatchJob) {
+    if (!job.pdfDownloadCount) return null;
+    return <button className="btn btn-sm btn-secondary" type="button" disabled={reportAction !== null} onClick={() => void handleDownloadPdfs(job.jobId)}>
+      {reportAction === `${job.jobId}:pdfs` ? "Downloading / 下载中…" : `Download PDFs / 下载PDF (${job.pdfDownloadCount})`}
+    </button>;
+  }
+
   const handleDownloadFillWorkbook = async (job: CocFillJob) => {
     setFillDownloadAction(job.jobId);
     setFillError(null);
@@ -774,7 +793,7 @@ export function CocMatchPage() {
       </details> : null}
 
       {activeMode === "match" && matchError ? (
-        <div className="alert alert-error" style={{ marginBottom: 14 }}>{matchError}</div>
+        <div className="alert alert-error" style={{ marginBottom: 14 }}>{matchError} <button className="btn btn-sm btn-secondary" type="button" onClick={() => setControlOpen(true)}>Review inputs / 检查比对输入</button></div>
       ) : null}
       {activeMode === "fill" && fillError ? (
         <div className="alert alert-error" style={{ marginBottom: 14 }}>{fillError}</div>
@@ -953,6 +972,7 @@ export function CocMatchPage() {
                 <button className="btn btn-sm btn-secondary" type="button" disabled={reportAction !== null} onClick={() => void handleDownloadReport(job.jobId)}>
                   {reportAction === `${job.jobId}:download` ? "下载中..." : "下载报告"}
                 </button>
+                {renderPdfDownload(job)}
               </>
             ) : null}
             {job.status === "failed" ? (
@@ -961,6 +981,7 @@ export function CocMatchPage() {
             <span style={hintStyle}>创建时间 {formatDateTime(job.createdAt)}</span>
           </div>
           {job.inputWarning ? <div style={matchWarningPanelStyle}>输入提醒：{job.inputWarning}</div> : null}
+          {job.pdfDownloadCount ? <div style={hintStyle}>PDF package: {job.pdfDownloadCount} VINs · Missing: {job.missingCount ?? 0} · No library import required / PDF包含 {job.pdfDownloadCount} 个VIN，缺失 {job.missingCount ?? 0} 个；无需入库。</div> : null}
           {failureResult ? renderMatchFailurePanel(failureResult) : null}
         </div>
       </div>
@@ -1372,6 +1393,7 @@ export function CocMatchPage() {
         <span style={{ display: "inline-flex", gap: 6 }}>
           <button className="btn btn-sm btn-secondary" type="button" disabled={reportAction !== null} onClick={() => void handleOpenReport(job.jobId)}>查看</button>
           <button className="btn btn-sm btn-secondary" type="button" disabled={reportAction !== null} onClick={() => void handleDownloadReport(job.jobId)}>下载</button>
+          {renderPdfDownload(job)}
         </span>
       );
     }

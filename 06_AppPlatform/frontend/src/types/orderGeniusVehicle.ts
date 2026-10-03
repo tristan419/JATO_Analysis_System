@@ -116,6 +116,8 @@ export interface PiLineAllocation {
 
 export interface PiVehicleUnit {
   fobEur: number | null;
+  freightEur: number | null;
+  insuranceEur: number | null;
   vehicleUnitId: string;
   piCode: string;
   officialPiNo: string | null;
@@ -356,6 +358,8 @@ export interface VehicleVinListExtract {
 }
 
 export interface UpdateVehiclePayload {
+  freightEur?: number | null;
+  insuranceEur?: number | null;
   vin?: string | null;
   productionDate?: string | null;
   etd?: string | null;

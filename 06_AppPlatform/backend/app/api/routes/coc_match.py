@@ -27,6 +27,7 @@ from app.services.coc_match_service import (
     create_coc_match_job_from_upload,
     get_coc_match_job,
     get_coc_match_report_path,
+    get_coc_match_pdf_package_path,
     initiate_coc_match_upload,
     list_coc_match_jobs,
     retry_failed_coc_match_job,
@@ -401,6 +402,11 @@ def get_coc_match_report(
             headers={"Content-Disposition": f'attachment; filename="coc_report_{job_id}.html"'},
         )
     return HTMLResponse(content=content)
+
+
+@router.get("/jobs/{job_id}/pdfs")
+def get_coc_match_pdfs(job_id: str, _user: UserContext = Depends(require_min_role("viewer"))) -> FileResponse:
+    return FileResponse(get_coc_match_pdf_package_path(job_id), media_type="application/zip", filename=f"COC_{job_id}.zip")
 
 
 @router.post("/jobs/{job_id}/retry")

@@ -61,6 +61,8 @@ const PI_TOOL_TABS: Array<DeckControlTabItem<PiToolTab>> = [
 ];
 
 interface EditableVehicleForm {
+  freightEur: string;
+  insuranceEur: string;
   vin: string;
   productionDate: string;
   etd: string;
@@ -78,6 +80,8 @@ interface EditableVehicleForm {
 }
 
 interface BulkVehicleForm {
+  freightEur: string;
+  insuranceEur: string;
   dealerCode: string;
   productionDate: string;
   etd: string;
@@ -176,6 +180,8 @@ function logisticsOptionsFromFlow(flow: VehicleStatusFlowConfig | null): Array<C
 
 function toEditForm(vehicle: PiVehicleUnit): EditableVehicleForm {
   return {
+    freightEur: vehicle.freightEur == null ? "" : String(vehicle.freightEur),
+    insuranceEur: vehicle.insuranceEur == null ? "" : String(vehicle.insuranceEur),
     vin: vehicle.vin ?? "",
     productionDate: dateInput(vehicle.productionDate),
     etd: dateInput(vehicle.etd),
@@ -195,6 +201,8 @@ function toEditForm(vehicle: PiVehicleUnit): EditableVehicleForm {
 
 function toVehiclePayload(form: EditableVehicleForm): UpdateVehiclePayload {
   return {
+    freightEur: form.freightEur === "" ? null : Number(form.freightEur),
+    insuranceEur: form.insuranceEur === "" ? null : Number(form.insuranceEur),
     vin: cleanText(form.vin),
     productionDate: cleanText(form.productionDate),
     etd: cleanText(form.etd),
@@ -214,6 +222,8 @@ function toVehiclePayload(form: EditableVehicleForm): UpdateVehiclePayload {
 
 function toBulkFieldPayload(form: BulkVehicleForm): UpdateVehiclePayload {
   const payload: UpdateVehiclePayload = {};
+  if (form.freightEur !== "") payload.freightEur = Number(form.freightEur);
+  if (form.insuranceEur !== "") payload.insuranceEur = Number(form.insuranceEur);
   if (form.productionDate) {
     payload.productionDate = form.productionDate;
   }
@@ -245,6 +255,10 @@ function isPiDetail(item: PiOrderDetail | PiVehicleUnit | null): item is PiOrder
   return Boolean(item && "header" in item);
 }
 
+function validCostInputs(...values: string[]): boolean {
+  return values.every((value) => value === "" || (/^\d+(?:\.\d{1,2})?$/.test(value) && Number(value) < 10**12));
+}
+
 function buildDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -263,6 +277,8 @@ const VEHICLE_COLUMNS: Array<{ key: VehicleColumnKey; label: string; optional?: 
   { key: "materialCode", label: "Material" }, { key: "config", label: "Config" },
   { key: "exteriorColorName", label: "Exterior" }, { key: "interiorColorName", label: "Interior" },
   { key: "fobEur", label: "FOB (EUR)" },
+  { key: "freightEur", label: "Freight / 运费 (EUR)", optional: true },
+  { key: "insuranceEur", label: "Insurance / 保费 (EUR)", optional: true },
   { key: "cocPdf", label: "COC PDF", optional: true },
   { key: "allocationStatus", label: "Allocation" }, { key: "logisticsStatus", label: "Logistics" },
   { key: "shipName", label: "Ship" }, { key: "eta", label: "ETA" },
@@ -276,16 +292,18 @@ const VEHICLE_COLUMNS: Array<{ key: VehicleColumnKey; label: string; optional?: 
 ];
 const COLUMN_GROUPS = [
   { label: "Identity / 车辆", keys: ["carCode", "vin", "piCode", "countryCode", "materialCode", "config", "exteriorColorName", "interiorColorName"] },
-  { label: "Price & documents / 价格与文件", keys: ["fobEur", "cocPdf", "remark"] },
+  { label: "Price & documents / 价格与文件", keys: ["fobEur", "freightEur", "insuranceEur", "cocPdf", "remark"] },
   { label: "Status & dates / 状态与日期", keys: ["allocationStatus", "logisticsStatus", "shipName", "eta", "readyForPickupDate", "productionDate", "etd", "actualDepartureDate", "actualArrivalDate", "dealerCode"] },
 ];
 const DEFAULT_COLUMNS = VEHICLE_COLUMNS.filter((column) => !column.optional).map((column) => column.key);
 const EMPTY_BULK_FORM: BulkVehicleForm = {
+  freightEur: "", insuranceEur: "",
   dealerCode: "", productionDate: "", etd: "", eta: "", readyForPickupDate: "",
   shipName: "", allocationStatus: "", logisticsStatus: "",
 };
 
 function vehicleCell(vehicle: PiVehicleUnit, key: VehicleColumnKey): ReactNode {
+  if (key === "freightEur" || key === "insuranceEur") return vehicle[key] == null ? "—" : vehicle[key].toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (key === "cocPdf") return "—";
   if (key === "fobEur") return <span title={vehicle.fobEur == null ? "No confirmed market price snapshot; check PI details / 缺已确认的市场价格快照，请核对 PI 明细" : "Confirmed PI market price snapshot; not today's BOM price / 已确认的 PI 市场价格快照；不是当前 BOM 价格"}>{vehicle.fobEur == null ? "—" : vehicle.fobEur.toLocaleString("en-GB")}</span>;
   if (key === "config" || key === "materialCode") return <span className="va-product-text" style={{ color: ptColor(vehicle.powertrain ?? "", "#475467") }}>{key === "config" ? `${display(vehicle.modelName)} / ${display(vehicle.version)}` : display(vehicle.materialCode)}</span>;
@@ -854,6 +872,9 @@ export function OrderGeniusVehicleAllocationPage() {
     if (!canEdit || !selectedVehicle || !editForm || scopeBusy) {
       return;
     }
+    if (!validCostInputs(editForm.freightEur, editForm.insuranceEur)) {
+      setError("Use non-negative EUR amounts with up to 2 decimals / EUR金额须非负且最多两位小数。"); return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -943,6 +964,12 @@ export function OrderGeniusVehicleAllocationPage() {
   async function applyBulkUpdate(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!canEdit || scopeBusy) return;
+    if (!validCostInputs(bulkForm.freightEur, bulkForm.insuranceEur)) {
+      setError("Use non-negative EUR amounts with up to 2 decimals / EUR金额须非负且最多两位小数。"); return;
+    }
+    if ((bulkForm.freightEur !== "" || bulkForm.insuranceEur !== "") && !selectedCarCodes.size) {
+      setError("Select vehicle rows before updating costs / 更新运保费前请明确勾选车辆。"); return;
+    }
     if (filteredUpdateNeedsSelection && !selectedCarCodes.size) {
       setError("Select search results before updating / 搜索或筛选后请先勾选要更新的车辆。"); return;
     }
@@ -1113,13 +1140,15 @@ export function OrderGeniusVehicleAllocationPage() {
                   <LoadingActionButton
                     type="submit"
                     loading={bulkSaving}
-                    disabled={!canEdit || !selectedPi || scopeBusy || (filteredUpdateNeedsSelection && !selectedCarCodes.size)}
+                    disabled={!canEdit || !selectedPi || scopeBusy || ((filteredUpdateNeedsSelection || bulkForm.freightEur !== "" || bulkForm.insuranceEur !== "") && !selectedCarCodes.size)}
                     loadingLabel="Applying..."
                   >
                     Update status
                   </LoadingActionButton>
                 </div>
                 <div className="va-bulk-fields">
+                  <label>Freight / 运费 (EUR)<input type="number" min="0" step="0.01" value={bulkForm.freightEur} placeholder="Keep / 保留" onChange={(event) => setBulkForm((current) => ({ ...current, freightEur: event.target.value }))} /></label>
+                  <label>Insurance / 保费 (EUR)<input type="number" min="0" step="0.01" value={bulkForm.insuranceEur} placeholder="Keep / 保留" onChange={(event) => setBulkForm((current) => ({ ...current, insuranceEur: event.target.value }))} /></label>
                   <label>Production<input type="date" value={bulkForm.productionDate} onChange={(event) => setBulkForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
                   <label>ETD<input type="date" value={bulkForm.etd} onChange={(event) => setBulkForm((current) => ({ ...current, etd: event.target.value }))} /></label>
                   <label>ETA<input type="date" value={bulkForm.eta} onChange={(event) => setBulkForm((current) => ({ ...current, eta: event.target.value }))} /></label>
@@ -1556,6 +1585,8 @@ export function OrderGeniusVehicleAllocationPage() {
             <label>Dealer Code<input value={editForm.dealerCode} onChange={(event) => setEditForm((current) => current ? { ...current, dealerCode: event.target.value } : current)} /></label>
             <label>Dealer Name<input value={editForm.dealerName} onChange={(event) => setEditForm((current) => current ? { ...current, dealerName: event.target.value } : current)} /></label>
             <label>Customer Ref<input value={editForm.customerRef} onChange={(event) => setEditForm((current) => current ? { ...current, customerRef: event.target.value } : current)} /></label>
+            <label>Freight / 运费 (EUR)<input type="number" min="0" step="0.01" readOnly={!canEdit} value={editForm.freightEur} onChange={(event) => setEditForm((current) => current ? { ...current, freightEur: event.target.value } : current)} /></label>
+            <label>Insurance / 保费 (EUR)<input type="number" min="0" step="0.01" readOnly={!canEdit} value={editForm.insuranceEur} onChange={(event) => setEditForm((current) => current ? { ...current, insuranceEur: event.target.value } : current)} /></label>
             <label className="va-wide">Note / 备注<textarea readOnly={!canEdit} value={editForm.remark} onChange={(event) => setEditForm((current) => current ? { ...current, remark: event.target.value } : current)} /></label>
           </div>
           <LoadingActionButton

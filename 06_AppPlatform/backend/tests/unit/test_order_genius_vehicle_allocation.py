@@ -1284,6 +1284,44 @@ def _vin_fill_pi(session, materials=("BOM-A",), quantity=3):
     return header["piCode"], vehicle_repo.list_vehicles_for_bulk_update(session, pi_code=header["piCode"])
 
 
+def test_vehicle_costs_single_and_checked_batch_keep_fob_vin_and_quantities(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=2)
+    first, second = cars
+    result = vehicle_service.update_vehicle_unit(vehicle_db, first.car_code, {"freightEur": 123.45, "insuranceEur": 10}, "tester")
+    assert (result["freightEur"], result["insuranceEur"], result["fobEur"]) == (123.45, 10, 12345)
+    bulk_update_vehicle_units(vehicle_db, {"piCode": pi, "carCodes": [first.car_code], "fields": {"freightEur": 0}}, "tester")
+    assert first.freight_eur == 0 and first.insurance_eur == 10
+    assert second.freight_eur is None and second.insurance_eur is None
+    assert first.vin is None and second.vin is None
+    vehicle_service.update_vehicle_unit(vehicle_db, first.car_code, {"insuranceEur": None}, "tester")
+    assert first.insurance_eur is None
+    line = vehicle_repo.get_line_by_code(vehicle_db, first.pi_line_code)
+    assert line.quantity == 2 and line.fob_eur == 12345
+    with pytest.raises(HTTPException, match="Select vehicle rows"):
+        bulk_update_vehicle_units(vehicle_db, {"piCode": pi, "fields": {"freightEur": 99}}, "tester")
+
+
+@pytest.mark.parametrize("value", [-1, "NaN", "Infinity", "1.234", 10**12, True])
+def test_invalid_vehicle_cost_is_rejected_before_any_row_change(vehicle_db, value):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=1)
+    with pytest.raises(HTTPException, match="non-negative EUR"):
+        vehicle_service.update_vehicle_unit(vehicle_db, cars[0].car_code, {"freightEur": value, "remark": "must not persist"}, "tester")
+    assert cars[0].freight_eur is None and cars[0].remark is None
+
+
+def test_vehicle_cost_export_uses_visible_order_and_keeps_fob_separate():
+    workbook = openpyxl.load_workbook(generate_vehicle_allocation_excel([
+        {"carCode": "CAR-1", "fobEur": 12345, "freightEur": 123.45, "insuranceEur": 0},
+    ], ["insuranceEur", "carCode", "freightEur", "fobEur"]))
+    try:
+        assert list(workbook.active.values) == [
+            ("Insurance / 保费 (EUR)", "Car Code", "Freight / 运费 (EUR)", "FOB (EUR)"),
+            (0, "CAR-1", 123.45, 12345),
+        ]
+    finally:
+        workbook.close()
+
+
 def test_vehicle_keyword_matches_suffix_and_existing_detail_fields(vehicle_db):
     pi_code, cars = _vin_fill_pi(vehicle_db, materials=("T71607VBWMM0007",), quantity=1)
     cars[0].remark = "Priority customer"

@@ -23,7 +23,7 @@ vi.mock("../../components/CommandSelect", () => ({
 const PI = "PI-CH-202609-001";
 function vehicle(index: number): PiVehicleUnit {
   return {
-    fobEur: 15000, vehicleUnitId: `unit-${index}`, piCode: PI, officialPiNo: null, orderingAccountCode: "CH",
+    fobEur: 15000, freightEur: null, insuranceEur: null, vehicleUnitId: `unit-${index}`, piCode: PI, officialPiNo: null, orderingAccountCode: "CH",
     orderingAccountName: null, shipmentBatchCode: null, portOfDischarge: null,
     piLineCode: `${PI}-L${index < 75 ? "01" : "02"}`, carCode: `CAR-${index}`,
     vin: index < 20 ? `LVTDB21B9RD${String(index).padStart(6, "0")}` : null,
@@ -82,7 +82,8 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function selectPi() {
   render(<OrderGeniusVehicleAllocationPage />);
-  fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${PI}`) }));
+  await waitFor(() => expect(api.getVehicleAllocationPis).toHaveBeenCalled());
+  fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${PI}`) }, { timeout: 5000 }));
   await screen.findByText("150 units / 台");
   await waitFor(() => expect(screen.getAllByRole("row").length).toBe(6));
 }
@@ -332,7 +333,7 @@ describe("PI-scoped BOM + VIN import", () => {
     fireEvent.click(screen.getByLabelText(/Remove these VINs from file/));
     const file = new File(["mock workbook"], "original.xlsx");
     fireEvent.change(screen.getByLabelText("BOM and VIN XLSX"), { target: { files: [file] } });
-    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 }));
     await screen.findByText(/VIN cleared: 1/);
     expect(preview).toHaveBeenCalledWith(file, { piCode: PI, allowReplacing: false, removeVins: true });
     expect(apply).toHaveBeenCalledTimes(1);
@@ -382,7 +383,7 @@ describe("PI-scoped BOM + VIN import", () => {
     const apply = vi.spyOn(api, "applyVehicleAllocationImport").mockResolvedValue({ createdUnits: 0, updatedUnits: 1, warnings: [] });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await selectPi(); await uploadVinFile();
-    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 }));
     expect(confirm).toHaveBeenCalled(); expect(apply).not.toHaveBeenCalled();
   });
 
@@ -545,6 +546,29 @@ describe("PI allocation layout and scope", () => {
     await waitFor(() => expect(vi.mocked(api.listVehicleAllocationVehicles).mock.calls.at(-1)?.[0]).toMatchObject({ piCode: PI, piLineCode: `${PI}-L02`, page: 1 }));
     expect((screen.getByPlaceholderText("Material") as HTMLInputElement).value).toBe("");
     expect(screen.getByText("75 units / 台")).toBeTruthy();
+  });
+
+  it("requires checked rows for costs and batches zero without touching FOB or VIN", async () => {
+    await selectPi();
+    fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Update status/ }));
+    fireEvent.change(screen.getByLabelText("Freight / 运费 (EUR)"), { target: { value: "0" } });
+    expect(screen.getByRole("button", { name: /^Update status$/ }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select CAR-1" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Update status$/ }));
+    await waitFor(() => expect(api.bulkUpdateVehicleAllocationVehicles).toHaveBeenCalledWith({
+      piCode: PI, piLineCode: undefined, carCodes: ["CAR-1"], fields: { freightEur: 0 },
+    }));
+  });
+
+  it("saves single vehicle costs and explicitly clears a blank insurance", async () => {
+    const update = vi.spyOn(api, "updateVehicleAllocationVehicle").mockResolvedValue(vehicle(1));
+    await selectPi();
+    fireEvent.click(screen.getByRole("cell", { name: "CAR-1" }));
+    fireEvent.change(screen.getByLabelText("Freight / 运费 (EUR)"), { target: { value: "123.45" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Vehicle" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("CAR-1", expect.objectContaining({ freightEur: 123.45, insuranceEur: null })));
+    expect(update.mock.calls[0][1]).not.toHaveProperty("fobEur");
   });
 
   it("updates the scope summary after saving an individual vehicle", async () => {
