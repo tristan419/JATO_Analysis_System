@@ -311,6 +311,18 @@ def _vehicle_filters(
     }
 
 
+@router.get("/pi-months")
+def list_pi_months(
+    year: int = Query(ge=1, le=9999),
+    country: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    user: UserContext = Depends(require_min_role("viewer")),
+) -> dict:
+    selected_country = _country(country)
+    _validate_optional_country(session, user, selected_country)
+    return vehicle_repo.pi_month_summary(session, year=year, country=selected_country)
+
+
 @router.get("/pi")
 def list_pi_orders(
     country: str | None = Query(default=None),
@@ -753,7 +765,13 @@ def export_vehicle_allocation(
     )
     filters["page_size"] = 50_000
     _validate_optional_country(session, user, filters["country"])
-    buffer = export_vehicle_units(session, **filters)
+    columns = payload.get("columns")
+    car_codes = payload.get("carCodes")
+    if columns is not None and (not isinstance(columns, list) or len(columns) > 40 or any(not isinstance(key, str) for key in columns)):
+        raise HTTPException(400, "Invalid export columns / 导出列无效")
+    if car_codes is not None and (not isinstance(car_codes, list) or len(car_codes) > 1000 or any(not isinstance(code, str) for code in car_codes)):
+        raise HTTPException(400, "Invalid vehicle selection / 车辆范围无效")
+    buffer = export_vehicle_units(session, columns=columns, car_codes=car_codes, **filters)
     today = date.today().strftime("%Y%m%d")
     country_part = filters["country"] or "ALL"
     filename = f"Vehicle_Allocation_{country_part}_{today}.xlsx"

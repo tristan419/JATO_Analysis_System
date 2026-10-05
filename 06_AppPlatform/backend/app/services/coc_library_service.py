@@ -14,17 +14,16 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from uuid import uuid4
 import zipfile
 
 from fastapi import HTTPException
 from upload_toolkit.job_engine import BaseJobRunner, load_job_state, persist_job_state, state_path
 from app.services.coc_match_service import (
-    _get_assembled_path, _rar_member_listing, list_archive_members,
+    _get_assembled_path, list_archive_members, visit_archive_files,
     _state_age_seconds, _COC_MATCH_STALE_AFTER_SECONDS,
 )
 
@@ -310,45 +309,7 @@ class CocLibraryIndexRunner(BaseJobRunner):
                         state["pdfCount"] = len(rows)
                         self.persist_state(state)
 
-                if path.suffix.lower() == ".zip":
-                    with zipfile.ZipFile(path) as archive:
-                        for info in archive.infolist():
-                            if info.filename.replace("\\", "/") in by_name:
-                                with archive.open(info) as handle:
-                                    save(info.filename, handle)
-                else:
-                    tool = shutil.which("7zz") or shutil.which("7z")
-                    if not tool:
-                        raise ValueError("RAR extraction unavailable; use ZIP / 无RAR解包工具，请改传ZIP")
-                    listing = _rar_member_listing(path, tool)
-                    # Extract named PDF members once, including solid RAR. Validate
-                    # names before handing them to the existing deployed extractor.
-                    names = [name for name, _ in listing if name.replace("\\", "/") in by_name]
-                    if len(set(names)) != len(names):
-                        raise ValueError("Duplicate RAR paths; repack as ZIP / RAR同路径重复，请重新打包ZIP")
-                    for name in names:
-                        normalized = name.replace("\\", "/")
-                        if '\n' in name or '\r' in name or PurePosixPath(normalized).is_absolute() or '..' in PurePosixPath(normalized).parts or ':' in normalized:
-                            raise ValueError("Unsafe RAR path; repack source / RAR路径异常，请重新打包")
-                    name_set = set(names)
-                    if sum(size for name, size in listing if name in name_set) + total_bytes > 100 * 1024**3:
-                        raise ValueError("PDF total too large; split source / PDF总量过大，请拆分来源")
-                    _check_disk(sum(size for name, size in listing if name in name_set) * 2)
-                    with tempfile.TemporaryDirectory(prefix="coc-rar-", dir=directory) as temporary:
-                        listing_file = Path(temporary) / "members.txt"
-                        listing_file.write_text('\n'.join(names), encoding="utf-8")
-                        output = Path(temporary) / "pdfs"
-                        result = subprocess.run([tool, "x", "-y", "-spd", "-scsUTF-8", f"-o{output}", str(path), f"@{listing_file}"],
-                                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
-                        if result.returncode:
-                            self.log(result.stderr.decode("utf-8", errors="replace")[:2000])
-                            raise ValueError("Cannot extract PDFs; use ZIP or ask admin to check RAR decoder / 无法提取PDF，请改传ZIP或联系管理员检查RAR解码器")
-                        for name in names:
-                            target = output / name.replace("\\", "/")
-                            if target.is_symlink() or not target.is_file() or not target.resolve().is_relative_to(output.resolve()):
-                                raise ValueError("Invalid extracted PDF / 提取的PDF无效，请重新打包")
-                            with target.open("rb") as handle:
-                                save(name, handle)
+                visit_archive_files(path, set(by_name), save, temporary_root=directory, max_bytes=100 * 1024**3 - total_bytes)
 
             try:
                 list_archive_members(source, max_members=200_000, max_nested_bytes=10 * 1024**3, on_archive=visit, temporary_root=directory)
@@ -448,7 +409,7 @@ def delete_source(source_id: str, fingerprint: str | None = None) -> dict:
     return {"deleted": True, "lostCount": len(lost)}
 
 
-def write_pdf_zip(vins: list[str], target: Path) -> dict:
+def write_pdf_zip(vins: list[str], target: Path, *, mode: str = "w") -> dict:
     # Resolve first: no partial download disguised as a complete selection.
     vins = sorted({v.strip().upper() for v in vins})
     members = lookup_vins(vins)
@@ -458,7 +419,7 @@ def write_pdf_zip(vins: list[str], target: Path) -> dict:
     groups: dict[str, list[dict]] = {}
     for member in members.values():
         groups.setdefault(member["source_id"], []).append(member)
-    with zipfile.ZipFile(target, "w", allowZip64=True) as output:
+    with zipfile.ZipFile(target, mode, allowZip64=True) as output:
         for source_id, group in groups.items():
             with zipfile.ZipFile(_root() / source_id / "pdfs.zip") as cache:
                 for member in group:

@@ -84,6 +84,39 @@ def list_vehicles_by_vins(session: Session, vins: set[str]) -> list[PiVehicleUni
     return list(session.execute(select(PiVehicleUnit).where(PiVehicleUnit.vin.in_(vins))).scalars().all())
 
 
+def _header_country_filter(country: str):
+    return or_(
+        PiOrderHeader.country_code == country,
+        PiOrderHeader.market_country_codes.contains([country]),
+    )
+
+
+def pi_month_summary(session: Session, year: int, country: str | None = None) -> dict:
+    # Aggregate once before pagination; count market vehicles, not all vehicles in a cross-market PI.
+    headers = select(PiOrderHeader.pi_id, PiOrderHeader.order_month).where(
+        PiOrderHeader.order_month.like(f"{year:04d}-%"),
+    )
+    if country:
+        headers = headers.where(_header_country_filter(country))
+    headers = headers.cte("browse_pis")
+    vehicles = select(PiVehicleUnit.pi_id, func.count().label("units")).join(
+        headers, PiVehicleUnit.pi_id == headers.c.pi_id,
+    )
+    if country:
+        vehicles = vehicles.where(PiVehicleUnit.country_code == country)
+    vehicles = vehicles.group_by(PiVehicleUnit.pi_id).subquery()
+    stmt = (
+        select(headers.c.order_month, func.count().label("pis"),
+               func.coalesce(func.sum(vehicles.c.units), 0).label("units"))
+        .outerjoin(vehicles, headers.c.pi_id == vehicles.c.pi_id)
+    )
+    rows = session.execute(stmt.group_by(headers.c.order_month).order_by(headers.c.order_month)).all()
+    return {"year": year, "items": [
+        {"month": row.order_month, "piCount": int(row.pis), "vehicleCount": int(row.units)}
+        for row in rows
+    ]}
+
+
 def list_headers(
     session: Session,
     country: str | None = None,
@@ -95,10 +128,7 @@ def list_headers(
 ) -> tuple[list[PiOrderHeader], int]:
     stmt = select(PiOrderHeader)
     if country:
-        stmt = stmt.where(or_(
-            PiOrderHeader.country_code == country,
-            PiOrderHeader.market_country_codes.contains([country]),
-        ))
+        stmt = stmt.where(_header_country_filter(country))
     if month:
         stmt = stmt.where(PiOrderHeader.order_month == month)
     if status:
@@ -290,6 +320,16 @@ def list_vehicles(
             PiVehicleUnit.version.ilike(pattern),
             PiVehicleUnit.exterior_color_name.ilike(pattern),
             PiVehicleUnit.interior_color_name.ilike(pattern),
+            PiVehicleUnit.brand.ilike(pattern),
+            PiVehicleUnit.powertrain.ilike(pattern),
+            PiVehicleUnit.country_code.ilike(pattern),
+            PiVehicleUnit.ship_name.ilike(pattern),
+            PiVehicleUnit.dealer_code.ilike(pattern),
+            PiVehicleUnit.dealer_name.ilike(pattern),
+            PiVehicleUnit.customer_ref.ilike(pattern),
+            PiVehicleUnit.remark.ilike(pattern),
+            PiVehicleUnit.allocation_status.ilike(pattern),
+            PiVehicleUnit.logistics_status.ilike(pattern),
         ))
     filters = {
         PiVehicleUnit.pi_code: pi_code,

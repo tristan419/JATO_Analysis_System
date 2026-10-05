@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -2368,6 +2369,8 @@ class PiVehicleUnit(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("car_code", name="uq_pi_vehicle_unit_car_code"),
         UniqueConstraint("pi_code", "car_code", name="uq_pi_vehicle_unit_pi_car"),
+        CheckConstraint("freight_eur >= 0 AND freight_eur < 1000000000000", name="ck_vehicle_freight_eur"),
+        CheckConstraint("insurance_eur >= 0 AND insurance_eur < 1000000000000", name="ck_vehicle_insurance_eur"),
         Index(
             "uq_pi_vehicle_unit_vin_not_null",
             "vin",
@@ -2399,6 +2402,8 @@ class PiVehicleUnit(TimestampMixin, Base):
     pi_line_code: Mapped[str] = mapped_column(Text, nullable=False)
     car_code: Mapped[str] = mapped_column(Text, nullable=False)
     vin: Mapped[str | None] = mapped_column(Text, nullable=True)
+    freight_eur: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    insurance_eur: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     material_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     bom: Mapped[str | None] = mapped_column(Text, nullable=True)
     brand: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -191,6 +191,7 @@ import type {
   PiOrderDetail,
   PiOrderFilters,
   PiOrderHeader,
+  PiMonthSummary,
   PiOrderLine,
   PiVehicleUnit,
   UpdateVehiclePayload,
@@ -1286,6 +1287,7 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
     matchedCount: raw.matchedCount === undefined ? undefined : Number(raw.matchedCount),
     missingCount: raw.missingCount === undefined ? undefined : Number(raw.missingCount),
     extraFileCount: raw.extraFileCount === undefined ? undefined : Number(raw.extraFileCount),
+    pdfDownloadCount: raw.pdfDownloadCount === undefined ? undefined : Number(raw.pdfDownloadCount),
     differenceType: raw.differenceType === undefined || raw.differenceType === null ? null : String(raw.differenceType),
     hasBidirectionalMismatch: Boolean(raw.hasBidirectionalMismatch),
     coverageRate: raw.coverageRate === undefined ? undefined : Number(raw.coverageRate),
@@ -4772,6 +4774,8 @@ export const api = {
     ).then((res) => ({ items: res.items.map(mapCocMatchJob) }));
   },
 
+  cocMatchGetPdfPackage: (jobId: string): Promise<Blob> => requestBlob(`/coc-match/jobs/${encodeURIComponent(jobId)}/pdfs`),
+
   cocMatchGetJob: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(`/coc-match/jobs/${jobId}`)
       .then((res) => ({ item: mapCocMatchJob(res.item) })),
@@ -5286,6 +5290,14 @@ export const api = {
       { method: "POST" },
     ),
 
+  getVehicleAllocationPiMonths: (year: number, country: string) => {
+    const qs = new URLSearchParams({ year: String(year) });
+    appendSearchParam(qs, "country", country);
+    return request<{ year: number; items: PiMonthSummary[] }>(
+      `/order-genius/vehicle-allocation/pi-months?${qs.toString()}`,
+    );
+  },
+
   getVehicleAllocationPis: (params: PiOrderFilters = {}) => {
     const qs = new URLSearchParams();
     appendSearchParam(qs, "country", params.country);
@@ -5455,7 +5467,7 @@ export const api = {
       { method: "POST" },
     ),
 
-  exportVehicleAllocation: (params: VehicleAllocationFilters = {}) =>
+  exportVehicleAllocation: (params: VehicleAllocationFilters & { columns?: string[]; carCodes?: string[] } = {}) =>
     requestBlob("/order-genius/vehicle-allocation/export", {
       method: "POST",
       body: JSON.stringify(params),
