@@ -358,6 +358,7 @@ export interface VehicleVinListExtract {
 }
 
 export interface UpdateVehiclePayload {
+  rowVersion?: number;
   freightEur?: number | null;
   insuranceEur?: number | null;
   vin?: string | null;
@@ -377,6 +378,7 @@ export interface UpdateVehiclePayload {
 }
 
 export interface BulkVehicleUpdatePayload {
+  rowVersions?: Record<string, number>;
   piCode?: string;
   piLineCode?: string;
   carCodes?: string[];

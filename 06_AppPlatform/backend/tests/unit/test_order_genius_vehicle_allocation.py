@@ -1284,6 +1284,65 @@ def _vin_fill_pi(session, materials=("BOM-A",), quantity=3):
     return header["piCode"], vehicle_repo.list_vehicles_for_bulk_update(session, pi_code=header["piCode"])
 
 
+def test_status_update_rejects_stale_single_version(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db)
+    car = cars[0]
+    version = car.row_version
+    vehicle_service.update_vehicle_unit(vehicle_db, car.car_code, {"remark": "new", "rowVersion": version}, "tester")
+    vehicle_db.commit()
+    with pytest.raises(HTTPException) as error:
+        vehicle_service.update_vehicle_unit(vehicle_db, car.car_code, {"remark": "old", "rowVersion": version}, "tester")
+    assert error.value.status_code == 409
+    assert car.remark == "new"
+
+
+@pytest.mark.parametrize("conflict", ["stale", "missing", "out_of_scope", "empty"])
+def test_checked_update_validates_all_targets_before_writing(vehicle_db, conflict):
+    pi, cars = _vin_fill_pi(vehicle_db)
+    codes = [car.car_code for car in cars]
+    versions = {car.car_code: car.row_version for car in cars}
+    if conflict == "stale":
+        versions[codes[-1]] -= 1
+    elif conflict == "missing":
+        del versions[codes[-1]]
+    elif conflict == "out_of_scope":
+        codes.append("OTHER-CAR")
+        versions["OTHER-CAR"] = 1
+    else:
+        codes, versions = [], {}
+    with pytest.raises(HTTPException) as error:
+        bulk_update_vehicle_units(vehicle_db, {"piCode": pi, "carCodes": codes, "rowVersions": versions,
+                                               "fields": {"freightEur": 0, "remark": "must not write"}}, "tester")
+    assert error.value.status_code == 409
+    assert all(car.remark is None and car.freight_eur is None for car in cars)
+
+
+def test_checked_update_uses_versions_and_only_changed_fields(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db)
+    result = bulk_update_vehicle_units(vehicle_db, {"piCode": pi,
+        "carCodes": [car.car_code for car in cars],
+        "rowVersions": {car.car_code: car.row_version for car in cars},
+        "fields": {"freightEur": 0, "dealerName": "Dealer", "customerRef": "Ref",
+                   "actualDepartureDate": "2026-10-01", "remark": "Batch"}}, "tester")
+    assert result["updatedUnits"] == 3
+    assert all(vehicle_service.vehicle_to_dict(vehicle_db, car)["fobEur"] == 12345
+               and car.vin is None and car.freight_eur == 0 for car in cars)
+
+
+def test_export_uses_complete_ordered_view_not_first_page(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=150)
+    codes = [car.car_code for car in reversed(cars)]
+    output = vehicle_service.export_vehicle_units(vehicle_db, pi_code=pi, page=1, page_size=50000,
+                                                   car_codes=codes, columns=["carCode", "fobEur"])
+    sheet = openpyxl.load_workbook(output).active
+    assert sheet.max_row == 151
+    assert [sheet.cell(row, 1).value for row in range(2, 152)] == codes
+    with pytest.raises(HTTPException) as error:
+        vehicle_service.export_vehicle_units(vehicle_db, pi_code=pi, page=1, page_size=50000,
+                                               car_codes=[codes[0], "OTHER"], columns=["carCode"])
+    assert error.value.status_code == 409
+
+
 def test_vehicle_costs_single_and_checked_batch_keep_fob_vin_and_quantities(vehicle_db):
     pi, cars = _vin_fill_pi(vehicle_db, quantity=2)
     first, second = cars

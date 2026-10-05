@@ -769,7 +769,7 @@ def export_vehicle_allocation(
     car_codes = payload.get("carCodes")
     if columns is not None and (not isinstance(columns, list) or len(columns) > 40 or any(not isinstance(key, str) for key in columns)):
         raise HTTPException(400, "Invalid export columns / 导出列无效")
-    if car_codes is not None and (not isinstance(car_codes, list) or len(car_codes) > 1000 or any(not isinstance(code, str) for code in car_codes)):
+    if car_codes is not None and (not isinstance(car_codes, list) or len(car_codes) > 50000 or any(not isinstance(code, str) for code in car_codes)):
         raise HTTPException(400, "Invalid vehicle selection / 车辆范围无效")
     buffer = export_vehicle_units(session, columns=columns, car_codes=car_codes, **filters)
     today = date.today().strftime("%Y%m%d")

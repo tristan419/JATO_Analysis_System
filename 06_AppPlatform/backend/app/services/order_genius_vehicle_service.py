@@ -545,6 +545,10 @@ def update_vehicle_unit(session: Session, car_code: str, payload: dict[str, Any]
     vehicle = repo.get_vehicle_by_car_code(session, car_code)
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
+    if "rowVersion" in payload:
+        session.refresh(vehicle, with_for_update=True)
+        if payload["rowVersion"] != vehicle.row_version:
+            raise HTTPException(409, "Vehicle changed; nothing saved. Re-read PI / 车辆已变化，未保存，请重新读取 PI")
     _apply_vehicle_updates(session, vehicle, payload, username)
     session.flush()
     return vehicle_to_dict(session, vehicle)
@@ -574,8 +578,9 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
         session,
         pi_code=pi_code,
         pi_line_code=pi_line_code,
+        **({"lock": True} if "rowVersions" in payload else {}),
     )
-    if not vehicles:
+    if not vehicles and "rowVersions" not in payload:
         return {
             "piCode": pi_code,
             "piLineCode": pi_line_code,
@@ -593,6 +598,13 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
     if car_codes:
         code_set = set(car_codes)
         vehicles = [v for v in vehicles if v.car_code in code_set]
+    if "rowVersions" in payload:
+        versions = payload["rowVersions"]
+        if (not car_codes or not isinstance(versions, dict)
+                or set(versions) != set(car_codes)
+                or {vehicle.car_code for vehicle in vehicles} != set(car_codes)
+                or any(versions[vehicle.car_code] != vehicle.row_version for vehicle in vehicles)):
+            raise HTTPException(409, "Selection changed; nothing saved. Re-read PI and select again / 勾选车辆已变化，未保存，请重新读取 PI 并重新勾选")
 
     field_payload = _bulk_field_payload(payload.get("fields"))
     if {"freightEur", "insuranceEur"} & field_payload.keys() and not car_codes:
@@ -884,8 +896,10 @@ def export_vehicle_units(session: Session, *, columns: list[str] | None = None, 
         raise HTTPException(400, "Export too large: narrow the view / 导出范围过大，请缩小筛选")
     vehicles = result["items"]
     if car_codes is not None:
-        codes = set(car_codes)
-        vehicles = [vehicle for vehicle in vehicles if vehicle["carCode"] in codes]
+        by_code = {vehicle["carCode"]: vehicle for vehicle in vehicles}
+        if len(car_codes) != len(set(car_codes)) or any(code not in by_code for code in car_codes):
+            raise HTTPException(409, "Export view changed. Re-read PI / 导出视图已变化，请重新读取 PI")
+        vehicles = [by_code[code] for code in car_codes]
     if columns and "cocPdf" in columns:
         from app.services.coc_library_service import lookup_vins
         available = lookup_vins([vehicle["vin"] for vehicle in vehicles if vehicle["vin"]])
