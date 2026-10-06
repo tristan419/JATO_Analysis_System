@@ -364,6 +364,12 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     await page.locator(".top-bar").evaluate((element) => { element.style.minHeight = "130px"; });
     await page.waitForFunction(() => Math.abs(document.querySelector(".vehicle-allocation-page").getBoundingClientRect().bottom - innerHeight) <= 2);
     assert((await layoutGeometry()).pagination.bottom <= 1080);
+    const shellBottom = (await page.locator(".top-bar").boundingBox()).y + (await page.locator(".top-bar").boundingBox()).height;
+    assert((await page.locator(".vehicle-allocation-tool-drawer .deck-floating-toggle").boundingBox()).y >= shellBottom);
+    await page.locator(".vehicle-allocation-tool-drawer .deck-floating-toggle").click();
+    const desktopPanel = await page.locator(".vehicle-allocation-tool-panel").boundingBox();
+    assert(desktopPanel.y >= shellBottom && desktopPanel.y + desktopPanel.height <= 1080);
+    await page.getByRole("button", { name: "Close", exact: true }).click();
     await page.locator(".top-bar").evaluate((element) => { element.style.minHeight = ""; });
     await page.setViewportSize({ width: 1920, height: 500 });
     await page.getByText("450 selected / 已选", { exact: false }).waitFor();
@@ -372,6 +378,11 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     await page.evaluate(() => window.scrollTo(0, 0));
     size = await layoutGeometry();
     assert(size.main.top >= size.side.bottom && size.body.height >= 320 && !size.overflowX, JSON.stringify(size));
+    await page.locator(".vehicle-allocation-tool-drawer .deck-floating-toggle").click();
+    const narrowPanel = await page.locator(".vehicle-allocation-tool-panel").boundingBox();
+    const narrowShell = await page.locator(".top-bar").boundingBox();
+    assert(narrowPanel.y >= narrowShell.y + narrowShell.height && narrowPanel.y + narrowPanel.height <= 950);
+    await page.getByRole("button", { name: "Close", exact: true }).click();
     await page.setViewportSize({ width: 1920, height: 1080 });
     await page.locator('.ag-row .ag-cell[col-id="carCode"]').first().click();
     await page.getByRole("button", { name: "Save changes / 保存修改" }).waitFor();

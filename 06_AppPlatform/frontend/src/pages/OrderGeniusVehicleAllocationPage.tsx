@@ -1293,8 +1293,8 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-selection-link,.va-scope-label{display:block;margin-top:10px;font-size:12px}
         .va-selected-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
         .va-save{width:100%;margin-top:14px}
-        .vehicle-allocation-tool-drawer{top:92px;width:min(260px,calc(100vw - 32px))}
-        .vehicle-allocation-tool-panel{width:min(720px,calc(100vw - 32px));height:min(72vh,760px)}
+        .vehicle-allocation-tool-drawer{top:calc(100dvh - var(--va-available-height,calc(100dvh - 128px)) + 8px);width:min(260px,calc(100vw - 32px))}
+        .vehicle-allocation-tool-panel{width:min(720px,calc(100vw - 32px));height:min(72vh,760px);max-height:calc(var(--va-available-height,calc(100dvh - 128px)) - 84px)}
         .vehicle-allocation-page .vehicle-allocation-tool-drawer .deck-floating-toggle{display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.72);color:#1f2937;border-color:rgba(203,213,225,.8)}
         .vehicle-allocation-page .vehicle-allocation-tool-drawer .deck-control-tab{border:1px solid rgba(203,213,225,.72);background:rgba(255,255,255,.58);color:#334155;text-align:left}
         .vehicle-allocation-page .vehicle-allocation-tool-drawer .deck-control-tab.is-active{border-color:#93c5fd;background:#dbeafe;color:#1d4ed8}
@@ -1340,7 +1340,7 @@ export function OrderGeniusVehicleAllocationPage() {
           .va-grid-body{flex:none;height:clamp(320px,60dvh,720px)}
           .va-header{align-items:stretch;flex-direction:column;padding-right:0}
           .vehicle-allocation-tool-drawer{top:auto;bottom:16px;width:240px}
-          .vehicle-allocation-tool-panel{position:fixed;top:92px;right:16px;height:calc(100dvh - 170px);max-height:none}
+          .vehicle-allocation-tool-panel{position:fixed;top:calc(100dvh - var(--va-available-height,calc(100dvh - 128px)) + 8px);right:16px;height:calc(var(--va-available-height,calc(100dvh - 128px)) - 24px);max-height:none}
           .va-search{min-width:0}
           .va-filters{grid-template-columns:repeat(2,minmax(0,1fr))}
           .va-bulk-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
