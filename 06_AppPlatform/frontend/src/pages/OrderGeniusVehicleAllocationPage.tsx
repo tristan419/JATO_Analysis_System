@@ -172,7 +172,7 @@ export function OrderGeniusVehicleAllocationPage() {
   const { user } = useAuth();
   const canEdit = user?.role === "order_filler" || user?.role === "editor" || user?.role === "admin";
   const { countryOptions: accountCountryOptions } = useAccountCountryOptions();
-  const defaultCountry = user?.primaryCountry ?? "";
+  const defaultCountry = user?.role === "admin" ? "" : user?.primaryCountry ?? "";
   const [filters, setFilters] = useState<VehicleAllocationFilters>({
     country: defaultCountry,
     page: 1,
@@ -208,10 +208,12 @@ export function OrderGeniusVehicleAllocationPage() {
   const [selectedLineCode, setSelectedLineCode] = useState<string | null>(null);
   const [editorTargets, setEditorTargets] = useState<PiVehicleUnit[]>([]);
   const gridView = useRef<VehicleGridView>({ vehicles: [], ordinaryVehicles: [], columns: [] });
+  const [ordinaryCodes, setOrdinaryCodes] = useState<ReadonlySet<string>>(new Set());
   const [gridResetKey, setGridResetKey] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const [vinBatchText, setVinBatchText] = useState("");
   const [batchVins, setBatchVins] = useState<string[]>([]);
+  const [vinSelectionScope, setVinSelectionScope] = useState<"global" | "filtered">("global");
   const [pivotBy, setPivotBy] = useState<"modelName" | "materialCode" | "logisticsStatus" | "countryCode">("modelName");
   const [sideLoading, setSideLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -281,8 +283,9 @@ export function OrderGeniusVehicleAllocationPage() {
     addFallbackCode(piBrowseCountry);
     addFallbackCode(selectedPi?.header.countryCode);
     selectedPi?.header.marketCountryCodes.forEach(addFallbackCode);
-    return Array.from(byCode.values()).sort((a, b) => a.value.localeCompare(b.value));
-  }, [accountCountryOptions, defaultCountry, filters.country, piBrowseCountry, selectedPi]);
+    const allowed = new Set([user?.primaryCountry, ...(user?.secondaryCountries ?? [])].map((code) => normalizeCountryCode(code ?? "")));
+    return Array.from(byCode.values()).filter((option) => user?.role !== "order_filler" || allowed.has(option.value)).sort((a, b) => a.value.localeCompare(b.value));
+  }, [accountCountryOptions, defaultCountry, filters.country, piBrowseCountry, selectedPi, user]);
   const vinPasteScopeVehicles = useMemo(() => {
     if (!selectedPi) {
       return [];
@@ -298,6 +301,8 @@ export function OrderGeniusVehicleAllocationPage() {
       || (a.materialCode ?? "").localeCompare(b.materialCode ?? "") || a.carCode.localeCompare(b.carCode));
   const foundVins = new Set(batchMatches.map((vehicle) => vehicle.vin?.toUpperCase()));
   const missingVins = batchVins.filter((vin) => !foundVins.has(vin));
+  const filteredMatches = batchMatches.filter((vehicle) => ordinaryCodes.has(vehicle.carCode));
+  const currentSelectedCount = [...selectedCarCodes].filter((code) => ordinaryCodes.has(code)).length;
   const gridVehicles = useMemo(() => {
     const query = (filters.keyword ?? "").toLowerCase();
     return vinPasteScopeVehicles.filter((vehicle) => (!filters.country || vehicle.countryCode === filters.country)
@@ -426,6 +431,7 @@ export function OrderGeniusVehicleAllocationPage() {
 
   function clearScopeEdits(): void {
     gridView.current = { vehicles: [], ordinaryVehicles: [], columns: [] };
+    setOrdinaryCodes(new Set());
     setBatchVins([]); setVinBatchText(""); setSearchTerm("");
     setSelectedCarCodes(new Set());
     setEditorTargets([]);
@@ -684,6 +690,12 @@ export function OrderGeniusVehicleAllocationPage() {
   function clearSelection(): void { setSelectedCarCodes(new Set()); setEditorTargets([]); }
   function changeSelection(codes: Set<string>): void { setSelectedCarCodes(codes); setEditorTargets([]); }
 
+  function changeGridView(view: VehicleGridView): void {
+    gridView.current = view;
+    const codes = new Set(view.ordinaryVehicles.map((vehicle) => vehicle.carCode));
+    if (ordinaryCodes.size !== codes.size || [...ordinaryCodes].some((code) => !codes.has(code))) setOrdinaryCodes(codes);
+  }
+
   function selectVehicle(vehicle: PiVehicleUnit): void {
     if (scopeBusy) return;
     setEditorTargets([vehicle]);
@@ -742,6 +754,7 @@ export function OrderGeniusVehicleAllocationPage() {
   }
 
   async function exportCurrentView(): Promise<void> {
+    if (!selectedPi || scopeBusy || exporting) return;
     setExporting(true);
     setError(null);
     try {
@@ -887,17 +900,20 @@ export function OrderGeniusVehicleAllocationPage() {
               <section className="va-tool-card">
                 <label htmlFor="vin-batch-search">VIN batch search / VIN 批量搜索</label>
                 <textarea id="vin-batch-search" value={vinBatchText} onChange={(event) => setVinBatchText(event.target.value)} placeholder="One complete VIN per line / 每行一个完整 VIN" />
+                <label>Selection scope / 勾选范围<select aria-label="VIN selection scope" value={vinSelectionScope} disabled={scopeBusy} onChange={(event) => setVinSelectionScope(event.target.value === "filtered" ? "filtered" : "global")}>
+                  <option value="global">Global matches / 全局匹配</option><option value="filtered">Filtered matches / 当前筛选匹配</option>
+                </select></label>
                 <div className="va-button-row">
                   <button type="button" disabled={!selectedPi || scopeBusy} onClick={searchVinBatch}>Search VIN batch / 搜索 VIN</button>
-                  <button type="button" disabled={!batchMatches.length || scopeBusy} onClick={() => {
-                    const visibleCodes = new Set(gridView.current.ordinaryVehicles.map((vehicle) => vehicle.carCode));
-                    const eligible = batchMatches.filter((vehicle) => visibleCodes.has(vehicle.carCode));
+                  <button type="button" disabled={!(vinSelectionScope === "global" ? batchMatches : filteredMatches).length || scopeBusy} onClick={() => {
+                    const eligible = vinSelectionScope === "global" ? batchMatches : filteredMatches;
                     changeSelection(new Set(eligible.map((vehicle) => vehicle.carCode)));
-                    setNotice(`${batchMatches.length} matched · ${eligible.length} selected · ${batchMatches.length - eligible.length} excluded by filters / 匹配、选入可见、筛选排除`);
-                  }}>Select matches / 勾选可见匹配</button>
+                    setNotice(`${batchMatches.length} global matches · ${filteredMatches.length} filtered matches · ${eligible.length} selected / 全局匹配、当前筛选匹配、已选`);
+                  }}>Select matches / 勾选匹配</button>
                   <button type="button" className="btn-secondary" onClick={() => { setBatchVins([]); setVinBatchText(""); clearSelection(); }}>Clear batch search / 清除批量搜索</button>
                 </div>
-                {batchVins.length ? <p role="status">{batchMatches.length} matched / 匹配 · {missingVins.length} not found in this PI/line / 本范围未找到{missingVins.length ? `: ${missingVins.join(", ")}` : ""}</p> : null}
+                {batchVins.length ? <p role="status">{batchMatches.length} global matches / 全局匹配 · {filteredMatches.length} filtered matches / 当前匹配 · {missingVins.length} not found in this PI/line / 本范围未找到{missingVins.length ? `: ${missingVins.join(", ")}` : ""}</p> : null}
+                <p>Current filtered selected / 当前筛选已选 {currentSelectedCount}/{ordinaryCodes.size} · Global selected / 全局已选 {selectedCarCodes.size}/{vinPasteScopeVehicles.length} · Outside current filters / 筛选外已选 {selectedCarCodes.size - currentSelectedCount}</p>
               </section>
 
               <fieldset className="va-columns"><legend>Columns / 显示列</legend>
@@ -912,7 +928,7 @@ export function OrderGeniusVehicleAllocationPage() {
                   setVisibleColumnKeys(new Set(DEFAULT_COLUMNS)); setGridResetKey((value) => value + 1);
                 }}>Reset columns & filters / 重置列与筛选</button>
               </fieldset>
-              <LoadingActionButton disabled={!selectedPi} loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出所见</LoadingActionButton>
+              <LoadingActionButton disabled={!selectedPi || scopeBusy} loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出所见</LoadingActionButton>
               <details className="va-pivot"><summary>PI pivot summary / 整批透视摘要</summary>
                 <p>Whole PI/line, not the current page or view filters / 当前 PI 或明细范围，不是分页或筛选后数量</p>
                 <select aria-label="Pivot by" value={pivotBy} onChange={(event) => {
@@ -1119,7 +1135,7 @@ export function OrderGeniusVehicleAllocationPage() {
 
           {selectedCarCodes.size > 0 ? (
             <div className="va-selected-actions">
-              <span>{selectedCarCodes.size} selected / 已勾选</span>
+              <span>{selectedCarCodes.size} selected / 已勾选 · {selectedCarCodes.size - currentSelectedCount} outside current filters / 筛选外已选</span>
               <button type="button" onClick={() => openPiTool("status")}>Update selected status / 更新勾选状态</button>
               <button type="button" className="btn-secondary" onClick={clearSelection}>Clear selection / 清除勾选</button>
             </div>
@@ -1129,11 +1145,11 @@ export function OrderGeniusVehicleAllocationPage() {
           <VehicleAllocationGrid
             key={`${selectedPi?.header.piCode ?? ""}:${selectedLineCode ?? ""}:${filters.country ?? ""}`}
             filterScope={`${filters.keyword ?? ""}:${filters.carCode ?? ""}:${batchVins.join(",")}`}
-            vehicles={gridVehicles} columns={VEHICLE_COLUMNS} groups={COLUMN_GROUPS}
+            vehicles={vinPasteScopeVehicles} ordinaryVehicles={gridVehicles} columns={VEHICLE_COLUMNS} groups={COLUMN_GROUPS}
             cocStatuses={cocStatuses}
             visibleKeys={visibleColumnKeys} selectedCodes={selectedCarCodes} busy={scopeBusy}
             resetKey={gridResetKey} onEdit={selectVehicle} onSelection={changeSelection}
-            onFilterChange={clearSelection} onViewChange={(view) => { gridView.current = view; }}
+            onFilterChange={clearSelection} onViewChange={changeGridView}
             renderCell={(vehicle, key) => {
               if (key !== "cocPdf") return vehicleCell(vehicle, key);
               const status = cocResult?.items.find((item) => item.carCode === vehicle.carCode)?.status;

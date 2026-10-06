@@ -530,6 +530,8 @@ def get_pi_detail(session: Session, pi_code: str, countries: set[str] | None = N
                 continue
             row["quantity"] = len(line_vehicles) if line_vehicles else sum(item["quantity"] for item in row["allocations"])
             prices = [(vehicle["fobEur"], 1) for vehicle in line_vehicles] if line_vehicles else [(item["fobEur"], item["quantity"]) for item in row["allocations"]]
+            visible_prices = {price for price, _ in prices}
+            row["fobEur"] = next(iter(visible_prices)) if len(visible_prices) == 1 else None
             row["amountEur"] = None if any(price is None for price, _ in prices) else sum(price * quantity for price, quantity in prices)
         line_rows.append(row)
     header_row = header_to_dict(header)

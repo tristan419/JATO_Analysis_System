@@ -191,6 +191,10 @@ def _accessible_pi_detail(session: Session, user: UserContext, pi_code: str) -> 
         return detail
     countries = {vehicle["countryCode"] for vehicle in detail["vehicles"]}
     countries.update(detail["header"]["marketCountryCodes"])
+    return get_pi_detail(session, pi_code, countries=_accessible_market_countries(session, user, countries))
+
+
+def _accessible_market_countries(session: Session, user: UserContext, countries: set[str]) -> set[str]:
     allowed = set()
     for country in countries:
         try:
@@ -199,7 +203,7 @@ def _accessible_pi_detail(session: Session, user: UserContext, pi_code: str) -> 
         except HTTPException as exc:
             if exc.status_code != 403:
                 raise
-    return get_pi_detail(session, pi_code, countries=allowed)
+    return allowed
 
 
 def _validate_target_countries(session: Session, user: UserContext, vehicles: list[dict]) -> None:
@@ -360,7 +364,7 @@ def list_pi_orders(
 ) -> dict:
     selected_country = _country(country)
     _validate_optional_country(session, user, selected_country)
-    return list_pi_headers(
+    result = list_pi_headers(
         session,
         country=selected_country,
         month=_clean(month),
@@ -369,6 +373,12 @@ def list_pi_orders(
         page=page,
         page_size=page_size,
     )
+    if user.role == "order_filler":
+        countries = {country for header in result["items"] for country in header["marketCountryCodes"]}
+        allowed = _accessible_market_countries(session, user, countries)
+        for header in result["items"]:
+            header["marketCountryCodes"] = [country for country in header["marketCountryCodes"] if country in allowed]
+    return result
 
 
 @router.post("/pi")

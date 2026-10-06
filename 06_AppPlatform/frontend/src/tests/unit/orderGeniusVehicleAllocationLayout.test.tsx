@@ -11,8 +11,8 @@ import { matchesVehicleText, VEHICLE_COLUMNS, VEHICLE_TEXT_FIELDS } from "../../
 // Multi-step full-page workflows exceed 5 seconds on the shared CI runner.
 vi.setConfig({ testTimeout: 15_000 });
 
-const testRole = vi.hoisted(() => ({ value: "admin" }));
-vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: testRole.value, primaryCountry: "CH" } }) }));
+const testRole = vi.hoisted(() => ({ value: "admin", secondaryCountries: [] as string[] }));
+vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: testRole.value, primaryCountry: "CH", secondaryCountries: testRole.secondaryCountries } }) }));
 vi.mock("../../hooks/useAccountCountryOptions", () => ({ useAccountCountryOptions: () => ({ countryOptions: [] }) }));
 vi.mock("../../components/CommandSelect", () => ({
   CommandSelect: (props: { value: string; placeholder: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) => (
@@ -27,12 +27,12 @@ vi.mock("../../components/CommandSelect", () => ({
 vi.mock("../../components/VehicleAllocationPivotGrid", () => ({
   VehicleAllocationGrid: (props: ComponentProps<typeof VehicleAllocationGrid>) => {
     const columns = props.columns.filter((column) => props.visibleKeys.has(column.key));
-    const visibleRows = [...props.vehicles].sort((a, b) => Number(a.carCode.split("-").at(-1)) - Number(b.carCode.split("-").at(-1))).slice(0, 5);
-    useEffect(() => props.onViewChange({ vehicles: props.vehicles, ordinaryVehicles: props.vehicles, columns: columns.map((column) => column.key) }));
-    return <><span>{props.vehicles.length} filtered</span>
+    const visibleRows = [...props.ordinaryVehicles].sort((a, b) => Number(a.carCode.split("-").at(-1)) - Number(b.carCode.split("-").at(-1))).slice(0, 5);
+    useEffect(() => props.onViewChange({ vehicles: props.ordinaryVehicles, ordinaryVehicles: props.ordinaryVehicles, columns: columns.map((column) => column.key) }));
+    return <><span>{props.ordinaryVehicles.length} filtered</span>
       <button onClick={props.onFilterChange}>Change grid filter</button>
       <table aria-label="Vehicle details"><thead><tr>
-        <th><input aria-label="Select filtered vehicles" type="checkbox" onChange={() => props.onSelection(new Set(props.vehicles.map((vehicle) => vehicle.carCode)))} /></th>
+        <th><input aria-label="Select filtered vehicles" type="checkbox" onChange={() => props.onSelection(new Set(props.ordinaryVehicles.map((vehicle) => vehicle.carCode)))} /></th>
         {columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead><tbody>
         {visibleRows.map((vehicle) => <tr key={vehicle.carCode}><td><input type="checkbox" aria-label={`Select ${vehicle.carCode}`} checked={props.selectedCodes.has(vehicle.carCode)} onChange={() => { const next = new Set(props.selectedCodes); if (next.has(vehicle.carCode)) next.delete(vehicle.carCode); else next.add(vehicle.carCode); props.onSelection(next); }} /></td>
           {columns.map((column) => <td key={column.key} onClick={() => column.key !== "cocPdf" && props.onEdit(vehicle)}>{props.renderCell(vehicle, column.key)}</td>)}</tr>)}
@@ -86,6 +86,7 @@ function detail(): PiOrderDetail {
 
 beforeEach(() => {
   testRole.value = "admin";
+  testRole.secondaryCountries = [];
   window.history.replaceState({}, "", "/product/order-genius/vehicle-allocation");
   vi.spyOn(api, "getVehicleAllocationPis").mockResolvedValue({ items: [detail().header], total: 1 });
   vi.spyOn(api, "getVehicleAllocationPiMonths").mockImplementation(async (year) => ({ year,
@@ -110,11 +111,64 @@ async function selectPi() {
 
 async function chooseOctober() {
   fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2026" } });
-  await waitFor(() => expect(screen.getByRole("button", { name: "Oct 2026" }).hasAttribute("disabled")).toBe(false));
+  await screen.findByRole("button", { name: "Oct 2026" }, { timeout: 5000 });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Oct 2026" }).hasAttribute("disabled")).toBe(false), { timeout: 5000 });
   fireEvent.click(screen.getByRole("button", { name: "Oct 2026" }));
 }
 
 describe("vehicle detail search and view", () => {
+  it("does not clip admin browse queries to the primary country", async () => {
+    await selectPi();
+    expect(vi.mocked(api.getVehicleAllocationPis).mock.calls.at(-1)?.[0]?.country).toBe("");
+    expect(vi.mocked(api.getVehicleAllocationPiMonths).mock.calls.at(-1)?.[1]).toBe("");
+  });
+
+  it("keeps filler country options to assigned units, not the shared PI header", async () => {
+    testRole.value = "order_filler";
+    testRole.secondaryCountries = ["SE"];
+    const shared = detail();
+    shared.header.countryCode = "CZ";
+    shared.header.marketCountryCodes = ["CH", "SE", "CZ"];
+    vi.mocked(api.getVehicleAllocationPi).mockResolvedValue(shared);
+    await selectPi();
+    const options = within(screen.getByRole("combobox", { name: "All accessible" })).getAllByRole("option").map((option) => option.getAttribute("value"));
+    expect(options).toContain("CH");
+    expect(options).toContain("SE");
+    expect(options).not.toContain("CZ");
+  });
+
+  it("defaults VIN selection to global matches and permits filtered matches without auto selection", async () => {
+    await selectPi(); openView();
+    fireEvent.change(screen.getByLabelText("VIN batch search / VIN 批量搜索"), { target: { value: [vehicle(0).vin, vehicle(1).vin].join("\n") } });
+    fireEvent.click(screen.getByRole("button", { name: "Search VIN batch / 搜索 VIN" }));
+    // A header-filter snapshot is supplied by the real Grid in browser regression.
+    expect((screen.getByLabelText("VIN selection scope") as HTMLSelectElement).value).toBe("global");
+    expect(screen.queryByText(/2 selected \/ 已勾选/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Select matches/ }));
+    expect(screen.getByText(/2 selected \/ 已勾选/)).toBeTruthy();
+    expect(screen.getByText(/Global selected \/ 全局已选 2\/150/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Clear selection/ }));
+    fireEvent.change(screen.getByLabelText("VIN selection scope"), { target: { value: "filtered" } });
+    expect(screen.queryByText(/2 selected \/ 已勾选/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Select matches/ }));
+    expect(screen.getByText(/2 selected \/ 已勾选/)).toBeTruthy();
+  });
+
+  it("blocks export during a PI re-read and after a failed read", async () => {
+    const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
+    await selectPi(); openView();
+    let rejectRead: (reason: Error) => void = () => {};
+    vi.mocked(api.getVehicleAllocationPi).mockImplementationOnce(() => new Promise((_, reject) => { rejectRead = reject; }));
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${PI}`) }));
+    const button = screen.getByRole("button", { name: "Export current view / 导出所见" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(download).not.toHaveBeenCalled();
+    rejectRead(new Error("read failed"));
+    await waitFor(() => expect(screen.queryByText("Loading PI / 正在读取 PI…")).toBeNull());
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(download).not.toHaveBeenCalled();
+  });
   it("uses all authorized PI markets, with summary independent of ordinary filters", async () => {
     const mixed = detail();
     mixed.header.marketCountryCodes = ["CH", "SE"];
@@ -185,7 +239,7 @@ describe("PI month browsing", () => {
     expect(vi.mocked(api.getVehicleAllocationPis).mock.calls.at(-1)?.[0]?.month).toBe("2026-10");
     fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2025" } });
     expect(screen.getByText("2026-10", { selector: "summary" })).toBeTruthy();
-    await waitFor(() => expect(api.getVehicleAllocationPiMonths).toHaveBeenLastCalledWith(2025, "CH"));
+    await waitFor(() => expect(api.getVehicleAllocationPiMonths).toHaveBeenLastCalledWith(2025, ""));
     expect(screen.getByText("150 units / 台")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "All months" }));
     await waitFor(() => expect(vi.mocked(api.getVehicleAllocationPis).mock.calls.at(-1)?.[0]?.month).toBe(""));

@@ -56,8 +56,11 @@ def compile_vehicle_jsonb_sqlite(_type, _compiler, **_kw):
 
 @pytest.fixture
 def vehicle_db():
+    database_url = os.environ.get("JATO_TEST_VEHICLE_DATABASE_URL", "sqlite://")
+    if database_url != "sqlite://":
+        assert database_url.rsplit("/", 1)[-1].startswith("jato_test_"), "Use a disposable test database"
     engine = create_engine(
-        "sqlite://",
+        database_url,
         execution_options={"schema_translate_map": {"ordering": None}},
     )
     metadata = MetaData()
@@ -84,10 +87,11 @@ def vehicle_db():
             if predicate is not None:
                 index.dialect_options["sqlite"]["where"] = predicate
     metadata.create_all(engine)
-    with engine.connect() as connection:
-        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-        connection.connection.driver_connection.create_function("substring", 2, lambda value, pattern:
-            (match.group(0) if (match := re.search(pattern, value or "")) else None))
+    if engine.dialect.name == "sqlite":
+        with engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.connection.driver_connection.create_function("substring", 2, lambda value, pattern:
+                (match.group(0) if (match := re.search(pattern, value or "")) else None))
     with Session(engine) as session:
         baseline = order_repo.create_baseline_version(
             session,
@@ -99,6 +103,8 @@ def vehicle_db():
         session.flush()
         session.info["baseline"] = baseline.baseline_version_id
         yield session
+    if engine.dialect.name != "sqlite":
+        metadata.drop_all(engine)
     engine.dispose()
 
 
@@ -1314,6 +1320,62 @@ def test_pi_read_and_search_hide_other_market_vehicles(vehicle_db, mixed_market_
     monkeypatch.setattr(vehicle_route, "search_vehicle_allocation", lambda *_: {"type": "pi", "item": vehicle_service.get_pi_detail(vehicle_db, pi)})
     assert vehicle_route.search_allocation(pi, vehicle_db, user)["item"] == detail
     assert vehicle_route.get_pi_order(pi, vehicle_db, UserContext(role="editor", name="editor"))["vehicleTotal"] == 4
+
+
+@pytest.mark.parametrize("role,username,expected", [
+    ("order_filler", "ch-filler", ["CH"]),
+    ("order_filler", "multi-filler", ["CH", "SE"]),
+    ("admin", "admin-with-ch-primary", ["CH", "SE"]),
+])
+def test_pi_list_projects_role_country_units(vehicle_db, mixed_market_pi, monkeypatch, role, username, expected):
+    pi, _ = mixed_market_pi
+    if vehicle_db.bind.dialect.name == "sqlite":
+        # JSONB membership is tested with a real PostgreSQL database when configured.
+        header = vehicle_repo.get_header_by_code(vehicle_db, pi)
+        monkeypatch.setattr(vehicle_repo, "list_headers", lambda *_args, **_kwargs: ([header], 1))
+    result = vehicle_route.list_pi_orders(country="CH" if role == "order_filler" else None,
+        month=None, status=None, keyword=None, page=1, page_size=50, session=vehicle_db,
+        user=UserContext(role=role, name=username))
+    assert result["total"] == 1
+    assert result["items"][0]["marketCountryCodes"] == expected
+    assert vehicle_repo.get_header_by_code(vehicle_db, pi).market_country_codes == ["CH", "SE"]
+
+
+def test_admin_reads_all_country_units_without_assignment_clipping(vehicle_db, mixed_market_pi):
+    pi, _ = mixed_market_pi
+    detail = vehicle_route.get_pi_order(pi, vehicle_db, UserContext(role="admin", name="admin-with-ch-primary"))
+    assert detail["header"]["marketCountryCodes"] == ["CH", "SE"]
+    assert {car["countryCode"] for car in detail["vehicles"]} == {"CH", "SE"}
+    assert detail["vehicleTotal"] == detail["summary"]["totalUnits"] == 4
+
+
+def test_month_counts_use_role_country_scope(vehicle_db, mixed_market_pi, monkeypatch):
+    if vehicle_db.bind.dialect.name == "sqlite":
+        monkeypatch.setattr(vehicle_repo, "_header_country_filter", lambda country: models.PiOrderHeader.country_code == country)
+    filler = vehicle_route.list_pi_months(year=2026, country="CH", session=vehicle_db,
+        user=UserContext(role="order_filler", name="ch-filler"))
+    admin = vehicle_route.list_pi_months(year=2026, country=None, session=vehicle_db,
+        user=UserContext(role="admin", name="admin-with-ch-primary"))
+    assert filler["items"] == [{"month": "2026-09", "piCount": 1, "vehicleCount": 2}]
+    assert admin["items"] == [{"month": "2026-09", "piCount": 1, "vehicleCount": 4}]
+
+
+def test_filler_line_price_uses_visible_market_snapshot(vehicle_db, mixed_market_pi):
+    pi, cars = mixed_market_pi
+    header = vehicle_repo.get_header_by_code(vehicle_db, pi)
+    line = vehicle_repo.list_lines_by_pi(vehicle_db, header.pi_id)[0]
+    line.fob_eur = 99999
+    allocation = models.PiOrderLineAllocation(pi_id=header.pi_id, pi_line_id=line.pi_line_id,
+        pi_code=pi, pi_line_code=line.pi_line_code,
+        market_country_code="CH", material_code=line.material_code, order_year=2026, order_month=9,
+        quantity=2, fob_eur=12345)
+    vehicle_db.add(allocation)
+    vehicle_db.commit()
+    detail = vehicle_route.get_pi_order(pi, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert detail["lines"][0]["fobEur"] == 12345
+    assert detail["lines"][0]["amountEur"] == 24690
+    assert detail["lines"][0]["quantity"] == 2
+    assert line.fob_eur == 99999  # Projection only, no snapshot rewrite.
 
 
 @pytest.mark.parametrize("scope", ["foreign", "mixed", "implicit"])
