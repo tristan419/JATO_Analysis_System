@@ -7,6 +7,7 @@ from io import BytesIO
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import uuid4
 
 import openpyxl
@@ -18,6 +19,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
 
 from app.db import models
+from app.core.security import UserContext, validate_country_access
 from app.api.routes import order_genius_vehicle_allocation as vehicle_route
 from app.api.routes.order_genius_vehicle_allocation import _normalise_import_rows_payload
 from app.infra import order_genius_repository as order_repo
@@ -54,8 +56,11 @@ def compile_vehicle_jsonb_sqlite(_type, _compiler, **_kw):
 
 @pytest.fixture
 def vehicle_db():
+    database_url = os.environ.get("JATO_TEST_VEHICLE_DATABASE_URL", "sqlite://")
+    if database_url != "sqlite://":
+        assert database_url.rsplit("/", 1)[-1].startswith("jato_test_"), "Use a disposable test database"
     engine = create_engine(
-        "sqlite://",
+        database_url,
         execution_options={"schema_translate_map": {"ordering": None}},
     )
     metadata = MetaData()
@@ -82,10 +87,11 @@ def vehicle_db():
             if predicate is not None:
                 index.dialect_options["sqlite"]["where"] = predicate
     metadata.create_all(engine)
-    with engine.connect() as connection:
-        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-        connection.connection.driver_connection.create_function("substring", 2, lambda value, pattern:
-            (match.group(0) if (match := re.search(pattern, value or "")) else None))
+    if engine.dialect.name == "sqlite":
+        with engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.connection.driver_connection.create_function("substring", 2, lambda value, pattern:
+                (match.group(0) if (match := re.search(pattern, value or "")) else None))
     with Session(engine) as session:
         baseline = order_repo.create_baseline_version(
             session,
@@ -97,6 +103,8 @@ def vehicle_db():
         session.flush()
         session.info["baseline"] = baseline.baseline_version_id
         yield session
+    if engine.dialect.name != "sqlite":
+        metadata.drop_all(engine)
     engine.dispose()
 
 
@@ -1282,6 +1290,224 @@ def _vin_fill_pi(session, materials=("BOM-A",), quantity=3):
         vehicle_service._ensure_vehicle_units_for_line(session, model, line, "tester")
     session.commit()
     return header["piCode"], vehicle_repo.list_vehicles_for_bulk_update(session, pi_code=header["piCode"])
+
+
+@pytest.fixture
+def mixed_market_pi(vehicle_db, monkeypatch):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=4)
+    header = vehicle_repo.get_header_by_code(vehicle_db, pi)
+    header.market_country_codes = ["CH", "SE"]
+    for car in cars[2:]:
+        car.country_code = "SE"
+    vehicle_db.commit()
+    def check_country(_session, user, country):
+        accounts = Mock()
+        accounts.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
+            primary_country_code="CH", secondary_country_codes=["SE"] if user.name == "multi-filler" else [])
+        validate_country_access(accounts, user.name, user.role, country or "")
+    monkeypatch.setattr(vehicle_route, "_validate_country", check_country)
+    return pi, cars
+
+
+def test_pi_read_and_search_hide_other_market_vehicles(vehicle_db, mixed_market_pi, monkeypatch):
+    pi, cars = mixed_market_pi
+    user = UserContext(role="order_filler", name="ch-filler")
+    detail = vehicle_route.get_pi_order(pi, vehicle_db, user)
+    assert {car["carCode"] for car in detail["vehicles"]} == {car.car_code for car in cars[:2]}
+    assert detail["summary"]["totalUnits"] == detail["vehicleTotal"] == 2
+    assert detail["lines"][0]["quantity"] == 2
+    assert detail["header"]["marketCountryCodes"] == ["CH"]
+    monkeypatch.setattr(vehicle_route, "search_vehicle_allocation", lambda *_: {"type": "pi", "item": vehicle_service.get_pi_detail(vehicle_db, pi)})
+    assert vehicle_route.search_allocation(pi, vehicle_db, user)["item"] == detail
+    assert vehicle_route.get_pi_order(pi, vehicle_db, UserContext(role="editor", name="editor"))["vehicleTotal"] == 4
+
+
+@pytest.mark.parametrize("role,username,expected", [
+    ("order_filler", "ch-filler", ["CH"]),
+    ("order_filler", "multi-filler", ["CH", "SE"]),
+    ("admin", "admin-with-ch-primary", ["CH", "SE"]),
+])
+def test_pi_list_projects_role_country_units(vehicle_db, mixed_market_pi, monkeypatch, role, username, expected):
+    pi, _ = mixed_market_pi
+    if vehicle_db.bind.dialect.name == "sqlite":
+        # JSONB membership is tested with a real PostgreSQL database when configured.
+        header = vehicle_repo.get_header_by_code(vehicle_db, pi)
+        monkeypatch.setattr(vehicle_repo, "list_headers", lambda *_args, **_kwargs: ([header], 1))
+    result = vehicle_route.list_pi_orders(country="CH" if role == "order_filler" else None,
+        month=None, status=None, keyword=None, page=1, page_size=50, session=vehicle_db,
+        user=UserContext(role=role, name=username))
+    assert result["total"] == 1
+    assert result["items"][0]["marketCountryCodes"] == expected
+    assert vehicle_repo.get_header_by_code(vehicle_db, pi).market_country_codes == ["CH", "SE"]
+
+
+def test_admin_reads_all_country_units_without_assignment_clipping(vehicle_db, mixed_market_pi):
+    pi, _ = mixed_market_pi
+    detail = vehicle_route.get_pi_order(pi, vehicle_db, UserContext(role="admin", name="admin-with-ch-primary"))
+    assert detail["header"]["marketCountryCodes"] == ["CH", "SE"]
+    assert {car["countryCode"] for car in detail["vehicles"]} == {"CH", "SE"}
+    assert detail["vehicleTotal"] == detail["summary"]["totalUnits"] == 4
+
+
+def test_month_counts_use_role_country_scope(vehicle_db, mixed_market_pi, monkeypatch):
+    if vehicle_db.bind.dialect.name == "sqlite":
+        monkeypatch.setattr(vehicle_repo, "_header_country_filter", lambda country: models.PiOrderHeader.country_code == country)
+    filler = vehicle_route.list_pi_months(year=2026, country="CH", session=vehicle_db,
+        user=UserContext(role="order_filler", name="ch-filler"))
+    admin = vehicle_route.list_pi_months(year=2026, country=None, session=vehicle_db,
+        user=UserContext(role="admin", name="admin-with-ch-primary"))
+    assert filler["items"] == [{"month": "2026-09", "piCount": 1, "vehicleCount": 2}]
+    assert admin["items"] == [{"month": "2026-09", "piCount": 1, "vehicleCount": 4}]
+
+
+def test_filler_line_price_uses_visible_market_snapshot(vehicle_db, mixed_market_pi):
+    pi, cars = mixed_market_pi
+    header = vehicle_repo.get_header_by_code(vehicle_db, pi)
+    line = vehicle_repo.list_lines_by_pi(vehicle_db, header.pi_id)[0]
+    line.fob_eur = 99999
+    allocation = models.PiOrderLineAllocation(pi_id=header.pi_id, pi_line_id=line.pi_line_id,
+        pi_code=pi, pi_line_code=line.pi_line_code,
+        market_country_code="CH", material_code=line.material_code, order_year=2026, order_month=9,
+        quantity=2, fob_eur=12345)
+    vehicle_db.add(allocation)
+    vehicle_db.commit()
+    detail = vehicle_route.get_pi_order(pi, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert detail["lines"][0]["fobEur"] == 12345
+    assert detail["lines"][0]["amountEur"] == 24690
+    assert detail["lines"][0]["quantity"] == 2
+    assert line.fob_eur == 99999  # Projection only, no snapshot rewrite.
+
+
+@pytest.mark.parametrize("scope", ["foreign", "mixed", "implicit"])
+def test_bulk_country_denial_is_atomic(vehicle_db, mixed_market_pi, scope):
+    pi, cars = mixed_market_pi
+    selected = cars[2:] if scope == "foreign" else cars
+    body = {"piCode": pi, "fields": {"remark": "must not save"}}
+    if scope != "implicit":
+        body.update(carCodes=[car.car_code for car in selected], rowVersions={car.car_code: car.row_version for car in selected})
+    with pytest.raises(HTTPException) as error:
+        vehicle_route.bulk_update_vehicles(body, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert error.value.status_code == 403
+    assert all(car.remark is None for car in cars)
+
+
+def test_bulk_own_country_succeeds_in_mixed_pi(vehicle_db, mixed_market_pi):
+    pi, cars = mixed_market_pi
+    body = {"piCode": pi, "carCodes": [car.car_code for car in cars[:2]],
+            "rowVersions": {car.car_code: car.row_version for car in cars[:2]}, "fields": {"freightEur": 0, "remark": "CH only"}}
+    result = vehicle_route.bulk_update_vehicles(body, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert result["updatedUnits"] == 2
+    assert all(car.remark == "CH only" for car in cars[:2])
+    assert all(car.remark is None for car in cars[2:])
+
+
+def test_existing_secondary_country_grant_remains_valid(vehicle_db, mixed_market_pi):
+    pi, cars = mixed_market_pi
+    user = UserContext(role="order_filler", name="multi-filler")
+    assert vehicle_route.get_pi_order(pi, vehicle_db, user)["vehicleTotal"] == 4
+    body = {"piCode": pi, "carCodes": [car.car_code for car in cars],
+            "rowVersions": {car.car_code: car.row_version for car in cars}, "fields": {"remark": "authorized"}}
+    assert vehicle_route.bulk_update_vehicles(body, vehicle_db, user)["updatedUnits"] == 4
+
+
+def test_single_foreign_country_write_is_rejected(vehicle_db, mixed_market_pi):
+    _, cars = mixed_market_pi
+    with pytest.raises(HTTPException) as error:
+        vehicle_route.patch_vehicle(cars[-1].car_code, {"remark": "denied"}, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert error.value.status_code == 403
+    assert cars[-1].remark is None
+
+
+def test_empty_authorized_pi_is_still_readable(vehicle_db, mixed_market_pi):
+    header = vehicle_service.create_pi_header(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 10}, "tester")
+    detail = vehicle_route.get_pi_order(header["piCode"], vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert detail["vehicles"] == []
+    assert detail["summary"]["totalUnits"] == 0
+
+
+def test_export_checks_selected_countries_without_header_country_filter(vehicle_db, mixed_market_pi, monkeypatch):
+    pi, cars = mixed_market_pi
+    captured = {}
+    def export(_session, **kwargs):
+        captured.update(kwargs)
+        return BytesIO(b"test")
+    monkeypatch.setattr(vehicle_route, "export_vehicle_units", export)
+    user = UserContext(role="order_filler", name="ch-filler")
+    vehicle_route.export_vehicle_allocation({"piCode": pi}, vehicle_db, user)
+    assert set(captured["car_codes"]) == {car.car_code for car in cars[:2]}
+    with pytest.raises(HTTPException) as error:
+        vehicle_route.export_vehicle_allocation({"piCode": pi, "carCodes": [cars[-1].car_code]}, vehicle_db, user)
+    assert error.value.status_code == 403
+
+
+def test_filler_export_without_codes_preserves_line_filter(vehicle_db, mixed_market_pi, monkeypatch):
+    pi, cars = _vin_fill_pi(vehicle_db, materials=("BOM-A", "BOM-B"), quantity=2)
+    captured = {}
+    def export(_session, **kwargs):
+        captured.update(kwargs)
+        return BytesIO(b"test")
+    monkeypatch.setattr(vehicle_route, "export_vehicle_units", export)
+    vehicle_route.export_vehicle_allocation({"piCode": pi, "piLineCode": cars[-1].pi_line_code}, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert set(captured["car_codes"]) == {car.car_code for car in cars[2:]}
+
+
+def test_status_update_rejects_stale_single_version(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db)
+    car = cars[0]
+    version = car.row_version
+    vehicle_service.update_vehicle_unit(vehicle_db, car.car_code, {"remark": "new", "rowVersion": version}, "tester")
+    vehicle_db.commit()
+    with pytest.raises(HTTPException) as error:
+        vehicle_service.update_vehicle_unit(vehicle_db, car.car_code, {"remark": "old", "rowVersion": version}, "tester")
+    assert error.value.status_code == 409
+    assert car.remark == "new"
+
+
+@pytest.mark.parametrize("conflict", ["stale", "missing", "out_of_scope", "empty"])
+def test_checked_update_validates_all_targets_before_writing(vehicle_db, conflict):
+    pi, cars = _vin_fill_pi(vehicle_db)
+    codes = [car.car_code for car in cars]
+    versions = {car.car_code: car.row_version for car in cars}
+    if conflict == "stale":
+        versions[codes[-1]] -= 1
+    elif conflict == "missing":
+        del versions[codes[-1]]
+    elif conflict == "out_of_scope":
+        codes.append("OTHER-CAR")
+        versions["OTHER-CAR"] = 1
+    else:
+        codes, versions = [], {}
+    with pytest.raises(HTTPException) as error:
+        bulk_update_vehicle_units(vehicle_db, {"piCode": pi, "carCodes": codes, "rowVersions": versions,
+                                               "fields": {"freightEur": 0, "remark": "must not write"}}, "tester")
+    assert error.value.status_code == 409
+    assert all(car.remark is None and car.freight_eur is None for car in cars)
+
+
+def test_checked_update_uses_versions_and_only_changed_fields(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db)
+    result = bulk_update_vehicle_units(vehicle_db, {"piCode": pi,
+        "carCodes": [car.car_code for car in cars],
+        "rowVersions": {car.car_code: car.row_version for car in cars},
+        "fields": {"freightEur": 0, "dealerName": "Dealer", "customerRef": "Ref",
+                   "actualDepartureDate": "2026-10-01", "remark": "Batch"}}, "tester")
+    assert result["updatedUnits"] == 3
+    assert all(vehicle_service.vehicle_to_dict(vehicle_db, car)["fobEur"] == 12345
+               and car.vin is None and car.freight_eur == 0 for car in cars)
+
+
+def test_export_uses_complete_ordered_view_not_first_page(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=150)
+    codes = [car.car_code for car in reversed(cars)]
+    output = vehicle_service.export_vehicle_units(vehicle_db, pi_code=pi, page=1, page_size=50000,
+                                                   car_codes=codes, columns=["carCode", "fobEur"])
+    sheet = openpyxl.load_workbook(output).active
+    assert sheet.max_row == 151
+    assert [sheet.cell(row, 1).value for row in range(2, 152)] == codes
+    with pytest.raises(HTTPException) as error:
+        vehicle_service.export_vehicle_units(vehicle_db, pi_code=pi, page=1, page_size=50000,
+                                               car_codes=[codes[0], "OTHER"], columns=["carCode"])
+    assert error.value.status_code == 409
 
 
 def test_vehicle_costs_single_and_checked_batch_keep_fob_vin_and_quantities(vehicle_db):

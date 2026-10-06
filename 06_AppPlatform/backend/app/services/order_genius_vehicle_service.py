@@ -505,7 +505,7 @@ def list_pi_headers(session: Session, **filters) -> dict:
     return {"items": [header_to_dict(row) for row in rows], "total": total}
 
 
-def get_pi_detail(session: Session, pi_code: str) -> dict:
+def get_pi_detail(session: Session, pi_code: str, countries: set[str] | None = None) -> dict:
     header = repo.get_header_by_code(session, pi_code)
     if not header:
         raise HTTPException(status_code=404, detail="PI not found")
@@ -513,18 +513,35 @@ def get_pi_detail(session: Session, pi_code: str) -> dict:
     allocations = repo.list_allocations_by_pi(session, header.pi_id)
     allocations_by_line: dict[Any, list[PiOrderLineAllocation]] = {}
     for allocation in allocations:
+        if countries is not None and allocation.market_country_code not in countries:
+            continue
         allocations_by_line.setdefault(allocation.pi_line_id, []).append(allocation)
+    vehicles = repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
+    if countries is not None:
+        vehicles = [vehicle for vehicle in vehicles if vehicle.country_code in countries]
+    vehicle_rows = vehicles_to_dict(session, vehicles)
     line_rows: list[dict[str, Any]] = []
     for line in lines:
         row = line_to_dict(line)
         row["allocations"] = [allocation_to_dict(allocation) for allocation in allocations_by_line.get(line.pi_line_id, [])]
+        if countries is not None:
+            line_vehicles = [vehicle for vehicle in vehicle_rows if vehicle["piLineCode"] == line.pi_line_code]
+            if not row["allocations"] and not line_vehicles:
+                continue
+            row["quantity"] = len(line_vehicles) if line_vehicles else sum(item["quantity"] for item in row["allocations"])
+            prices = [(vehicle["fobEur"], 1) for vehicle in line_vehicles] if line_vehicles else [(item["fobEur"], item["quantity"]) for item in row["allocations"]]
+            visible_prices = {price for price, _ in prices}
+            row["fobEur"] = next(iter(visible_prices)) if len(visible_prices) == 1 else None
+            row["amountEur"] = None if any(price is None for price, _ in prices) else sum(price * quantity for price, quantity in prices)
         line_rows.append(row)
-    vehicles = repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
+    header_row = header_to_dict(header)
+    if countries is not None:
+        header_row["marketCountryCodes"] = [country for country in header_row["marketCountryCodes"] if country in countries]
     return {
-        "header": header_to_dict(header),
+        "header": header_row,
         "lines": line_rows,
-        "summary": repo.vehicle_summary(session, pi_code),
-        "vehicles": vehicles_to_dict(session, vehicles),
+        "summary": repo.vehicle_summary(session, pi_code, countries),
+        "vehicles": vehicle_rows,
         "vehicleTotal": len(vehicles),
     }
 
@@ -545,6 +562,10 @@ def update_vehicle_unit(session: Session, car_code: str, payload: dict[str, Any]
     vehicle = repo.get_vehicle_by_car_code(session, car_code)
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
+    if "rowVersion" in payload:
+        session.refresh(vehicle, with_for_update=True)
+        if payload["rowVersion"] != vehicle.row_version:
+            raise HTTPException(409, "Vehicle changed; nothing saved. Re-read PI / 车辆已变化，未保存，请重新读取 PI")
     _apply_vehicle_updates(session, vehicle, payload, username)
     session.flush()
     return vehicle_to_dict(session, vehicle)
@@ -574,8 +595,9 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
         session,
         pi_code=pi_code,
         pi_line_code=pi_line_code,
+        **({"lock": True} if "rowVersions" in payload else {}),
     )
-    if not vehicles:
+    if not vehicles and "rowVersions" not in payload:
         return {
             "piCode": pi_code,
             "piLineCode": pi_line_code,
@@ -593,6 +615,13 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
     if car_codes:
         code_set = set(car_codes)
         vehicles = [v for v in vehicles if v.car_code in code_set]
+    if "rowVersions" in payload:
+        versions = payload["rowVersions"]
+        if (not car_codes or not isinstance(versions, dict)
+                or set(versions) != set(car_codes)
+                or {vehicle.car_code for vehicle in vehicles} != set(car_codes)
+                or any(versions[vehicle.car_code] != vehicle.row_version for vehicle in vehicles)):
+            raise HTTPException(409, "Selection changed; nothing saved. Re-read PI and select again / 勾选车辆已变化，未保存，请重新读取 PI 并重新勾选")
 
     field_payload = _bulk_field_payload(payload.get("fields"))
     if {"freightEur", "insuranceEur"} & field_payload.keys() and not car_codes:
@@ -884,8 +913,10 @@ def export_vehicle_units(session: Session, *, columns: list[str] | None = None, 
         raise HTTPException(400, "Export too large: narrow the view / 导出范围过大，请缩小筛选")
     vehicles = result["items"]
     if car_codes is not None:
-        codes = set(car_codes)
-        vehicles = [vehicle for vehicle in vehicles if vehicle["carCode"] in codes]
+        by_code = {vehicle["carCode"]: vehicle for vehicle in vehicles}
+        if len(car_codes) != len(set(car_codes)) or any(code not in by_code for code in car_codes):
+            raise HTTPException(409, "Export view changed. Re-read PI / 导出视图已变化，请重新读取 PI")
+        vehicles = [by_code[code] for code in car_codes]
     if columns and "cocPdf" in columns:
         from app.services.coc_library_service import lookup_vins
         available = lookup_vins([vehicle["vin"] for vehicle in vehicles if vehicle["vin"]])

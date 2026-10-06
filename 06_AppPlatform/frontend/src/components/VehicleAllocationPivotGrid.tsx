@@ -1,372 +1,206 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  AllCommunityModule,
-  ModuleRegistry,
-  themeAlpine,
-  type ColDef,
-  type ICellRendererParams,
-  type RowClickedEvent,
-} from "ag-grid-community";
-import { AgGridReact } from "ag-grid-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AllCommunityModule, ModuleRegistry, themeAlpine, type ColDef, type ColGroupDef, type FilterModel, type GridApi, type ICellRendererParams, type IDoesFilterPassParams } from "ag-grid-community";
+import { AgGridReact, useGridFilter, type CustomFilterProps } from "ag-grid-react";
+import { CommandMultiSelect } from "./CommandSelect";
 import type { PiVehicleUnit } from "../types/orderGeniusVehicle";
+import { type VehicleColumnKey, type VehicleColumn } from "./vehicleAllocationFields";
+import type { PiCocLookup } from "../types/cocLibrary";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
-
-type PivotRowType = "pi" | "line" | "vehicle";
-
-interface VehicleAllocationPivotRow {
-  id: string;
-  rowType: PivotRowType;
-  piCode: string;
-  piLineCode: string;
-  carCode: string;
-  vin: string;
-  countryCode: string;
-  materialCode: string;
-  config: string;
-  modelName: string;
-  version: string;
-  powertrain: string;
-  exteriorColorName: string;
-  interiorColorName: string;
-  allocationStatus: string;
-  logisticsStatus: string;
-  shipName: string;
-  eta: string;
-  orderMonth: string;
-  groupLabel: string;
-  groupMeta: string;
-  childCount: number;
-  source?: PiVehicleUnit;
-}
-
-interface PivotColumnOption {
-  key: keyof VehicleAllocationPivotRow;
-  label: string;
-}
-
-interface VehicleAllocationPivotGridProps {
+export type { VehicleColumnKey, VehicleColumn } from "./vehicleAllocationFields";
+export interface VehicleGridView { vehicles: PiVehicleUnit[]; ordinaryVehicles: PiVehicleUnit[]; columns: string[] }
+const DEFAULT_COLUMN: ColDef<PiVehicleUnit> = { sortable: true, resizable: true, minWidth: 100 };
+const SELECTION_COLUMN: ColDef<PiVehicleUnit> = { pinned: "left", width: 45, minWidth: 45, maxWidth: 45, suppressMovable: true };
+interface Props {
   vehicles: PiVehicleUnit[];
-  selectedCarCode?: string | null;
-  onSelectVehicle: (vehicle: PiVehicleUnit) => void | Promise<void>;
+  ordinaryVehicles: PiVehicleUnit[];
+  columns: VehicleColumn[];
+  groups: Array<{ label: string; keys: string[] }>;
+  visibleKeys: ReadonlySet<VehicleColumnKey>;
+  selectedCodes: ReadonlySet<string>;
+  busy: boolean;
+  resetKey: number;
+  filterScope: string;
+  cocStatuses: ReadonlyMap<string, PiCocLookup["items"][number]["status"]>;
+  renderCell: (vehicle: PiVehicleUnit, key: VehicleColumnKey) => ReactNode;
+  onEdit: (vehicle: PiVehicleUnit) => void;
+  onSelection: (codes: Set<string>) => void;
+  onFilterChange: () => void;
+  onViewChange: (view: VehicleGridView) => void;
 }
-
-const COLUMN_OPTIONS: PivotColumnOption[] = [
-  { key: "vin", label: "VIN" },
-  { key: "piCode", label: "PI" },
-  { key: "piLineCode", label: "PI Line" },
-  { key: "countryCode", label: "Country" },
-  { key: "materialCode", label: "Material" },
-  { key: "config", label: "Config" },
-  { key: "exteriorColorName", label: "Exterior" },
-  { key: "interiorColorName", label: "Interior" },
-  { key: "allocationStatus", label: "Allocation" },
-  { key: "logisticsStatus", label: "Logistics" },
-  { key: "shipName", label: "Ship" },
-  { key: "eta", label: "ETA" },
-];
-
-const DEFAULT_HIDDEN_COLUMNS = new Set<keyof VehicleAllocationPivotRow>([
-  "piCode",
-  "piLineCode",
-  "shipName",
-  "eta",
-]);
-
-function text(value: string | number | null | undefined): string {
-  if (value === null || value === undefined || value === "") {
-    return "-";
-  }
-  return String(value);
+function cellValue(vehicle: PiVehicleUnit, key: VehicleColumnKey, cocStatuses: Props["cocStatuses"]): string | number | null {
+  if (key === "config") return [vehicle.modelName, vehicle.version, vehicle.powertrain].filter(Boolean).join(" / ");
+  if (key === "cocPdf") return cocStatuses.get(vehicle.carCode) ?? "not_searched";
+  const value = vehicle[key];
+  return typeof value === "string" || typeof value === "number" ? value : null;
 }
-
-function statusLabel(value: string): string {
-  return value.replaceAll("_", " ");
-}
-
-function vehicleConfig(vehicle: PiVehicleUnit): string {
-  return [vehicle.modelName, vehicle.version, vehicle.powertrain]
-    .filter(Boolean)
-    .join(" / ");
-}
-
-function groupVehicles(vehicles: PiVehicleUnit[]): Map<string, Map<string, PiVehicleUnit[]>> {
-  const groups = new Map<string, Map<string, PiVehicleUnit[]>>();
-  for (const vehicle of vehicles) {
-    const lineGroups = groups.get(vehicle.piCode) ?? new Map<string, PiVehicleUnit[]>();
-    const rows = lineGroups.get(vehicle.piLineCode) ?? [];
-    rows.push(vehicle);
-    lineGroups.set(vehicle.piLineCode, rows);
-    groups.set(vehicle.piCode, lineGroups);
-  }
-  return groups;
-}
-
-function buildRows(
-  vehicles: PiVehicleUnit[],
-  expandedGroups: ReadonlySet<string>,
-): VehicleAllocationPivotRow[] {
-  const grouped = groupVehicles(vehicles);
-  const rows: VehicleAllocationPivotRow[] = [];
-  for (const [piCode, lineGroups] of grouped) {
-    const lineCount = lineGroups.size;
-    const vehicleCount = Array.from(lineGroups.values()).reduce((sum, items) => sum + items.length, 0);
-    const piKey = `pi:${piCode}`;
-    rows.push({
-      id: piKey,
-      rowType: "pi",
-      piCode,
-      piLineCode: "",
-      carCode: "",
-      vin: "",
-      countryCode: "",
-      materialCode: "",
-      config: "",
-      modelName: "",
-      version: "",
-      powertrain: "",
-      exteriorColorName: "",
-      interiorColorName: "",
-      allocationStatus: "",
-      logisticsStatus: "",
-      shipName: "",
-      eta: "",
-      orderMonth: "",
-      groupLabel: piCode,
-      groupMeta: `${lineCount} PI lines · ${vehicleCount} cars`,
-      childCount: vehicleCount,
-    });
-    if (!expandedGroups.has(piKey)) {
-      continue;
-    }
-    for (const [piLineCode, lineVehicles] of lineGroups) {
-      const first = lineVehicles[0];
-      const lineKey = `line:${piLineCode}`;
-      rows.push({
-        id: lineKey,
-        rowType: "line",
-        piCode,
-        piLineCode,
-        carCode: "",
-        vin: "",
-        countryCode: first?.countryCode ?? "",
-        materialCode: first?.materialCode ?? "",
-        config: first ? vehicleConfig(first) : "",
-        modelName: first?.modelName ?? "",
-        version: first?.version ?? "",
-        powertrain: first?.powertrain ?? "",
-        exteriorColorName: first?.exteriorColorName ?? "",
-        interiorColorName: first?.interiorColorName ?? "",
-        allocationStatus: "",
-        logisticsStatus: "",
-        shipName: first?.shipName ?? "",
-        eta: first?.eta ?? "",
-        orderMonth: first?.orderMonth ?? "",
-        groupLabel: piLineCode,
-        groupMeta: `${text(first?.materialCode)} · ${text(first?.modelName)} / ${text(first?.version)} · ${lineVehicles.length} cars`,
-        childCount: lineVehicles.length,
-      });
-      if (!expandedGroups.has(lineKey)) {
-        continue;
-      }
-      for (const vehicle of lineVehicles) {
-        rows.push({
-          id: `vehicle:${vehicle.carCode}`,
-          rowType: "vehicle",
-          piCode: vehicle.piCode,
-          piLineCode: vehicle.piLineCode,
-          carCode: vehicle.carCode,
-          vin: vehicle.vin ?? "",
-          countryCode: vehicle.countryCode,
-          materialCode: vehicle.materialCode ?? "",
-          config: vehicleConfig(vehicle),
-          modelName: vehicle.modelName ?? "",
-          version: vehicle.version ?? "",
-          powertrain: vehicle.powertrain ?? "",
-          exteriorColorName: vehicle.exteriorColorName ?? "",
-          interiorColorName: vehicle.interiorColorName ?? "",
-          allocationStatus: vehicle.allocationStatus,
-          logisticsStatus: vehicle.logisticsStatus,
-          shipName: vehicle.shipName ?? "",
-          eta: vehicle.eta ?? "",
-          orderMonth: vehicle.orderMonth ?? "",
-          groupLabel: vehicle.carCode,
-          groupMeta: text(vehicle.vin),
-          childCount: 0,
-          source: vehicle,
-        });
-      }
-    }
-  }
-  return rows;
-}
-
-function initialExpandedGroups(vehicles: PiVehicleUnit[]): Set<string> {
-  const groups = new Set<string>();
-  const grouped = groupVehicles(vehicles);
-  for (const [piCode, lineGroups] of grouped) {
-    groups.add(`pi:${piCode}`);
-    for (const piLineCode of lineGroups.keys()) {
-      groups.add(`line:${piLineCode}`);
-    }
-  }
-  return groups;
-}
-
-export function VehicleAllocationPivotGrid({
-  vehicles,
-  selectedCarCode,
-  onSelectVehicle,
-}: VehicleAllocationPivotGridProps) {
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => initialExpandedGroups(vehicles));
-  const [hiddenColumns, setHiddenColumns] = useState<Set<keyof VehicleAllocationPivotRow>>(() => new Set(DEFAULT_HIDDEN_COLUMNS));
-
+function ValueListFilter({ api, getValue, model, onModelChange }: CustomFilterProps<PiVehicleUnit, unknown, string[]>) {
+  const [values, setValues] = useState<string[]>([]);
   useEffect(() => {
-    setExpandedGroups(initialExpandedGroups(vehicles));
-  }, [vehicles]);
-
-  const rowData = useMemo(
-    () => buildRows(vehicles, expandedGroups),
-    [expandedGroups, vehicles],
-  );
-
-  const columnDefs = useMemo<ColDef<VehicleAllocationPivotRow>[]>(() => {
-    const cols: ColDef<VehicleAllocationPivotRow>[] = [
-      {
-        headerName: "Car Code / Group",
-        colId: "group",
-        pinned: "left",
-        minWidth: 240,
-        flex: 1,
-        cellClass: (params) => params.data?.rowType === "vehicle" ? "va-pivot-car-cell" : "va-pivot-group-cell",
-        cellRenderer: (params: ICellRendererParams<VehicleAllocationPivotRow, unknown>) => {
-          const row = params.data;
-          if (!row) {
-            return null;
-          }
-          if (row.rowType === "vehicle") {
-            return (
-              <button type="button" className="va-pivot-vehicle-link">
-                <strong>{row.carCode}</strong>
-                <small>{text(row.vin)}</small>
-              </button>
-            );
-          }
-          const expanded = expandedGroups.has(row.id);
-          return (
-            <button
-              type="button"
-              className={`va-pivot-group-toggle va-pivot-group-${row.rowType}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                setExpandedGroups((current) => {
-                  const next = new Set(current);
-                  if (next.has(row.id)) {
-                    next.delete(row.id);
-                  } else {
-                    next.add(row.id);
-                  }
-                  return next;
-                });
-              }}
-            >
-              <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
-              <strong>{row.groupLabel}</strong>
-              <small>{row.groupMeta}</small>
-            </button>
-          );
-        },
-      },
-    ];
-
-    for (const option of COLUMN_OPTIONS) {
-      cols.push({
-        headerName: option.label,
-        field: option.key,
-        hide: hiddenColumns.has(option.key),
-        minWidth: option.key === "config" ? 240 : 120,
-        flex: option.key === "config" ? 1 : undefined,
-        valueFormatter: (params) => {
-          const value = String(params.value ?? "");
-          if (option.key === "allocationStatus" || option.key === "logisticsStatus") {
-            return statusLabel(value);
-          }
-          return text(value);
-        },
-        cellClass: (params) => {
-          if (params.data?.rowType !== "vehicle") {
-            return "va-pivot-muted-cell";
-          }
-          if (option.key === "allocationStatus" || option.key === "logisticsStatus") {
-            return "va-pivot-status-cell";
-          }
-          return undefined;
-        },
-      });
+    function refreshValues(): void {
+      const unique = new Set<string>();
+      api.forEachNode((node) => unique.add(String(getValue(node) ?? "")));
+      const next = [...unique].sort();
+      setValues((current) => current.length === next.length && current.every((value, index) => value === next[index]) ? current : next);
     }
-    return cols;
-  }, [expandedGroups, hiddenColumns]);
-
-  function toggleColumn(key: keyof VehicleAllocationPivotRow): void {
-    setHiddenColumns((current) => {
-      const next = new Set(current);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
+    refreshValues();
+    api.addEventListener("modelUpdated", refreshValues);
+    return () => {
+      api.removeEventListener("modelUpdated", refreshValues);
+    };
+  }, [api, getValue]);
+  // Grid treats a changed callback as a changed filter; option-list refreshes must not clear selection.
+  const doesFilterPass = useCallback(({ node }: IDoesFilterPassParams<PiVehicleUnit>) => model === null || model.includes(String(getValue(node) ?? "")), [model, getValue]);
+  useGridFilter({ doesFilterPass });
+  return <div style={{ minWidth: 260, padding: 12 }}>
+    <CommandMultiSelect selected={model ?? values} options={values.map((value) => ({ value, label: value || "(Blank)" }))} onChange={onModelChange} placeholder="Filter values / 筛选值" />
+    <button type="button" onClick={() => onModelChange(null)}>All values / 全部值</button>
+  </div>;
+}
+export function VehicleAllocationGrid({ vehicles, ordinaryVehicles, columns, groups, visibleKeys, selectedCodes, busy, resetKey, filterScope, cocStatuses, renderCell, onEdit, onSelection, onFilterChange, onViewChange }: Props) {
+  const grid = useRef<AgGridReact<PiVehicleUnit>>(null);
+  const syncingSelection = useRef(false);
+  const renderer = useRef(renderCell);
+  renderer.current = renderCell;
+  const cocValues = useRef(cocStatuses);
+  cocValues.current = cocStatuses;
+  const ordinaryRows = useRef<PiVehicleUnit[]>([]);
+  const ordinaryFilters = useRef<FilterModel>({});
+  const selectedView = useRef(false);
+  const [showSelected, setShowSelected] = useState(false);
+  const [filteredCount, setFilteredCount] = useState(vehicles.length);
+  // Stable definitions keep header drag/width/filter state across selection and editing.
+  const definitions = useMemo<Array<ColGroupDef<PiVehicleUnit>>>(() => groups.map((group) => ({
+    headerName: group.label, groupId: group.label, marryChildren: false, openByDefault: true,
+    children: columns.filter((column) => group.keys.includes(column.key)).map((column): ColDef<PiVehicleUnit> => ({
+      colId: column.key, headerName: column.label, hide: column.optional ?? false,
+      columnGroupShow: column.key === group.keys[0] ? undefined : "open",
+      valueGetter: (params) => params.data ? cellValue(params.data, column.key, cocValues.current) : null,
+      filter: column.kind === "number" ? "agNumberColumnFilter" : column.kind === "date" ? "agDateColumnFilter" : column.kind === "values" ? ValueListFilter : "agTextColumnFilter",
+      filterParams: column.kind === "date" ? { comparator: (filterDate: Date, cell: string | null) => {
+        const target = `${filterDate.getFullYear()}-${String(filterDate.getMonth() + 1).padStart(2, "0")}-${String(filterDate.getDate()).padStart(2, "0")}`;
+        return (cell ?? "").slice(0, 10).localeCompare(target);
+      } } : undefined,
+      cellRenderer: (params: ICellRendererParams<PiVehicleUnit>) => params.data ? renderer.current(params.data, column.key) : null,
+      width: column.key === "config" || column.key === "carCode" ? 255 : column.key === "materialCode" ? 195 : 170,
+    })),
+  })), [columns, groups]);
+  function rows(api: GridApi<PiVehicleUnit>): PiVehicleUnit[] {
+    const result: PiVehicleUnit[] = [];
+    api.forEachNodeAfterFilterAndSort((node) => { if (node.data) result.push(node.data); });
+    return result;
+  }
+  function publish(api: GridApi<PiVehicleUnit>): void {
+    const result = rows(api);
+    if (!selectedView.current) ordinaryRows.current = result;
+    setFilteredCount(result.length);
+    onViewChange({ vehicles: result, ordinaryVehicles: ordinaryRows.current, columns: api.getAllDisplayedColumns().map((column) => column.getColId()).filter((key) => key !== "ag-Grid-SelectionColumn") });
+  }
+  function syncSelection(api: GridApi<PiVehicleUnit>): void {
+    syncingSelection.current = true;
+    api.forEachNode((node) => {
+      const selected = Boolean(node.data && selectedCodes.has(node.data.carCode));
+      if (node.isSelected() !== selected) node.setSelected(selected);
     });
+    syncingSelection.current = false;
   }
+  useEffect(() => {
+    toggleSelectedView(false);
+  }, [filterScope]);
 
-  function handleRowClicked(event: RowClickedEvent<VehicleAllocationPivotRow>): void {
-    if (event.data?.rowType === "vehicle" && event.data.source) {
-      void onSelectVehicle(event.data.source);
+  function toggleSelectedView(next: boolean): void {
+    const api = grid.current?.api;
+    if (next === selectedView.current) return;
+    if (next && api) {
+      ordinaryRows.current = rows(api);
+      ordinaryFilters.current = api.getFilterModel();
+    }
+    selectedView.current = next;
+    setShowSelected(next);
+    if (api) {
+      api.setFilterModel(next ? null : ordinaryFilters.current);
     }
   }
-
-  return (
-    <section className={`va-pivot-panel${rowData.length > 0 ? " has-rows" : ""}`}>
-      <div className="va-pivot-toolbar">
-        <div>
-          <strong>PI Search Pivot</strong>
-          <span>{vehicles.length} vehicles · PI / PI line collapsible</span>
-        </div>
-        <div className="va-column-pills" aria-label="Toggle vehicle allocation columns">
-          {COLUMN_OPTIONS.map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              className={hiddenColumns.has(option.key) ? "" : "is-active"}
-              onClick={() => toggleColumn(option.key)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="va-pivot-grid">
-        <AgGridReact<VehicleAllocationPivotRow>
-          theme={themeAlpine}
-          rowData={rowData}
-          columnDefs={columnDefs}
-          getRowId={(params) => params.data.id}
-          onRowClicked={handleRowClicked}
-          suppressNoRowsOverlay={rowData.length > 0}
-          defaultColDef={{
-            resizable: true,
-            sortable: true,
-            filter: true,
-          }}
-          rowClassRules={{
-            "is-pi-group": (params) => params.data?.rowType === "pi",
-            "is-line-group": (params) => params.data?.rowType === "line",
-            "is-selected-vehicle": (params) => params.data?.carCode === selectedCarCode,
-          }}
-          domLayout="normal"
-          suppressCellFocus={false}
-        />
-      </div>
-    </section>
-  );
+  useEffect(() => {
+    grid.current?.api?.refreshCells({ force: true });
+  }, [renderCell]);
+  useEffect(() => {
+    const api = grid.current?.api;
+    if (!api) return;
+    api.refreshClientSideRowModel("filter");
+    if ((selectedView.current ? ordinaryFilters.current : api.getFilterModel()).cocPdf) { toggleSelectedView(false); onFilterChange(); }
+  }, [cocStatuses]);
+  useEffect(() => {
+    const api = grid.current?.api;
+    if (!api) return;
+    syncSelection(api);
+  }, [selectedCodes, vehicles, ordinaryVehicles, showSelected]);
+  useEffect(() => {
+    grid.current?.api?.applyColumnState({ state: columns.map((column) => ({ colId: column.key, hide: !visibleKeys.has(column.key) })) });
+  }, [columns, visibleKeys]);
+  useEffect(() => {
+    const api = grid.current?.api;
+    if (!api) return;
+    api.resetColumnState();
+    api.setFilterModel(null);
+    api.applyColumnState({ state: columns.map((column) => ({ colId: column.key, hide: !visibleKeys.has(column.key) })) });
+  }, [resetKey]); // Explicit reset, not selection/refresh.
+  const currentSelected = ordinaryRows.current.filter((vehicle) => selectedCodes.has(vehicle.carCode)).length;
+  return <section className="va-grid" aria-label="Vehicle details">
+    <div className="va-grid-toolbar">
+      <span role="status">{filteredCount} filtered / 筛选 · {selectedCodes.size} selected / 已选 · Current filtered selected / 当前筛选已选 {currentSelected}/{ordinaryRows.current.length} · Global selected / 全局已选 {selectedCodes.size}/{vehicles.length} · Outside current filters / 筛选外已选 {selectedCodes.size - currentSelected}</span>
+      <label><input type="checkbox" checked={showSelected} disabled={busy} onChange={(event) => toggleSelectedView(event.target.checked)} />Show selected / 只看勾选</label>
+      <button type="button" className="btn-secondary" disabled={busy} onClick={() => {
+        const scope = showSelected ? ordinaryRows.current : grid.current?.api ? rows(grid.current.api) : [];
+        const next = new Set(selectedCodes);
+        for (const vehicle of scope) { if (next.has(vehicle.carCode)) next.delete(vehicle.carCode); else next.add(vehicle.carCode); }
+        onSelection(next);
+      }}>Invert selection / 反选筛选结果</button>
+    </div>
+    <div style={{ height: "min(65vh, 660px)", minHeight: 300 }}>
+      <AgGridReact<PiVehicleUnit>
+        ref={grid}
+        theme={themeAlpine}
+        rowData={showSelected ? vehicles.filter((vehicle) => selectedCodes.has(vehicle.carCode)) : ordinaryVehicles}
+        columnDefs={definitions}
+        defaultColDef={DEFAULT_COLUMN}
+        maintainColumnOrder
+        getRowId={(params) => params.data.carCode}
+        rowSelection={{ mode: "multiRow", selectAll: "filtered", enableClickSelection: false, checkboxes: !busy, headerCheckbox: !busy }}
+        selectionColumnDef={SELECTION_COLUMN}
+        pagination={!showSelected}
+        paginationPageSize={100}
+        paginationPageSizeSelector={[50, 100, 200]}
+        suppressDragLeaveHidesColumns
+        onGridReady={(event) => { event.api.applyColumnState({ state: columns.map((column) => ({ colId: column.key, hide: !visibleKeys.has(column.key) })) }); publish(event.api); }}
+        onModelUpdated={(event) => publish(event.api)}
+        onRowDataUpdated={(event) => syncSelection(event.api)}
+        onDisplayedColumnsChanged={(event) => publish(event.api)}
+        onColumnMoved={(event) => { if (event.finished) publish(event.api); }}
+        onSortChanged={(event) => publish(event.api)}
+        onFilterChanged={(event) => {
+          // Selected-only clears/restores the existing filters; this is a view switch, not a user filter change.
+          if (event.source === "api") return;
+          if (selectedView.current) {
+            ordinaryFilters.current = event.api.getFilterModel();
+            toggleSelectedView(false);
+          }
+          onFilterChange();
+        }}
+        onSelectionChanged={(event) => {
+          if (!syncingSelection.current && (event.source.startsWith("ui") || ["checkboxSelected", "rowClicked", "spaceKey", "keyboardSelectAll"].includes(event.source))) {
+            const loaded = new Set<string>();
+            event.api.forEachNode((node) => { if (node.data) loaded.add(node.data.carCode); });
+            const next = new Set([...selectedCodes].filter((code) => !loaded.has(code)));
+            event.api.getSelectedRows().forEach((vehicle) => next.add(vehicle.carCode));
+            onSelection(next);
+          }
+        }}
+        onCellClicked={(event) => {
+          if (event.data && event.column.getColId() !== "ag-Grid-SelectionColumn" && event.column.getColId() !== "cocPdf") onEdit(event.data);
+        }}
+        overlayNoRowsTemplate="No vehicles in this view / 当前视图无车辆"
+      />
+    </div>
+  </section>;
 }

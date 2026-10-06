@@ -392,7 +392,7 @@ def list_vehicles(
     return list(rows), total
 
 
-def vehicle_summary(session: Session, pi_code: str) -> dict:
+def vehicle_summary(session: Session, pi_code: str, countries: set[str] | None = None) -> dict:
     rows = session.execute(
         select(
             func.count().label("total"),
@@ -404,7 +404,8 @@ def vehicle_summary(session: Session, pi_code: str) -> dict:
             func.sum(case((PiVehicleUnit.logistics_status == "on_vessel", 1), else_=0)).label("on_vessel"),
             func.sum(case((PiVehicleUnit.logistics_status == "arrived_at_port", 1), else_=0)).label("arrived"),
             func.sum(case((PiVehicleUnit.logistics_status == "ready_for_pickup", 1), else_=0)).label("ready_for_pickup"),
-        ).where(PiVehicleUnit.pi_code == pi_code)
+        ).where(PiVehicleUnit.pi_code == pi_code,
+                *([PiVehicleUnit.country_code.in_(countries)] if countries is not None else []))
     ).first()
     if not rows:
         return {}

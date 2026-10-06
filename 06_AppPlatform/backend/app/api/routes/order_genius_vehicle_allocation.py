@@ -184,6 +184,34 @@ def _validate_vehicle_access(session: Session, user: UserContext, vehicle: dict)
     _validate_optional_country(session, user, _country(vehicle.get("countryCode")))
 
 
+def _accessible_pi_detail(session: Session, user: UserContext, pi_code: str) -> dict:
+    detail = get_pi_detail(session, pi_code)
+    _validate_pi_detail_access(session, user, detail)
+    if user.role != "order_filler":
+        return detail
+    countries = {vehicle["countryCode"] for vehicle in detail["vehicles"]}
+    countries.update(detail["header"]["marketCountryCodes"])
+    return get_pi_detail(session, pi_code, countries=_accessible_market_countries(session, user, countries))
+
+
+def _accessible_market_countries(session: Session, user: UserContext, countries: set[str]) -> set[str]:
+    allowed = set()
+    for country in countries:
+        try:
+            _validate_country(session, user, country)
+            allowed.add(country)
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
+    return allowed
+
+
+def _validate_target_countries(session: Session, user: UserContext, vehicles: list[dict]) -> None:
+    # Validate the complete target set before any write; never silently trim a batch.
+    for country in {vehicle["countryCode"] for vehicle in vehicles}:
+        _validate_country(session, user, country)
+
+
 def _row_country(session: Session, row: dict) -> str | None:
     country = _country(row.get("country_code"))
     if country:
@@ -336,7 +364,7 @@ def list_pi_orders(
 ) -> dict:
     selected_country = _country(country)
     _validate_optional_country(session, user, selected_country)
-    return list_pi_headers(
+    result = list_pi_headers(
         session,
         country=selected_country,
         month=_clean(month),
@@ -345,6 +373,12 @@ def list_pi_orders(
         page=page,
         page_size=page_size,
     )
+    if user.role == "order_filler":
+        countries = {country for header in result["items"] for country in header["marketCountryCodes"]}
+        allowed = _accessible_market_countries(session, user, countries)
+        for header in result["items"]:
+            header["marketCountryCodes"] = [country for country in header["marketCountryCodes"] if country in allowed]
+    return result
 
 
 @router.post("/pi")
@@ -366,9 +400,7 @@ def get_pi_order(
     session: Session = Depends(get_db_session),
     user: UserContext = Depends(require_min_role("viewer")),
 ) -> dict:
-    detail = get_pi_detail(session, pi_code.upper())
-    _validate_pi_detail_access(session, user, detail)
-    return detail
+    return _accessible_pi_detail(session, user, pi_code.upper())
 
 
 @router.patch("/pi/{pi_code}")
@@ -552,6 +584,14 @@ def bulk_update_vehicles(
     else:
         raise HTTPException(status_code=400, detail="piCode or piLineCode is required")
     _validate_pi_detail_access(session, user, detail)
+    raw_codes = body.get("carCodes", body.get("car_codes"))
+    if raw_codes is not None and (not isinstance(raw_codes, list) or not raw_codes or any(not isinstance(code, str) or not code.strip() for code in raw_codes)):
+        raise HTTPException(400, "Select vehicle rows / 请明确勾选车辆")
+    codes = {code.strip().upper() for code in raw_codes} if raw_codes is not None else None
+    targets = [vehicle for vehicle in detail["vehicles"]
+               if (not pi_line_code or vehicle["piLineCode"] == pi_line_code.upper())
+               and (codes is None or vehicle["carCode"] in codes)]
+    _validate_target_countries(session, user, targets)
     result = bulk_update_vehicle_units(session, body, user.name)
     session.commit()
     return result
@@ -577,7 +617,7 @@ def search_allocation(
 ) -> dict:
     result = search_vehicle_allocation(session, keyword)
     if result.get("type") == "pi":
-        _validate_pi_detail_access(session, user, result["item"])
+        result["item"] = _accessible_pi_detail(session, user, result["item"]["header"]["piCode"])
     elif result.get("type") == "vehicle":
         _validate_vehicle_access(session, user, result["item"])
     return result
@@ -764,13 +804,24 @@ def export_vehicle_allocation(
         page_size=500,
     )
     filters["page_size"] = 50_000
-    _validate_optional_country(session, user, filters["country"])
     columns = payload.get("columns")
     car_codes = payload.get("carCodes")
     if columns is not None and (not isinstance(columns, list) or len(columns) > 40 or any(not isinstance(key, str) for key in columns)):
         raise HTTPException(400, "Invalid export columns / 导出列无效")
-    if car_codes is not None and (not isinstance(car_codes, list) or len(car_codes) > 1000 or any(not isinstance(code, str) for code in car_codes)):
+    if car_codes is not None and (not isinstance(car_codes, list) or len(car_codes) > 50000 or any(not isinstance(code, str) for code in car_codes)):
         raise HTTPException(400, "Invalid vehicle selection / 车辆范围无效")
+    if filters["country"]:
+        _validate_country(session, user, filters["country"])
+    if user.role == "order_filler" and filters["pi_code"]:
+        detail = _accessible_pi_detail(session, user, filters["pi_code"])
+        allowed_codes = {vehicle["carCode"] for vehicle in detail["vehicles"]}
+        if car_codes is not None and not set(car_codes).issubset(allowed_codes):
+            raise HTTPException(403, "Export contains vehicles outside your countries / 导出包含无权访问的国家车辆")
+        if car_codes is None:
+            rows, _ = vehicle_repo.list_vehicles(session, **filters)
+            car_codes = [vehicle.car_code for vehicle in rows if vehicle.car_code in allowed_codes]
+    else:
+        _validate_optional_country(session, user, filters["country"])
     buffer = export_vehicle_units(session, columns=columns, car_codes=car_codes, **filters)
     today = date.today().strftime("%Y%m%d")
     country_part = filters["country"] or "ALL"
