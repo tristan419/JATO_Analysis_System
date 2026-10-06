@@ -55,7 +55,7 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
       }
       else if (path.includes("/vehicles/") && req.method() === "PATCH") { saves.push(req.postDataJSON()); body = vehicles[0]; }
       else if (path.endsWith("/pi/" + PI)) body = detail();
-      else if (path.endsWith("/pi")) body = { items: [header], total: 1 };
+      else if (path.endsWith("/pi")) body = { items: Array.from({ length: 12 }, (_, index) => index === 0 ? header : { ...header, piCode: `PI-CH-202609-${String(index + 1).padStart(3, "0")}` }), total: 12 };
       else body = { items: [], total: 0, columns: [] };
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     });
@@ -319,6 +319,65 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     await page.getByText("225 filtered / 筛选", { exact: false }).waitFor();
     await page.getByText("450 units / 台", { exact: true }).waitFor();
     checks.push("Mixed-market PI defaults to all 450 rows; ordinary country filter narrows view, not summary");
+    await resetView();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await all.check({ force: true });
+    const columnOrder = await page.locator('.ag-header-cell[col-id]').evaluateAll((elements) => elements.map((element) => element.getAttribute("col-id")));
+    async function layoutGeometry() {
+      return page.evaluate(() => {
+        const rect = (selector) => {
+          const element = document.querySelector(selector), box = element.getBoundingClientRect();
+          return { top: box.top, bottom: box.bottom, width: box.width, height: box.height, client: element.clientHeight, scroll: element.scrollHeight };
+        };
+        return { side: rect(".va-side"), main: rect(".va-main"), body: rect(".va-grid-body"), pagination: rect(".ag-paging-panel"), piList: rect(".va-pi-list"), page: rect(".vehicle-allocation-page"), overflowX: document.documentElement.scrollWidth > innerWidth };
+      });
+    }
+    let desktopHeight = 0;
+    for (const viewport of [{ width: 1920, height: 1080 }, { width: 3840, height: 2160 }, { width: 1536, height: 864 }, { width: 1280, height: 720 }]) {
+      await page.setViewportSize(viewport);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.waitForFunction(() => {
+        const box = document.querySelector(".vehicle-allocation-page").getBoundingClientRect();
+        return Math.abs(box.bottom - Math.max(innerHeight, box.top + 640)) <= 2;
+      }).catch(async () => { throw new Error(JSON.stringify({ viewport, geometry: await layoutGeometry() })); });
+      const size = await layoutGeometry();
+      assert(Math.abs(size.side.top - size.main.top) <= 2 && Math.abs(size.side.bottom - size.main.bottom) <= 2, JSON.stringify(size));
+      assert(size.body.height > 150 && size.pagination.bottom <= viewport.height, JSON.stringify(size));
+      assert(!size.overflowX);
+      if (viewport.width === 1920) { desktopHeight = size.body.height; assert(size.piList.scroll > size.piList.client); }
+      if (viewport.width === 3840) assert(size.body.height > desktopHeight + 600 && size.main.width > 2800);
+      await page.getByText("450 selected / 已选", { exact: false }).waitFor();
+      await screenshot(page, `pi-responsive-${viewport.width}x${viewport.height}.png`);
+    }
+    const currentColumns = await page.locator('.ag-header-cell[col-id]').evaluateAll((elements) => elements.map((element) => element.getAttribute("col-id")));
+    assert.deepEqual(currentColumns.filter((key) => columnOrder.includes(key)), columnOrder.filter((key) => currentColumns.includes(key)));
+    await page.getByRole("button", { name: /PI lines/ }).click();
+    let size = await layoutGeometry();
+    assert(Math.abs(size.side.bottom - size.main.bottom) <= 2);
+    await page.getByRole("button", { name: /PI lines/ }).click();
+    await page.locator(".va-month-browser summary").click();
+    size = await layoutGeometry();
+    assert(Math.abs(size.side.bottom - size.main.bottom) <= 2);
+    await page.locator(".va-month-browser summary").click();
+    // A taller shell (e.g. Candidate banner/wrapped navigation) must be measured, not hardcoded.
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.locator(".top-bar").evaluate((element) => { element.style.minHeight = "130px"; });
+    await page.waitForFunction(() => Math.abs(document.querySelector(".vehicle-allocation-page").getBoundingClientRect().bottom - innerHeight) <= 2);
+    assert((await layoutGeometry()).pagination.bottom <= 1080);
+    await page.locator(".top-bar").evaluate((element) => { element.style.minHeight = ""; });
+    await page.setViewportSize({ width: 1920, height: 500 });
+    await page.getByText("450 selected / 已选", { exact: false }).waitFor();
+    assert((await layoutGeometry()).page.height >= 640); // Short windows scroll; controls are not clipped.
+    await page.setViewportSize({ width: 700, height: 950 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    size = await layoutGeometry();
+    assert(size.main.top >= size.side.bottom && size.body.height >= 320 && !size.overflowX, JSON.stringify(size));
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.locator('.ag-row .ag-cell[col-id="carCode"]').first().click();
+    await page.getByRole("button", { name: "Save changes / 保存修改" }).waitFor();
+    assert((await page.getByRole("button", { name: "Save changes / 保存修改" }).boundingBox()).y < 1080);
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    checks.push("Responsive 1080p/4K/zoom-equivalent/short/narrow layouts; aligned columns, visible pagination, taller-shell resize, selection and column state retained");
     assert.equal(errors.length, 0, errors.join("\n"));
     checks.push("Horizontal/vertical scroll and narrow viewport; no browser errors");
     console.log(JSON.stringify({ passed: checks, saves: saves.length, viewExports: viewExports.length, browserErrors: errors.length }, null, 2));

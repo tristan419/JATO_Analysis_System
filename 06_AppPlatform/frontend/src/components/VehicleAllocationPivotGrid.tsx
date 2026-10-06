@@ -157,7 +157,7 @@ export function VehicleAllocationGrid({ vehicles, ordinaryVehicles, columns, gro
         onSelection(next);
       }}>Invert selection / 反选筛选结果</button>
     </div>
-    <div style={{ height: "min(65vh, 660px)", minHeight: 300 }}>
+    <div className="va-grid-body">
       <AgGridReact<PiVehicleUnit>
         ref={grid}
         theme={themeAlpine}

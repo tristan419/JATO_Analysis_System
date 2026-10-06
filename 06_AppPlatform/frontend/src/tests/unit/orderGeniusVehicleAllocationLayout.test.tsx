@@ -85,6 +85,8 @@ function detail(): PiOrderDetail {
 }
 
 beforeEach(() => {
+  // jsdom has no layout observer; real shell resize geometry is covered in Chrome.
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} disconnect(): void {} });
   testRole.value = "admin";
   testRole.secondaryCountries = [];
   window.history.replaceState({}, "", "/product/order-genius/vehicle-allocation");
@@ -108,6 +110,16 @@ async function selectPi() {
   await screen.findByText("150 units / 台");
   await waitFor(() => expect(screen.getAllByRole("row").length).toBe(6));
 }
+
+it("updates only the page geometry variable on viewport resize", async () => {
+  await selectPi();
+  const page = document.querySelector<HTMLElement>(".vehicle-allocation-page");
+  expect(page?.style.getPropertyValue("--va-available-height")).toBe(`${window.innerHeight}px`);
+  vi.stubGlobal("innerHeight", 900);
+  fireEvent(window, new Event("resize"));
+  expect(page?.style.getPropertyValue("--va-available-height")).toBe("900px");
+  expect(api.bulkUpdateVehicleAllocationVehicles).not.toHaveBeenCalled();
+});
 
 async function chooseOctober() {
   fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2026" } });
