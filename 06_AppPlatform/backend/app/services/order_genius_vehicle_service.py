@@ -505,7 +505,7 @@ def list_pi_headers(session: Session, **filters) -> dict:
     return {"items": [header_to_dict(row) for row in rows], "total": total}
 
 
-def get_pi_detail(session: Session, pi_code: str) -> dict:
+def get_pi_detail(session: Session, pi_code: str, countries: set[str] | None = None) -> dict:
     header = repo.get_header_by_code(session, pi_code)
     if not header:
         raise HTTPException(status_code=404, detail="PI not found")
@@ -513,18 +513,33 @@ def get_pi_detail(session: Session, pi_code: str) -> dict:
     allocations = repo.list_allocations_by_pi(session, header.pi_id)
     allocations_by_line: dict[Any, list[PiOrderLineAllocation]] = {}
     for allocation in allocations:
+        if countries is not None and allocation.market_country_code not in countries:
+            continue
         allocations_by_line.setdefault(allocation.pi_line_id, []).append(allocation)
+    vehicles = repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
+    if countries is not None:
+        vehicles = [vehicle for vehicle in vehicles if vehicle.country_code in countries]
+    vehicle_rows = vehicles_to_dict(session, vehicles)
     line_rows: list[dict[str, Any]] = []
     for line in lines:
         row = line_to_dict(line)
         row["allocations"] = [allocation_to_dict(allocation) for allocation in allocations_by_line.get(line.pi_line_id, [])]
+        if countries is not None:
+            line_vehicles = [vehicle for vehicle in vehicle_rows if vehicle["piLineCode"] == line.pi_line_code]
+            if not row["allocations"] and not line_vehicles:
+                continue
+            row["quantity"] = len(line_vehicles) if line_vehicles else sum(item["quantity"] for item in row["allocations"])
+            prices = [(vehicle["fobEur"], 1) for vehicle in line_vehicles] if line_vehicles else [(item["fobEur"], item["quantity"]) for item in row["allocations"]]
+            row["amountEur"] = None if any(price is None for price, _ in prices) else sum(price * quantity for price, quantity in prices)
         line_rows.append(row)
-    vehicles = repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
+    header_row = header_to_dict(header)
+    if countries is not None:
+        header_row["marketCountryCodes"] = [country for country in header_row["marketCountryCodes"] if country in countries]
     return {
-        "header": header_to_dict(header),
+        "header": header_row,
         "lines": line_rows,
-        "summary": repo.vehicle_summary(session, pi_code),
-        "vehicles": vehicles_to_dict(session, vehicles),
+        "summary": repo.vehicle_summary(session, pi_code, countries),
+        "vehicles": vehicle_rows,
         "vehicleTotal": len(vehicles),
     }
 

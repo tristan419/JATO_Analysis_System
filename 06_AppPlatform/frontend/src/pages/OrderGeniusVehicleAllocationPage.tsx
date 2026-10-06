@@ -30,6 +30,7 @@ import type {
 } from "../types/orderGeniusVehicle";
 import { VehicleAllocationGrid, type VehicleGridView, type VehicleColumnKey } from "../components/VehicleAllocationPivotGrid";
 import { VehicleAllocationEditor } from "../components/VehicleAllocationEditor";
+import { VEHICLE_COLUMNS, COLUMN_GROUPS, matchesVehicleText } from "../components/vehicleAllocationFields";
 import { ptColor } from "../utils/colors";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
 import { compareProductModels } from "../utils/orderGeniusProductSort";
@@ -154,32 +155,6 @@ function buildDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-const VEHICLE_COLUMNS: Array<{ key: VehicleColumnKey; label: string; optional?: boolean }> = [
-  { key: "carCode", label: "Car Code" }, { key: "vin", label: "VIN" },
-  { key: "piCode", label: "PI" }, { key: "countryCode", label: "Country" },
-  { key: "materialCode", label: "Material" }, { key: "config", label: "Config" },
-  { key: "exteriorColorName", label: "Exterior" }, { key: "interiorColorName", label: "Interior" },
-  { key: "fobEur", label: "FOB (EUR)" },
-  { key: "freightEur", label: "Freight / 运费 (EUR)", optional: true },
-  { key: "insuranceEur", label: "Insurance / 保费 (EUR)", optional: true },
-  { key: "cocPdf", label: "COC PDF", optional: true },
-  { key: "allocationStatus", label: "Allocation" }, { key: "logisticsStatus", label: "Logistics" },
-  { key: "shipName", label: "Ship" }, { key: "eta", label: "ETA" },
-  { key: "readyForPickupDate", label: "Ready for pickup / 可提车" },
-  { key: "productionDate", label: "Production", optional: true },
-  { key: "etd", label: "ETD", optional: true },
-  { key: "actualDepartureDate", label: "Actual departure", optional: true },
-  { key: "actualArrivalDate", label: "Actual arrival", optional: true },
-  { key: "dealerCode", label: "Dealer", optional: true },
-  { key: "dealerName", label: "Dealer name", optional: true },
-  { key: "customerRef", label: "Customer ref", optional: true },
-  { key: "remark", label: "Note / 备注", optional: true },
-];
-const COLUMN_GROUPS = [
-  { label: "Identity / 车辆", keys: ["carCode", "vin", "piCode", "countryCode", "materialCode", "config", "exteriorColorName", "interiorColorName"] },
-  { label: "Price & documents / 价格与文件", keys: ["fobEur", "freightEur", "insuranceEur", "cocPdf", "remark"] },
-  { label: "Status & dates / 状态与日期", keys: ["allocationStatus", "logisticsStatus", "shipName", "eta", "readyForPickupDate", "productionDate", "etd", "actualDepartureDate", "actualArrivalDate", "dealerCode", "dealerName", "customerRef"] },
-];
 const DEFAULT_COLUMNS = VEHICLE_COLUMNS.filter((column) => !column.optional).map((column) => column.key);
 
 function vehicleCell(vehicle: PiVehicleUnit, key: VehicleColumnKey): ReactNode {
@@ -214,6 +189,9 @@ export function OrderGeniusVehicleAllocationPage() {
   const [piBrowsePage, setPiBrowsePage] = useState(1);
   const [piListError, setPiListError] = useState<string | null>(null);
   const [selectedPi, setSelectedPi] = useState<PiOrderDetail | null>(null);
+  const [piLoading, setPiLoading] = useState(false);
+  const piRequest = useRef(0);
+  useEffect(() => () => { piRequest.current += 1; }, []);
   const [cocLookup, setCocLookup] = useState<{ piCode: string; result: PiCocLookup } | null>(null);
   const [cocBusy, setCocBusy] = useState(false);
   const [cocError, setCocError] = useState("");
@@ -221,6 +199,7 @@ export function OrderGeniusVehicleAllocationPage() {
   const [cocFilter, setCocFilter] = useState<"all" | "available" | "missing" | "awaiting_vin">("all");
   const cocRequest = useRef(0);
   const cocResult = cocLookup?.piCode === selectedPi?.header.piCode ? cocLookup?.result : null;
+  const cocStatuses = useMemo(() => new Map(cocResult?.items.map((item) => [item.carCode, item.status])), [cocResult]);
   useEffect(() => { cocRequest.current += 1; setCocLookup(null); setCocError(""); setCocDownloadConfirm(null); setCocFilter("all"); }, [selectedPi]);
   const [deleteConfirmPi, setDeleteConfirmPi] = useState<string | null>(null);
   // Multi-select state
@@ -228,7 +207,7 @@ export function OrderGeniusVehicleAllocationPage() {
   useEffect(() => { setCocDownloadConfirm(null); }, [selectedCarCodes]);
   const [selectedLineCode, setSelectedLineCode] = useState<string | null>(null);
   const [editorTargets, setEditorTargets] = useState<PiVehicleUnit[]>([]);
-  const gridView = useRef<VehicleGridView>({ vehicles: [], columns: [] });
+  const gridView = useRef<VehicleGridView>({ vehicles: [], ordinaryVehicles: [], columns: [] });
   const [gridResetKey, setGridResetKey] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const [vinBatchText, setVinBatchText] = useState("");
@@ -262,7 +241,8 @@ export function OrderGeniusVehicleAllocationPage() {
   const importInputRef = useRef<HTMLInputElement>(null);
   const [statusFlow, setStatusFlow] = useState<VehicleStatusFlowConfig | null>(null);
 
-  const scopeBusy = saving || bulkSaving || vinPasteApplying || importBusy;
+  const mutationBusy = saving || bulkSaving || vinPasteApplying || importBusy;
+  const scopeBusy = mutationBusy || piLoading;
   const pageSize = 100;
   const selectedLine = selectedPi?.lines.find((line) => line.piLineCode === selectedLineCode) ?? null;
   const activeScopeLabel = selectedLine
@@ -323,7 +303,7 @@ export function OrderGeniusVehicleAllocationPage() {
     return vinPasteScopeVehicles.filter((vehicle) => (!filters.country || vehicle.countryCode === filters.country)
       && (!filters.carCode || vehicle.carCode === filters.carCode)
       && (!batchVins.length || Boolean(vehicle.vin && batchVins.includes(vehicle.vin.toUpperCase())))
-      && (!query || Object.values(vehicle).some((value) => String(value ?? "").toLowerCase().includes(query))))
+      && (!query || matchesVehicleText(vehicle, query)))
       .sort((a, b) => compareProductModels(a.brand ?? "", a.modelName ?? "", a.powertrain ?? "", b.brand ?? "", b.modelName ?? "", b.powertrain ?? "")
         || (a.version ?? "").localeCompare(b.version ?? "") || (a.bom ?? "").localeCompare(b.bom ?? "")
         || (a.materialCode ?? "").localeCompare(b.materialCode ?? "") || a.carCode.localeCompare(b.carCode));
@@ -341,14 +321,13 @@ export function OrderGeniusVehicleAllocationPage() {
     const vinMissing = vinPasteScopeVehicles.filter((item) => !item.vin).length;
     const ready = vinPasteScopeVehicles.filter((item) => item.logisticsStatus === "ready_for_pickup").length;
     const allocated = vinPasteScopeVehicles.filter((item) => item.allocationStatus === "allocated").length;
-    return { vinMissing, ready, allocated };
+    return { vinMissing, vinAssigned: vinPasteScopeVehicles.length - vinMissing, ready, allocated };
   }, [vinPasteScopeVehicles]);
 
   useEffect(() => {
     if (!defaultCountry) {
       return;
     }
-    setFilters((current) => current.country ? current : { ...current, country: defaultCountry });
     setPiBrowseCountry((current) => current || defaultCountry);
   }, [defaultCountry]);
 
@@ -446,6 +425,7 @@ export function OrderGeniusVehicleAllocationPage() {
   }, [linesOpen]);
 
   function clearScopeEdits(): void {
+    gridView.current = { vehicles: [], ordinaryVehicles: [], columns: [] };
     setBatchVins([]); setVinBatchText(""); setSearchTerm("");
     setSelectedCarCodes(new Set());
     setEditorTargets([]);
@@ -524,7 +504,7 @@ export function OrderGeniusVehicleAllocationPage() {
     setSelectedLineCode(lineCode);
     setFilters((current) => ({
       ...current,
-      country: detail.header.countryCode,
+      country: "",
       piCode: detail.header.piCode,
       piLineCode: lineCode ?? undefined,
       carCode: undefined,
@@ -537,7 +517,7 @@ export function OrderGeniusVehicleAllocationPage() {
   }
 
   function openPiTool(tab: PiToolTab): void {
-    if (tab === "status") setEditorTargets(vinPasteScopeVehicles.filter((vehicle) => selectedCarCodes.has(vehicle.carCode)));
+    if (tab === "status" && !scopeBusy) setEditorTargets(vinPasteScopeVehicles.filter((vehicle) => selectedCarCodes.has(vehicle.carCode)));
     setActiveToolTab(tab);
     setToolDrawerOpen(true);
   }
@@ -559,6 +539,8 @@ export function OrderGeniusVehicleAllocationPage() {
       const result = await api.bulkUpdateVehicleAllocationVehicles({
         piCode: selectedPi.header.piCode,
         piLineCode: selectedLineCode ?? undefined,
+        carCodes: vinPasteScopeVehicles.map((vehicle) => vehicle.carCode),
+        rowVersions: Object.fromEntries(vinPasteScopeVehicles.map((vehicle) => [vehicle.carCode, vehicle.rowVersion])),
         vinList: vins,
       });
       const detail = await api.getVehicleAllocationPi(selectedPi.header.piCode);
@@ -578,6 +560,7 @@ export function OrderGeniusVehicleAllocationPage() {
 
   async function runSearch(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    if (scopeBusy) return;
     const keyword = searchTerm.trim();
     if (!keyword) {
       return;
@@ -589,8 +572,10 @@ export function OrderGeniusVehicleAllocationPage() {
       setFilters((current) => ({ ...current, keyword, carCode: undefined, vin: undefined, page: 1 }));
       return;
     }
+    const request = beginPiRead();
     try {
       const result = await api.searchVehicleAllocation(keyword);
+      if (request !== piRequest.current) return;
       if (result.type === "pi" && isPiDetail(result.item)) {
         const detail = result.item;
         setPiVehicleScope(detail, null);
@@ -600,6 +585,7 @@ export function OrderGeniusVehicleAllocationPage() {
       if (result.type === "vehicle" && result.item && !isPiDetail(result.item)) {
         const vehicle = result.item;
         const detail = await api.getVehicleAllocationPi(vehicle.piCode);
+        if (request !== piRequest.current) return;
         setPiVehicleScope(detail, vehicle.piLineCode);
         selectVehicle(vehicle);
         setNotice(`Loaded ${vehicle.carCode}`);
@@ -608,19 +594,32 @@ export function OrderGeniusVehicleAllocationPage() {
       setBatchVins([]); clearSelection();
       setFilters((current) => ({ ...current, keyword, carCode: undefined, vin: undefined, page: 1 }));
     } catch (err: unknown) {
-      setError(actionableError(err, "Search failed. Check PI/CarCode/VIN and search again / 搜索未完成，请核对 PI、CarCode 或 VIN 后重试。"));
-    }
+      if (request === piRequest.current) setError(actionableError(err, "Search failed. Check PI/CarCode/VIN and search again / 搜索未完成，请核对 PI、CarCode 或 VIN 后重试。"));
+    } finally { if (request === piRequest.current) setPiLoading(false); }
+  }
+
+  function beginPiRead(retainPi = false): number {
+    const request = ++piRequest.current;
+    clearScopeEdits();
+    if (!retainPi) { setSelectedPi(null); setSelectedLineCode(null); }
+    setPiLoading(true);
+    return request;
   }
 
   async function selectPi(piCode: string): Promise<void> {
+    if (mutationBusy) return;
     setError(null);
     setNotice(null);
+    const request = beginPiRead(selectedPi?.header.piCode === piCode);
     try {
       const detail = await api.getVehicleAllocationPi(piCode);
-      setPiVehicleScope(detail, null);
+      if (request === piRequest.current) setPiVehicleScope(detail, null);
     } catch (err: unknown) {
-      setError(actionableError(err, "Could not load this PI. Retry from the PI list / 无法读取此 PI，请从 PI 列表重新选择；仍失败请联系管理员。"));
-    }
+      if (request === piRequest.current) {
+        setSelectedPi(null);
+        setError(actionableError(err, "Could not load this PI. Retry from the PI list / 无法读取此 PI，请从 PI 列表重新选择；仍失败请联系管理员。"));
+      }
+    } finally { if (request === piRequest.current) setPiLoading(false); }
   }
 
   async function searchCocLibrary(): Promise<void> {
@@ -818,7 +817,7 @@ export function OrderGeniusVehicleAllocationPage() {
         <DeckControlTabs
           tabs={PI_TOOL_TABS}
           activeKey={activeToolTab}
-          onChange={setActiveToolTab}
+          onChange={openPiTool}
           ariaLabel="PI vehicle allocation tools"
         />
         <div className="va-tool-tab-body" ref={toolBodyRef}>
@@ -890,7 +889,12 @@ export function OrderGeniusVehicleAllocationPage() {
                 <textarea id="vin-batch-search" value={vinBatchText} onChange={(event) => setVinBatchText(event.target.value)} placeholder="One complete VIN per line / 每行一个完整 VIN" />
                 <div className="va-button-row">
                   <button type="button" disabled={!selectedPi || scopeBusy} onClick={searchVinBatch}>Search VIN batch / 搜索 VIN</button>
-                  <button type="button" disabled={!batchMatches.length || scopeBusy} onClick={() => setSelectedCarCodes(new Set(batchMatches.map((vehicle) => vehicle.carCode)))}>Select matches / 勾选全部匹配</button>
+                  <button type="button" disabled={!batchMatches.length || scopeBusy} onClick={() => {
+                    const visibleCodes = new Set(gridView.current.ordinaryVehicles.map((vehicle) => vehicle.carCode));
+                    const eligible = batchMatches.filter((vehicle) => visibleCodes.has(vehicle.carCode));
+                    changeSelection(new Set(eligible.map((vehicle) => vehicle.carCode)));
+                    setNotice(`${batchMatches.length} matched · ${eligible.length} selected · ${batchMatches.length - eligible.length} excluded by filters / 匹配、选入可见、筛选排除`);
+                  }}>Select matches / 勾选可见匹配</button>
                   <button type="button" className="btn-secondary" onClick={() => { setBatchVins([]); setVinBatchText(""); clearSelection(); }}>Clear batch search / 清除批量搜索</button>
                 </div>
                 {batchVins.length ? <p role="status">{batchMatches.length} matched / 匹配 · {missingVins.length} not found in this PI/line / 本范围未找到{missingVins.length ? `: ${missingVins.join(", ")}` : ""}</p> : null}
@@ -994,7 +998,7 @@ export function OrderGeniusVehicleAllocationPage() {
                 <button
                   type="button"
                   key={pi.piCode}
-                  disabled={scopeBusy}
+                  disabled={mutationBusy}
                   className={selectedPi?.header.piCode === pi.piCode ? "is-active" : ""}
                   onClick={() => void selectPi(pi.piCode)}
                   title={`Account ${display(pi.orderingAccountCode)} · Markets ${marketCountriesText(pi)}`}
@@ -1088,6 +1092,7 @@ export function OrderGeniusVehicleAllocationPage() {
                   <span>{vinPasteScopeVehicles.length} units / 台</span>
                   <button type="button" onClick={() => openPiTool("import")}>{cocResult ? `COC PDF ${cocResult.available}/${cocResult.total} · 待录 VIN ${cocResult.awaitingVin} · 缺 PDF ${cocResult.missing}` : "COC library / 在线库"}</button>
                   <span>{tableSummary.vinMissing} no VIN / 待录</span>
+                  <span>{tableSummary.vinAssigned} VIN assigned / 已录</span>
                   <button type="button" className="btn-secondary" onClick={() => openPiTool("status")}>
                     Status / 状态 · {tableSummary.ready} ready for pickup · {tableSummary.allocated} allocated
                   </button>
@@ -1120,10 +1125,12 @@ export function OrderGeniusVehicleAllocationPage() {
             </div>
           ) : null}
 
+          {piLoading ? <p role="status">Loading PI / 正在读取 PI…</p> : null}
           <VehicleAllocationGrid
             key={`${selectedPi?.header.piCode ?? ""}:${selectedLineCode ?? ""}:${filters.country ?? ""}`}
             filterScope={`${filters.keyword ?? ""}:${filters.carCode ?? ""}:${batchVins.join(",")}`}
             vehicles={gridVehicles} columns={VEHICLE_COLUMNS} groups={COLUMN_GROUPS}
+            cocStatuses={cocStatuses}
             visibleKeys={visibleColumnKeys} selectedCodes={selectedCarCodes} busy={scopeBusy}
             resetKey={gridResetKey} onEdit={selectVehicle} onSelection={changeSelection}
             onFilterChange={clearSelection} onViewChange={(view) => { gridView.current = view; }}

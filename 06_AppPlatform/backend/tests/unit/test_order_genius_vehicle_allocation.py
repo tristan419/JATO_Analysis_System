@@ -7,6 +7,7 @@ from io import BytesIO
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import uuid4
 
 import openpyxl
@@ -18,6 +19,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
 
 from app.db import models
+from app.core.security import UserContext, validate_country_access
 from app.api.routes import order_genius_vehicle_allocation as vehicle_route
 from app.api.routes.order_genius_vehicle_allocation import _normalise_import_rows_payload
 from app.infra import order_genius_repository as order_repo
@@ -1282,6 +1284,109 @@ def _vin_fill_pi(session, materials=("BOM-A",), quantity=3):
         vehicle_service._ensure_vehicle_units_for_line(session, model, line, "tester")
     session.commit()
     return header["piCode"], vehicle_repo.list_vehicles_for_bulk_update(session, pi_code=header["piCode"])
+
+
+@pytest.fixture
+def mixed_market_pi(vehicle_db, monkeypatch):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=4)
+    header = vehicle_repo.get_header_by_code(vehicle_db, pi)
+    header.market_country_codes = ["CH", "SE"]
+    for car in cars[2:]:
+        car.country_code = "SE"
+    vehicle_db.commit()
+    def check_country(_session, user, country):
+        accounts = Mock()
+        accounts.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
+            primary_country_code="CH", secondary_country_codes=["SE"] if user.name == "multi-filler" else [])
+        validate_country_access(accounts, user.name, user.role, country or "")
+    monkeypatch.setattr(vehicle_route, "_validate_country", check_country)
+    return pi, cars
+
+
+def test_pi_read_and_search_hide_other_market_vehicles(vehicle_db, mixed_market_pi, monkeypatch):
+    pi, cars = mixed_market_pi
+    user = UserContext(role="order_filler", name="ch-filler")
+    detail = vehicle_route.get_pi_order(pi, vehicle_db, user)
+    assert {car["carCode"] for car in detail["vehicles"]} == {car.car_code for car in cars[:2]}
+    assert detail["summary"]["totalUnits"] == detail["vehicleTotal"] == 2
+    assert detail["lines"][0]["quantity"] == 2
+    assert detail["header"]["marketCountryCodes"] == ["CH"]
+    monkeypatch.setattr(vehicle_route, "search_vehicle_allocation", lambda *_: {"type": "pi", "item": vehicle_service.get_pi_detail(vehicle_db, pi)})
+    assert vehicle_route.search_allocation(pi, vehicle_db, user)["item"] == detail
+    assert vehicle_route.get_pi_order(pi, vehicle_db, UserContext(role="editor", name="editor"))["vehicleTotal"] == 4
+
+
+@pytest.mark.parametrize("scope", ["foreign", "mixed", "implicit"])
+def test_bulk_country_denial_is_atomic(vehicle_db, mixed_market_pi, scope):
+    pi, cars = mixed_market_pi
+    selected = cars[2:] if scope == "foreign" else cars
+    body = {"piCode": pi, "fields": {"remark": "must not save"}}
+    if scope != "implicit":
+        body.update(carCodes=[car.car_code for car in selected], rowVersions={car.car_code: car.row_version for car in selected})
+    with pytest.raises(HTTPException) as error:
+        vehicle_route.bulk_update_vehicles(body, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert error.value.status_code == 403
+    assert all(car.remark is None for car in cars)
+
+
+def test_bulk_own_country_succeeds_in_mixed_pi(vehicle_db, mixed_market_pi):
+    pi, cars = mixed_market_pi
+    body = {"piCode": pi, "carCodes": [car.car_code for car in cars[:2]],
+            "rowVersions": {car.car_code: car.row_version for car in cars[:2]}, "fields": {"freightEur": 0, "remark": "CH only"}}
+    result = vehicle_route.bulk_update_vehicles(body, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert result["updatedUnits"] == 2
+    assert all(car.remark == "CH only" for car in cars[:2])
+    assert all(car.remark is None for car in cars[2:])
+
+
+def test_existing_secondary_country_grant_remains_valid(vehicle_db, mixed_market_pi):
+    pi, cars = mixed_market_pi
+    user = UserContext(role="order_filler", name="multi-filler")
+    assert vehicle_route.get_pi_order(pi, vehicle_db, user)["vehicleTotal"] == 4
+    body = {"piCode": pi, "carCodes": [car.car_code for car in cars],
+            "rowVersions": {car.car_code: car.row_version for car in cars}, "fields": {"remark": "authorized"}}
+    assert vehicle_route.bulk_update_vehicles(body, vehicle_db, user)["updatedUnits"] == 4
+
+
+def test_single_foreign_country_write_is_rejected(vehicle_db, mixed_market_pi):
+    _, cars = mixed_market_pi
+    with pytest.raises(HTTPException) as error:
+        vehicle_route.patch_vehicle(cars[-1].car_code, {"remark": "denied"}, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert error.value.status_code == 403
+    assert cars[-1].remark is None
+
+
+def test_empty_authorized_pi_is_still_readable(vehicle_db, mixed_market_pi):
+    header = vehicle_service.create_pi_header(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 10}, "tester")
+    detail = vehicle_route.get_pi_order(header["piCode"], vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert detail["vehicles"] == []
+    assert detail["summary"]["totalUnits"] == 0
+
+
+def test_export_checks_selected_countries_without_header_country_filter(vehicle_db, mixed_market_pi, monkeypatch):
+    pi, cars = mixed_market_pi
+    captured = {}
+    def export(_session, **kwargs):
+        captured.update(kwargs)
+        return BytesIO(b"test")
+    monkeypatch.setattr(vehicle_route, "export_vehicle_units", export)
+    user = UserContext(role="order_filler", name="ch-filler")
+    vehicle_route.export_vehicle_allocation({"piCode": pi}, vehicle_db, user)
+    assert set(captured["car_codes"]) == {car.car_code for car in cars[:2]}
+    with pytest.raises(HTTPException) as error:
+        vehicle_route.export_vehicle_allocation({"piCode": pi, "carCodes": [cars[-1].car_code]}, vehicle_db, user)
+    assert error.value.status_code == 403
+
+
+def test_filler_export_without_codes_preserves_line_filter(vehicle_db, mixed_market_pi, monkeypatch):
+    pi, cars = _vin_fill_pi(vehicle_db, materials=("BOM-A", "BOM-B"), quantity=2)
+    captured = {}
+    def export(_session, **kwargs):
+        captured.update(kwargs)
+        return BytesIO(b"test")
+    monkeypatch.setattr(vehicle_route, "export_vehicle_units", export)
+    vehicle_route.export_vehicle_allocation({"piCode": pi, "piLineCode": cars[-1].pi_line_code}, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert set(captured["car_codes"]) == {car.car_code for car in cars[2:]}
 
 
 def test_status_update_rejects_stale_single_version(vehicle_db):

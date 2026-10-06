@@ -4,17 +4,18 @@ const base = process.env.JATO_REGRESSION_BASE_URL || "http://127.0.0.1:4175";
 const PI = "PI-CH-202609-001";
 const vehicles = Array.from({ length: 450 }, (_, i) => ({
   vehicleUnitId: String(i), carCode: `CAR-CH-2609-001-L01-${String(i + 1).padStart(4, "0")}`,
-  piCode: PI, piLineCode: PI + "-L01", countryCode: "CH", vin: i < 80 ? "LVTDB21B9RD" + String(i).padStart(6, "0") : null,
+  piCode: PI, piLineCode: PI + "-L01", countryCode: "CH", vin: i < 200 ? "LVTDB21B9RD" + String(i).padStart(6, "0") : null,
   brand: "OMODA", modelName: "OMODA5", version: "Comfort-FWD", powertrain: i < 150 ? "ICE" : i < 300 ? "HEV" : "BEV",
   materialCode: "T71506JCLMH" + (i < 150 ? "0007" : i < 300 ? "0008" : "0009"),
   bom: "T71506J**MH" + (i < 150 ? "0007" : i < 300 ? "0008" : "0009"),
   exteriorColorName: "White", interiorColorName: "Black-Black",
+  eta: i < 150 ? "2026-10-01" : i < 300 ? "2026-10-02" : null,
   fobEur: 15000, freightEur: null, insuranceEur: null,
   allocationStatus: "unallocated", logisticsStatus: "pending", rowVersion: 1,
 }));
 const header = { piCode: PI, countryCode: "CH", orderingAccountCode: "CH", marketCountryCodes: ["CH"], status: "draft", orderMonth: "2026-09", rowVersion: 1 };
 const detail = () => ({ header, lines: [{ piCode: PI, piLineCode: PI + "-L01", materialCode: "T71506JCLMH0008", quantity: 450, allocations: [] }], vehicles,
-  summary: { totalUnits: 450, vinMissing: 370, readyForPickup: 0, allocated: 0 } });
+  summary: { totalUnits: 450, vinAssigned: 200, vinMissing: 250, readyForPickup: 0, allocated: 0 } });
 const saves = [], viewExports = [], errors = [];
 let rejectNextSave = true;
 const checks = [];
@@ -38,6 +39,8 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
       else if (path.includes("/account-country-options")) body = { items: [{ countryCode: "CH", countryName: "Switzerland", countryNameZh: "瑞士" }] };
       else if (path.endsWith("/pi-months")) body = { year: 2026, items: [{ month: "2026-09", piCount: 1, vehicleCount: 450 }] };
       else if (path.endsWith("/status-flow")) body = { countryCode: "CH", source: "default", allocation: [], logistics: [] };
+      else if (path.endsWith("/coc-library")) body = { total: 450, available: 100, missing: 100, awaitingVin: 250,
+        items: vehicles.map((car, index) => ({ carCode: car.carCode, vin: car.vin, status: index < 100 ? "available" : index < 200 ? "missing" : "awaiting_vin" })) };
       else if (path.endsWith("/export")) { viewExports.push(req.postDataJSON()); return route.fulfill({ status: 200, contentType: "application/octet-stream", body: "mock-xlsx" }); }
       else if (path.endsWith("/bulk-update")) {
         const payload = req.postDataJSON();
@@ -65,6 +68,11 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     const all = page.locator(".ag-header-select-all input");
     await all.check({ force: true });
     await page.getByText("450 selected / 已选", { exact: false }).waitFor();
+    await page.getByRole("button", { name: /PI Tools/ }).click();
+    await page.getByRole("tab", { name: /Update status/i }).click();
+    await page.getByText("450 selected vehicles / 勾选车辆", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    checks.push("Deck status tab and main selected action share explicit targets");
     await page.locator('[aria-label="Next Page"]').click();
     await page.getByText("450 selected / 已选", { exact: false }).waitFor();
     checks.push("Header selection includes 450 rows and survives pagination");
@@ -192,6 +200,98 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     const panel = page.locator(".vehicle-allocation-tool-panel");
     assert((await panel.boundingBox()).height <= 950);
     await screenshot(page, "pi-grid-editor-narrow.png");
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.setViewportSize({ width: 1550, height: 1050 });
+    async function resetView() {
+      await page.getByRole("button", { name: /PI Tools/ }).click();
+      await page.getByRole("tab", { name: /View/ }).click();
+      await page.getByRole("button", { name: /Reset columns & filters/ }).click();
+      await page.getByText("450 filtered / 筛选", { exact: false }).waitFor();
+    }
+    await resetView();
+    await page.getByLabel("VIN batch search / VIN 批量搜索").fill(vehicles.slice(0, 2).map((car) => car.vin).join("\n"));
+    await page.getByRole("button", { name: "Search VIN batch / 搜索 VIN" }).click();
+    await page.getByText("2 filtered / 筛选", { exact: false }).waitFor();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await carHeader.locator(".ag-header-cell-filter-button").click({ force: true });
+    await page.locator('.ag-filter-body input[type="text"]').first().fill("0001");
+    await page.getByText("1 filtered / 筛选", { exact: false }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: /PI Tools/ }).click();
+    await page.getByRole("button", { name: /Select matches/ }).click();
+    await page.getByText("1 selected / 已选", { exact: false }).waitFor();
+    await page.getByText(/2 matched · 1 selected · 1 excluded by filters/).waitFor();
+    checks.push("Select VIN matches intersects ordinary header filters, not all matches");
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await resetView();
+    await page.getByLabel("VIN batch search / VIN 批量搜索").fill(vehicles.slice(0, 200).map((car) => car.vin).join("\n"));
+    await page.getByRole("button", { name: "Search VIN batch / 搜索 VIN" }).click();
+    await page.getByText("200 filtered / 筛选", { exact: false }).waitFor();
+    await page.getByRole("button", { name: /Select matches/ }).click();
+    await page.getByText("200 selected / 已选", { exact: false }).waitFor();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByLabel("Show selected / 只看勾选").check();
+    await page.getByRole("button", { name: /Invert selection/ }).click();
+    await page.getByText("0 selected / 已选", { exact: false }).waitFor();
+    await page.getByRole("button", { name: /PI Tools/ }).click();
+    await page.getByRole("button", { name: /Select matches/ }).click();
+    await page.getByText("200 selected / 已选", { exact: false }).waitFor();
+    checks.push("Visible VIN matches select across pages; selected-only does not shrink original scope");
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByLabel("Show selected / 只看勾选").uncheck();
+    await resetView();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await scroll.evaluate((element) => { element.scrollLeft = 2600; });
+    await page.locator('.ag-header-cell[col-id="eta"] .ag-header-cell-filter-button').click({ force: true });
+    await page.locator('.ag-filter-body input[type="date"]').first().fill("2026-10-02");
+    await page.getByText("150 filtered / 筛选", { exact: false }).waitFor();
+    await page.getByLabel("Filtering operator", { exact: true }).first().click();
+    await page.getByRole("option", { name: "Between", exact: true }).click();
+    await page.locator('.ag-filter-body input[type="date"]').nth(0).fill("2026-09-30");
+    await page.locator('.ag-filter-body input[type="date"]').nth(1).fill("2026-10-03");
+    await page.getByText("300 filtered / 筛选", { exact: false }).waitFor();
+    await page.getByLabel("Filtering operator", { exact: true }).first().click();
+    await page.getByRole("option", { name: "Blank", exact: true }).click();
+    await page.getByText("150 filtered / 筛选", { exact: false }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByText("450 units / 台", { exact: true }).waitFor();
+    checks.push("Native date comparison, range and blank filters; whole-PI summary unchanged");
+    await resetView();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await all.check({ force: true });
+    await page.getByRole("button", { name: "COC library / 在线库", exact: true }).click();
+    await page.getByRole("button", { name: "Search library / 在库里查找" }).click();
+    await page.getByText(/COC PDF 100\/450/).first().waitFor();
+    await page.getByText("450 selected / 已选", { exact: false }).waitFor();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await scroll.evaluate((element) => { element.scrollLeft = 1500; });
+    await page.locator('.ag-header-cell[col-id="cocPdf"] .ag-header-cell-filter-button').click({ force: true });
+    await page.locator(".ag-filter .command-select-trigger").click();
+    await page.getByRole("option", { name: /available/ }).click();
+    await page.getByRole("option", { name: /awaiting_vin/ }).click();
+    await page.getByText("100 filtered / 筛选", { exact: false }).waitFor();
+    await page.keyboard.press("Escape"); await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "PDF ↓", exact: true }).first().waitFor({ state: "hidden" });
+    assert((await page.locator('.ag-cell[col-id="cocPdf"]').first().innerText()).includes("Missing"));
+    checks.push("COC native filter uses real library status, matching visible PDF/missing cells");
+    await resetView();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    vehicles.forEach((car, index) => { if (index >= 225) car.countryCode = "SE"; });
+    header.marketCountryCodes = ["CH", "SE"];
+    await page.getByRole("button", { name: new RegExp("^" + PI) }).click();
+    await page.getByText("Loading PI / 正在读取 PI…", { exact: true }).waitFor({ state: "hidden" });
+    await page.getByText("450 filtered / 筛选", { exact: false }).waitFor();
+    await page.getByText("450 units / 台", { exact: true }).waitFor();
+    // Let Grid's 150 ms scroll-partner debounce settle after hiding the COC column.
+    await page.waitForTimeout(200);
+    await page.locator(".ag-center-cols-viewport").evaluate((element) => { element.scrollLeft = 0; });
+    await screenshot(page, "pi-grid-mixed-market.png");
+    await page.locator('.ag-header-cell[col-id="countryCode"] .ag-header-cell-filter-button').click({ force: true });
+    await page.locator(".ag-filter .command-select-trigger").click();
+    await page.getByRole("option", { name: /SE/ }).click();
+    await page.getByText("225 filtered / 筛选", { exact: false }).waitFor();
+    await page.getByText("450 units / 台", { exact: true }).waitFor();
+    checks.push("Mixed-market PI defaults to all 450 rows; ordinary country filter narrows view, not summary");
     assert.equal(errors.length, 0, errors.join("\n"));
     checks.push("Horizontal/vertical scroll and narrow viewport; no browser errors");
     console.log(JSON.stringify({ passed: checks, saves: saves.length, viewExports: viewExports.length, browserErrors: errors.length }, null, 2));

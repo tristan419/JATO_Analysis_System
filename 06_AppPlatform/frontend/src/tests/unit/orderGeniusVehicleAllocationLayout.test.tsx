@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client";
 import { OrderGeniusVehicleAllocationPage } from "../../pages/OrderGeniusVehicleAllocationPage";
 import type { PiOrderDetail, PiOrderLine, PiVehicleUnit, VehicleImportPreview } from "../../types/orderGeniusVehicle";
+import { matchesVehicleText, VEHICLE_COLUMNS, VEHICLE_TEXT_FIELDS } from "../../components/vehicleAllocationFields";
 
 // Multi-step full-page workflows exceed 5 seconds on the shared CI runner.
 vi.setConfig({ testTimeout: 15_000 });
@@ -27,7 +28,7 @@ vi.mock("../../components/VehicleAllocationPivotGrid", () => ({
   VehicleAllocationGrid: (props: ComponentProps<typeof VehicleAllocationGrid>) => {
     const columns = props.columns.filter((column) => props.visibleKeys.has(column.key));
     const visibleRows = [...props.vehicles].sort((a, b) => Number(a.carCode.split("-").at(-1)) - Number(b.carCode.split("-").at(-1))).slice(0, 5);
-    useEffect(() => props.onViewChange({ vehicles: props.vehicles, columns: columns.map((column) => column.key) }));
+    useEffect(() => props.onViewChange({ vehicles: props.vehicles, ordinaryVehicles: props.vehicles, columns: columns.map((column) => column.key) }));
     return <><span>{props.vehicles.length} filtered</span>
       <button onClick={props.onFilterChange}>Change grid filter</button>
       <table aria-label="Vehicle details"><thead><tr>
@@ -114,6 +115,54 @@ async function chooseOctober() {
 }
 
 describe("vehicle detail search and view", () => {
+  it("uses all authorized PI markets, with summary independent of ordinary filters", async () => {
+    const mixed = detail();
+    mixed.header.marketCountryCodes = ["CH", "SE"];
+    mixed.vehicles.forEach((car, index) => { if (index >= 75) car.countryCode = "SE"; });
+    vi.mocked(api.getVehicleAllocationPi).mockResolvedValue(mixed);
+    await selectPi();
+    expect(screen.getByText("150 filtered")).toBeTruthy();
+    expect(screen.getByText("20 VIN assigned / 已录")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("Search PI, Car Code, VIN, material, model, colour…"), { target: { value: "BOM-ONE" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(screen.getByText("75 filtered")).toBeTruthy();
+    expect(screen.getByText("150 units / 台")).toBeTruthy();
+  });
+
+  it("ignores a slow previous PI and clears the old editor before reading", async () => {
+    const second = detail();
+    second.header = { ...second.header, piCode: "PI-CH-202609-002" };
+    vi.mocked(api.getVehicleAllocationPis).mockResolvedValue({ items: [detail().header, second.header], total: 2 });
+    await selectPi();
+    fireEvent.click(screen.getByRole("cell", { name: "CAR-1" }));
+    let resolveOld: (value: PiOrderDetail) => void = () => {};
+    vi.mocked(api.getVehicleAllocationPi).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; })).mockResolvedValueOnce(second);
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${PI}`) }));
+    expect(screen.queryByLabelText("Note / 备注")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save changes / 保存修改" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /^PI-CH-202609-002/ }));
+    await screen.findByRole("heading", { name: "PI-CH-202609-002" });
+    resolveOld(detail());
+    await waitFor(() => expect(screen.queryByRole("heading", { name: PI })).toBeNull());
+  });
+
+  it("opens the same selected editor from the deck status tab", async () => {
+    await selectPi();
+    fireEvent.click(screen.getByLabelText("Select filtered vehicles"));
+    fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Update Status/i }));
+    expect(screen.getByText("150 selected vehicles / 勾选车辆")).toBeTruthy();
+    expect(screen.getByLabelText("Note / 备注")).toBeTruthy();
+  });
+
+  it("shares editable field metadata and searches only meaningful text", () => {
+    const car = { ...vehicle(0), vehicleUnitId: "internal-only", rowVersion: 998877, freightEur: 887766, eta: "2040-12-31" };
+    for (const token of ["internal-only", "998877", "887766", "2040-12-31"]) expect(matchesVehicleText(car, token)).toBe(false);
+    for (const token of ["jaecoo", "bom-one", "black-black", "hev"]) expect(matchesVehicleText(car, token)).toBe(true);
+    expect(VEHICLE_COLUMNS.filter((column) => column.kind === "date").length).toBe(6);
+    expect(VEHICLE_TEXT_FIELDS.map((column) => column.key)).toContain("actualArrivalDate");
+  });
+
   it("makes vehicle notes read-only for viewer accounts", async () => {
     testRole.value = "viewer";
     await selectPi();

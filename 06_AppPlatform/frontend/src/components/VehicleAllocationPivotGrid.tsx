@@ -3,11 +3,12 @@ import { AllCommunityModule, ModuleRegistry, themeAlpine, type ColDef, type ColG
 import { AgGridReact, useGridFilter, type CustomFilterProps } from "ag-grid-react";
 import { CommandMultiSelect } from "./CommandSelect";
 import type { PiVehicleUnit } from "../types/orderGeniusVehicle";
+import { type VehicleColumnKey, type VehicleColumn } from "./vehicleAllocationFields";
+import type { PiCocLookup } from "../types/cocLibrary";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
-export type VehicleColumnKey = keyof PiVehicleUnit | "config" | "cocPdf";
-export interface VehicleColumn { key: VehicleColumnKey; label: string; optional?: boolean }
-export interface VehicleGridView { vehicles: PiVehicleUnit[]; columns: string[] }
+export type { VehicleColumnKey, VehicleColumn } from "./vehicleAllocationFields";
+export interface VehicleGridView { vehicles: PiVehicleUnit[]; ordinaryVehicles: PiVehicleUnit[]; columns: string[] }
 const DEFAULT_COLUMN: ColDef<PiVehicleUnit> = { sortable: true, resizable: true, minWidth: 100 };
 const SELECTION_COLUMN: ColDef<PiVehicleUnit> = { pinned: "left", width: 45, minWidth: 45, maxWidth: 45, suppressMovable: true };
 interface Props {
@@ -19,32 +20,47 @@ interface Props {
   busy: boolean;
   resetKey: number;
   filterScope: string;
+  cocStatuses: ReadonlyMap<string, PiCocLookup["items"][number]["status"]>;
   renderCell: (vehicle: PiVehicleUnit, key: VehicleColumnKey) => ReactNode;
   onEdit: (vehicle: PiVehicleUnit) => void;
   onSelection: (codes: Set<string>) => void;
   onFilterChange: () => void;
   onViewChange: (view: VehicleGridView) => void;
 }
-function cellValue(vehicle: PiVehicleUnit, key: VehicleColumnKey): string | number | null {
+function cellValue(vehicle: PiVehicleUnit, key: VehicleColumnKey, cocStatuses: Props["cocStatuses"]): string | number | null {
   if (key === "config") return [vehicle.modelName, vehicle.version, vehicle.powertrain].filter(Boolean).join(" / ");
-  if (key === "cocPdf") return null;
+  if (key === "cocPdf") return cocStatuses.get(vehicle.carCode) ?? "not_searched";
   const value = vehicle[key];
   return typeof value === "string" || typeof value === "number" ? value : null;
 }
 function ValueListFilter({ api, getValue, model, onModelChange }: CustomFilterProps<PiVehicleUnit, unknown, string[]>) {
-  const values = new Set<string>();
-  api.forEachNode((node) => values.add(String(getValue(node) ?? "")));
+  const [values, setValues] = useState<string[]>([]);
+  useEffect(() => {
+    function refreshValues(): void {
+      const unique = new Set<string>();
+      api.forEachNode((node) => unique.add(String(getValue(node) ?? "")));
+      const next = [...unique].sort();
+      setValues((current) => current.length === next.length && current.every((value, index) => value === next[index]) ? current : next);
+    }
+    refreshValues();
+    api.addEventListener("modelUpdated", refreshValues);
+    return () => {
+      api.removeEventListener("modelUpdated", refreshValues);
+    };
+  }, [api, getValue]);
   useGridFilter({ doesFilterPass: ({ node }) => model === null || model.includes(String(getValue(node) ?? "")) });
   return <div style={{ minWidth: 260, padding: 12 }}>
-    <CommandMultiSelect selected={model ?? [...values]} options={[...values].sort().map((value) => ({ value, label: value || "(Blank)" }))} onChange={onModelChange} placeholder="Filter values / 筛选值" />
+    <CommandMultiSelect selected={model ?? values} options={values.map((value) => ({ value, label: value || "(Blank)" }))} onChange={onModelChange} placeholder="Filter values / 筛选值" />
     <button type="button" onClick={() => onModelChange(null)}>All values / 全部值</button>
   </div>;
 }
-export function VehicleAllocationGrid({ vehicles, columns, groups, visibleKeys, selectedCodes, busy, resetKey, filterScope, renderCell, onEdit, onSelection, onFilterChange, onViewChange }: Props) {
+export function VehicleAllocationGrid({ vehicles, columns, groups, visibleKeys, selectedCodes, busy, resetKey, filterScope, cocStatuses, renderCell, onEdit, onSelection, onFilterChange, onViewChange }: Props) {
   const grid = useRef<AgGridReact<PiVehicleUnit>>(null);
   const syncingSelection = useRef(false);
   const renderer = useRef(renderCell);
   renderer.current = renderCell;
+  const cocValues = useRef(cocStatuses);
+  cocValues.current = cocStatuses;
   const ordinaryRows = useRef<PiVehicleUnit[]>([]);
   const [showSelected, setShowSelected] = useState(false);
   const [filteredCount, setFilteredCount] = useState(vehicles.length);
@@ -54,9 +70,12 @@ export function VehicleAllocationGrid({ vehicles, columns, groups, visibleKeys, 
     children: columns.filter((column) => group.keys.includes(column.key)).map((column): ColDef<PiVehicleUnit> => ({
       colId: column.key, headerName: column.label, hide: column.optional ?? false,
       columnGroupShow: column.key === group.keys[0] ? undefined : "open",
-      valueGetter: (params) => params.data ? cellValue(params.data, column.key) : null,
-      filter: ["fobEur", "freightEur", "insuranceEur"].includes(column.key) ? "agNumberColumnFilter"
-        : ["allocationStatus", "logisticsStatus", "countryCode", "exteriorColorName", "interiorColorName"].includes(column.key) ? ValueListFilter : "agTextColumnFilter",
+      valueGetter: (params) => params.data ? cellValue(params.data, column.key, cocValues.current) : null,
+      filter: column.kind === "number" ? "agNumberColumnFilter" : column.kind === "date" ? "agDateColumnFilter" : column.kind === "values" ? ValueListFilter : "agTextColumnFilter",
+      filterParams: column.kind === "date" ? { comparator: (filterDate: Date, cell: string | null) => {
+        const target = `${filterDate.getFullYear()}-${String(filterDate.getMonth() + 1).padStart(2, "0")}-${String(filterDate.getDate()).padStart(2, "0")}`;
+        return (cell ?? "").slice(0, 10).localeCompare(target);
+      } } : undefined,
       cellRenderer: (params: ICellRendererParams<PiVehicleUnit>) => params.data ? renderer.current(params.data, column.key) : null,
       width: column.key === "config" || column.key === "carCode" ? 255 : column.key === "materialCode" ? 195 : 170,
     })),
@@ -70,7 +89,7 @@ export function VehicleAllocationGrid({ vehicles, columns, groups, visibleKeys, 
     const result = rows(api);
     if (!showSelected) ordinaryRows.current = result;
     setFilteredCount(result.length);
-    onViewChange({ vehicles: result, columns: api.getAllDisplayedColumns().map((column) => column.getColId()).filter((key) => key !== "ag-Grid-SelectionColumn") });
+    onViewChange({ vehicles: result, ordinaryVehicles: ordinaryRows.current, columns: api.getAllDisplayedColumns().map((column) => column.getColId()).filter((key) => key !== "ag-Grid-SelectionColumn") });
   }
   useEffect(() => {
     setShowSelected(false);
@@ -78,6 +97,12 @@ export function VehicleAllocationGrid({ vehicles, columns, groups, visibleKeys, 
   useEffect(() => {
     grid.current?.api?.refreshCells({ force: true });
   }, [renderCell]);
+  useEffect(() => {
+    const api = grid.current?.api;
+    if (!api) return;
+    api.refreshClientSideRowModel("filter");
+    if (api.getFilterModel().cocPdf) { setShowSelected(false); onFilterChange(); }
+  }, [cocStatuses]);
   useEffect(() => {
     const api = grid.current?.api;
     if (!api) return;
