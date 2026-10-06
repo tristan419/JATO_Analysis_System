@@ -223,7 +223,22 @@ export function OrderGeniusVehicleAllocationPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [linesOpen, setLinesOpen] = useState(false);
+  const pageRef = useRef<HTMLDivElement>(null);
   const linePanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const page = pageRef.current;
+    if (!page) return;
+    // Measure the actual shell/banner, not a monitor resolution or a second layout state.
+    const fitViewport = (): void => {
+      const top = page.getBoundingClientRect().top + window.scrollY;
+      page.style.setProperty("--va-available-height", `${Math.max(0, window.innerHeight - top)}px`);
+    };
+    fitViewport();
+    const observer = new ResizeObserver(fitViewport);
+    document.querySelectorAll(".top-bar,.candidate-environment-banner").forEach((element) => observer.observe(element));
+    window.addEventListener("resize", fitViewport);
+    return () => { observer.disconnect(); window.removeEventListener("resize", fitViewport); };
+  }, []);
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<VehicleColumnKey>>(new Set(DEFAULT_COLUMNS));
   const [toolDrawerOpen, setToolDrawerOpen] = useState(false);
   const [activeToolTab, setActiveToolTab] = useState<PiToolTab>("import");
@@ -771,7 +786,7 @@ export function OrderGeniusVehicleAllocationPage() {
   }
 
   return (
-    <div className="vehicle-allocation-page">
+    <div className="vehicle-allocation-page" ref={pageRef}>
       <div className="va-header">
         <div>
           <div className="va-kicker">Order Genius</div>
@@ -944,7 +959,7 @@ export function OrderGeniusVehicleAllocationPage() {
 
       <div className="va-layout">
         <aside className="va-side">
-          <section className="va-panel">
+          <section className="va-panel va-browse-panel">
             <div className="va-panel-head">
               <h2>PI</h2>
               <span>{sideLoading ? "Loading" : `${piHeaderTotal}`}</span>
@@ -1048,7 +1063,7 @@ export function OrderGeniusVehicleAllocationPage() {
           </section>
 
           {selectedPi ? (
-            <div className="va-panel" ref={linePanelRef}>
+            <div className="va-panel va-lines-panel" ref={linePanelRef}>
               <button type="button" className="btn-secondary" aria-expanded={linesOpen} aria-controls="pi-line-list"
                 onClick={() => setLinesOpen((current) => !current)}>
                 PI lines · {selectedPi.lines.length} / 明细
@@ -1160,7 +1175,8 @@ export function OrderGeniusVehicleAllocationPage() {
       </div>
 
       <style>{`
-        .vehicle-allocation-page{max-width:1680px;margin:0 auto;padding:24px;color:#111827}
+        .vehicle-allocation-page{width:100%;height:max(640px,var(--va-available-height,calc(100dvh - 128px)));padding:clamp(16px,1.2vw,32px);color:#111827;display:flex;flex-direction:column;min-width:0}
+        .vehicle-allocation-page > .va-header,.vehicle-allocation-page > .va-message{flex:none}
         .va-header{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:16px;padding-right:280px}
         .va-kicker{font-size:11px;font-weight:700;text-transform:uppercase;color:#667085}
         .va-header h1{font-size:28px;font-weight:600;line-height:1.1;margin:4px 0 0}
@@ -1175,8 +1191,13 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-message{padding:10px 12px;border-radius:6px;margin-bottom:14px}
         .va-message.is-error{background:#fff1f0;color:#a8071a;border:1px solid #ffa39e}
         .va-message.is-notice{background:#f0f7ff;color:#174ea6;border:1px solid #b7d6ff}
-        .va-layout{display:grid;grid-template-columns:330px minmax(0,1fr);gap:16px;align-items:start}
-        .va-side,.va-main{display:flex;flex-direction:column;gap:16px;min-width:0}
+        .va-layout{display:grid;grid-template-columns:clamp(280px,20vw,360px) minmax(0,1fr);gap:16px;align-items:stretch;flex:1;min-height:360px}
+        .va-side,.va-main{display:flex;flex-direction:column;gap:16px;min-width:0;min-height:0}
+        .va-browse-panel{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto}
+        .va-browse-panel > :not(.va-pi-list){flex:none}
+        .va-lines-panel{display:flex;flex-direction:column;flex:none;max-height:40%;min-height:0;overflow:auto}
+        .va-lines-panel > button,.va-lines-panel > small{flex:none;align-self:flex-start}
+        .va-main > :not(.va-grid){flex:none}
         .va-panel,.va-filters,.va-pi-detail,.va-table-wrap{background:#fff;border:1px solid #d8dee6;border-radius:8px}
         .va-panel{padding:14px}
         .va-panel-head,.va-table-head,.va-pi-title,.va-drawer-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -1198,7 +1219,7 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-month-grid button[aria-pressed="true"]{border-color:#2563eb;background:#eff6ff;color:#1d4ed8}
         .va-month-grid button:disabled{color:#94a3b8;cursor:wait}
         .va-month-grid small{font-size:10px;background:#e2e8f0;border-radius:8px;padding:1px 4px}
-        .va-pi-list{display:grid;gap:8px;margin-top:12px;max-height:280px;overflow:auto}
+        .va-pi-list{display:grid;align-content:start;grid-auto-rows:max-content;gap:8px;margin-top:12px;flex:1;min-height:80px;overflow:auto}
         .va-pi-list button{background:#fff;color:#111827;border-color:#d8dee6;text-align:left;display:grid;gap:2px}
         .va-pi-list button.is-active{border-color:#1c69d4;background:#eef5ff}
         .va-pi-list small{color:#667085}
@@ -1208,8 +1229,10 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-pi-detail{padding:14px}
         .va-pi-metrics{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start;align-items:center;padding-top:10px;border-top:1px solid #e5eaf0}
         .va-product-text{font-weight:600;filter:brightness(.72)}
-        .va-grid{background:white;border:1px solid #d8dee6;border-radius:8px;overflow:hidden}
-        .va-grid-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px}
+        .va-grid{background:white;border:1px solid #d8dee6;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+        .va-grid-toolbar{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;padding:10px;flex:none}
+        .va-grid-toolbar > span{flex:1 1 100%;min-width:0;overflow-wrap:anywhere}
+        .va-grid-body{flex:1;min-height:0;min-width:0}
         .va-grid-toolbar label{display:flex;align-items:center;gap:6px}
         .va-editor fieldset{border:1px solid #d8dee6;border-radius:8px;display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px}
         .va-editor label{display:grid;gap:6px;font-size:12px}
@@ -1243,7 +1266,7 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-bulk-panel textarea{min-height:90px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
         .va-bulk-fields{display:grid;grid-template-columns:repeat(2,minmax(112px,1fr));gap:8px}
         .va-bulk-fields label,.va-bulk-fields .va-field{display:grid;gap:5px;font-size:12px;font-weight:700;color:#475467}
-        .va-line-list{display:grid;gap:6px;margin-top:12px;max-height:45vh;overflow:auto}
+        .va-line-list{display:grid;align-content:start;gap:6px;margin-top:12px;flex:1;min-height:0;overflow:auto}
         .va-line-row{display:flex;align-items:stretch;border:1px solid #e5eaf0;border-radius:6px;background:#fbfcfe;color:#111827;overflow:hidden}
         .va-line-row.is-active{border-color:#1c69d4;background:#eef5ff}
         .va-line-all{background:#fff}
@@ -1307,7 +1330,14 @@ export function OrderGeniusVehicleAllocationPage() {
         .vin-paste-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;width:100%}
         .vin-paste-message{color:#0f766e;font-size:12px;font-weight:800}
         @media (max-width:1100px){
-          .va-layout{grid-template-columns:minmax(0,1fr)}
+          .vehicle-allocation-page{height:auto;min-height:0}
+          .va-layout{grid-template-columns:minmax(0,1fr);flex:none;min-height:0}
+          .va-browse-panel{flex:none;overflow:visible}
+          .va-pi-list{flex:none;max-height:280px}
+          .va-lines-panel{max-height:none;overflow:visible}
+          .va-line-list{flex:none;max-height:40dvh}
+          .va-grid{flex:none}
+          .va-grid-body{flex:none;height:clamp(320px,60dvh,720px)}
           .va-header{align-items:stretch;flex-direction:column;padding-right:0}
           .vehicle-allocation-tool-drawer{top:auto;bottom:16px;width:240px}
           .vehicle-allocation-tool-panel{position:fixed;top:92px;right:16px;height:calc(100dvh - 170px);max-height:none}
