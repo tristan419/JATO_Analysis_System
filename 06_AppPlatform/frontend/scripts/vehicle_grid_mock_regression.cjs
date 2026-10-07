@@ -14,6 +14,7 @@ const vehicles = Array.from({ length: 450 }, (_, i) => ({
   allocationStatus: "unallocated", logisticsStatus: "pending", rowVersion: 1,
 }));
 const header = { piCode: PI, countryCode: "CH", orderingAccountCode: "CH", marketCountryCodes: ["CH"], status: "draft", orderMonth: "2026-09", rowVersion: 1 };
+let extraLines = 0;
 const detail = () => ({ header, lines: [{ piCode: PI, piLineCode: PI + "-L01", materialCode: "T71506JCLMH0008", quantity: 450, allocations: [] }], vehicles,
   summary: { totalUnits: 450, vinAssigned: 200, vinMissing: 250, readyForPickup: 0, allocated: 0 } });
 const saves = [], viewExports = [], errors = [];
@@ -54,7 +55,10 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
         body = { updatedUnits: payload.carCodes.length, matchedUnits: payload.carCodes.length };
       }
       else if (path.includes("/vehicles/") && req.method() === "PATCH") { saves.push(req.postDataJSON()); body = vehicles[0]; }
-      else if (path.endsWith("/pi/" + PI)) body = detail();
+      else if (path.endsWith("/pi/" + PI)) {
+        body = detail();
+        body.lines.push(...Array.from({ length: extraLines }, (_, i) => ({ ...body.lines[0], piLineCode: `${PI}-L${i + 2}`, quantity: 0 })));
+      }
       else if (path.endsWith("/pi")) body = { items: Array.from({ length: 12 }, (_, index) => index === 0 ? header : { ...header, piCode: `PI-CH-202609-${String(index + 1).padStart(3, "0")}` }), total: 12 };
       else body = { items: [], total: 0, columns: [] };
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
@@ -389,6 +393,55 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     assert((await page.getByRole("button", { name: "Save changes / 保存修改" }).boundingBox()).y < 1080);
     await page.getByRole("button", { name: "Close", exact: true }).click();
     checks.push("Responsive 1080p/4K/zoom-equivalent/short/narrow layouts; aligned columns, visible pagination, taller-shell resize, selection and column state retained");
+    // Exercise real scroll offsets, not just scrollHeight metadata.
+    extraLines = 40;
+    await page.getByRole("button", { name: new RegExp("^" + PI) }).click();
+    await page.getByText("Loading PI / 正在读取 PI…", { exact: true }).waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: /PI lines/ }).click();
+    const gridScroll = page.locator(".ag-body-viewport");
+    const originalGeometry = await layoutGeometry();
+    for (const selector of [".va-pi-list", ".va-line-list"]) {
+      await page.locator(selector).evaluate((element) => { element.scrollTop = element.scrollHeight; });
+      assert(await page.locator(selector).evaluate((element) => element.scrollTop > 0));
+      assert.equal(await gridScroll.evaluate((element) => element.scrollTop), 0);
+      const geometry = await layoutGeometry();
+      assert(Math.abs(geometry.main.top - originalGeometry.main.top) <= 2 && Math.abs(geometry.main.bottom - originalGeometry.main.bottom) <= 2);
+    }
+    const leftOffsets = await page.locator(".va-pi-list,.va-line-list").evaluateAll((elements) => elements.map((element) => element.scrollTop));
+    await gridScroll.evaluate((element) => { element.scrollTop = 300; });
+    assert(await gridScroll.evaluate((element) => element.scrollTop > 0));
+    assert.deepEqual(await page.locator(".va-pi-list,.va-line-list").evaluateAll((elements) => elements.map((element) => element.scrollTop)), leftOffsets);
+    await gridScroll.evaluate((element) => { element.scrollTop = 0; });
+    checks.push("PI list, long line list and Grid scroll independently without moving workspace boundaries");
+    await page.evaluate(() => {
+      const feedback = document.createElement("div");
+      feedback.id = "regression-long-feedback"; feedback.className = "va-message is-error";
+      feedback.textContent = "Please review this conflicting material / 请核对冲突物料。 ".repeat(300);
+      document.querySelector(".va-header").after(feedback);
+    });
+    size = await layoutGeometry();
+    assert(size.pagination.bottom <= 1080 && size.body.height > 150, JSON.stringify(size));
+    await page.locator("#regression-long-feedback").evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    assert(await page.locator("#regression-long-feedback").evaluate((element) => element.scrollTop > 0));
+    await page.locator("#regression-long-feedback").evaluate((element) => element.remove());
+    checks.push("Long feedback remains readable by internal scrolling and does not cover pagination");
+    for (const viewport of [{ width: 1101, height: 900 }, { width: 1100, height: 900 }, { width: 390, height: 640 }]) {
+      await page.setViewportSize(viewport);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.waitForTimeout(100);
+      size = await layoutGeometry();
+      assert(!size.overflowX);
+      if (viewport.width > 1100) assert(Math.abs(size.side.bottom - size.main.bottom) <= 2);
+      else assert(size.main.top >= size.side.bottom);
+      await page.getByRole("button", { name: /PI lines/ }).click();
+      await page.locator('.ag-row .ag-cell[col-id="carCode"]').first().click();
+      const save = page.getByRole("button", { name: "Save changes / 保存修改" });
+      await save.waitFor();
+      const box = await save.boundingBox();
+      assert(box.y >= 0 && box.y + box.height <= viewport.height, JSON.stringify({ viewport, box }));
+      await page.getByRole("button", { name: "Close", exact: true }).click();
+    }
+    checks.push("1100px boundary and narrow/short editor keep full Save button accessible without horizontal page overflow");
     assert.equal(errors.length, 0, errors.join("\n"));
     checks.push("Horizontal/vertical scroll and narrow viewport; no browser errors");
     console.log(JSON.stringify({ passed: checks, saves: saves.length, viewExports: viewExports.length, browserErrors: errors.length }, null, 2));

@@ -298,7 +298,7 @@ describe("COC library lookup and downloads", () => {
     expect(screen.queryByRole("button", { name: "CAR-0" })).toBeNull();
     fireEvent.click(screen.getByLabelText("Select CAR-0"));
     fireEvent.click(screen.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
-    await waitFor(() => expect(download).toHaveBeenCalledWith(PI, ["CAR-0"]));
+    await waitFor(() => expect(download).toHaveBeenCalledWith(PI, ["CAR-0"], { "CAR-0": vehicle(0).vin }));
     vi.unstubAllGlobals();
   });
 
@@ -325,7 +325,7 @@ describe("COC library lookup and downloads", () => {
     expect(download).not.toHaveBeenCalled();
     expect(screen.getByText(/仅下载 1 份可用 PDF/).textContent).toContain("缺 PDF 1 · 待录 VIN 1");
     fireEvent.click(screen.getByRole("button", { name: "Confirm available only / 确认仅下载可用" }));
-    await waitFor(() => expect(download).toHaveBeenCalledWith(PI, ["CAR-0"]));
+    await waitFor(() => expect(download).toHaveBeenCalledWith(PI, ["CAR-0"], { "CAR-0": vehicle(0).vin }));
   });
 
   it("blocks all-missing downloads and invalidates confirmation after selection changes", async () => {
