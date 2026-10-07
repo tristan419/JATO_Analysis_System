@@ -1533,7 +1533,7 @@ def test_colour_rule_apply_generates_and_persists_one_shared_standard() -> None:
     assert repeated["items"] == []
 
 
-def test_colour_rule_preview_selects_most_used_name_for_confirmation() -> None:
+def test_colour_rule_preview_excludes_name_conflict_even_with_a_majority() -> None:
     session = _FakeSession([
         SimpleNamespace(
             material_code="A",
@@ -1563,9 +1563,38 @@ def test_colour_rule_preview_selects_most_used_name_for_confirmation() -> None:
 
     preview = repo.preview_colour_rule_fills(session)
 
-    assert preview["rules"][0]["colourName"] == "Mist Green"
-    assert preview["rules"][0]["colourHex"] == "#8BA99A"
-    assert preview["rules"][0]["hasNameConflict"] is True
+    assert preview["rules"] == []
+    assert preview["items"] == []
+    assert preview["unresolvedConflictCount"] == 1
+    assert preview["unresolvedRuleCount"] == 0
+    with pytest.raises(ValueError, match="preview is stale"):
+        repo.apply_colour_rule_fills(session, ["A", "B", "C"], preview["fingerprint"])
+    assert session.added == []
+    assert session.execute_values[2].exterior_color_name == "Misty Green"
+
+
+def test_colour_rule_batch_excludes_hex_conflicts_and_only_fills_missing_hex() -> None:
+    rows = [
+        SimpleNamespace(material_code="A", brand="JAECOO", exterior_color_code="ZE",
+                        exterior_color_name="Black & Gray", colour_hex="#111111|#777777", updated_at_utc=None),
+        SimpleNamespace(material_code="B", brand="JAECOO", exterior_color_code="ZE",
+                        exterior_color_name="Black & Gray", colour_hex="#111111|#888888", updated_at_utc=None),
+        SimpleNamespace(material_code="C", brand="OMODA", exterior_color_code="BW",
+                        exterior_color_name="Khaki white", colour_hex=None, updated_at_utc=None),
+    ]
+    session = _FakeSession(rows)
+    preview = repo.preview_colour_rule_fills(session)
+
+    assert preview["unresolvedConflictCount"] == 1
+    assert preview["ruleCount"] == 1
+    assert [item["materialCode"] for item in preview["items"]] == ["C"]
+    result = repo.apply_colour_rule_fills(session, ["C"], preview["fingerprint"])
+    assert result["conflicts"] == 1
+    assert result["materialCodes"] == ["C"]
+    assert rows[0].colour_hex == "#111111|#777777"
+    assert rows[1].colour_hex == "#111111|#888888"
+    assert rows[0].updated_at_utc is rows[1].updated_at_utc is None
+    assert rows[2].colour_hex == "#F0ECE0"
 
 
 def test_colour_rule_preview_never_regenerates_a_persistent_standard() -> None:

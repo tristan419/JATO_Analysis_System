@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import openpyxl
+import pytest
 
 from app.services.material_master_parser import parse_material_master_xlsx
 
@@ -79,3 +80,40 @@ def test_legacy_workbook_colour_names_do_not_assign_pricing_tier(tmp_path: Path)
 
     assert [row["colour_tier"] for row in parsed["rows"]] == [None, None]
     assert [row["exterior_color_type"] for row in parsed["rows"]] == ["dual", "single"]
+
+
+@pytest.mark.parametrize("footer", ["下·", "Notes: final colours subject to confirmation"])
+def test_detached_interior_footer_is_not_a_conflict(tmp_path: Path, footer: str) -> None:
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "OMODA9 SHS"
+    sheet.append(["No.", "Code Name", "Full Name", "Configuration", "BOM", "Exterior Color", "Interior Color"])
+    sheet.append([1, "O9", "OMODA9 SHS", "Premium", "T9000**EX001", "Black (BK)", "Black-Black"])
+    sheet.append([None, None, None, None, None, "White (WT)", None])
+    sheet.append([None] * 7)
+    sheet.append([None, None, None, None, None, None, footer])
+    path = tmp_path / "footer.xlsx"
+    workbook.save(path)
+
+    parsed = parse_material_master_xlsx(path)
+
+    assert parsed["warnings"] == []
+    assert len(parsed["rows"]) == 2
+    assert {row["interior_color_name"] for row in parsed["rows"]} == {"Black-Black"}
+
+
+def test_interior_only_forward_reference_inside_material_block_is_preserved(tmp_path: Path) -> None:
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "OMODA9 SHS"
+    sheet.append(["No.", "Code Name", "Full Name", "Configuration", "BOM", "Exterior Color", "Interior Color"])
+    sheet.append([1, "O9", "OMODA9 SHS", "Premium", "T9000**EX001", "Black (BK)", None])
+    sheet.append([None, None, None, None, None, "White (WT)", None])
+    sheet.append([None, None, None, None, None, None, "Beige-Brown"])
+    path = tmp_path / "forward_interior.xlsx"
+    workbook.save(path)
+
+    parsed = parse_material_master_xlsx(path)
+
+    assert parsed["warnings"] == []
+    assert {row["interior_color_name"] for row in parsed["rows"]} == {"Beige-Brown"}

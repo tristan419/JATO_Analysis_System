@@ -2896,11 +2896,12 @@ def _build_colour_standard_preview(
         key = (rule["brand"], rule["colourCode"])
         if key in standards:
             continue
+        if rule["hasNameConflict"] or rule["hasSwatchConflict"]:
+            unresolved_conflict_count += 1
+            continue
         name_options = rule["nameOptions"]
         if not name_options:
             unresolved_rule_count += 1
-            if rule["hasNameConflict"] or rule["hasSwatchConflict"]:
-                unresolved_conflict_count += 1
             continue
         selected_name = name_options[0]["colourName"]
         if len(rule["hexOptions"]) == 1:
