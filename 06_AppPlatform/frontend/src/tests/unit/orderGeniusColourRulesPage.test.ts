@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createElement } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client";
 import { BomAdminPanel } from "../../pages/OrderGeniusPage";
@@ -185,6 +185,27 @@ describe("Shared colour standard confirmation interactions", () => {
     }));
     await waitFor(() => expect(screen.queryByLabelText("Shared colour name")).toBeNull());
     expect(api.getBomAdmin).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts missing HEX independently of mutually exclusive rule status", async () => {
+    vi.spyOn(api, "getOrderGeniusColourHexRules").mockResolvedValue({
+      items: [conflict, { ...conflict, colourCode: "CL", hasNameConflict: false, status: "missing",
+        missingSwatchSkuCount: 0, placeholderNameSkuCount: 3, nameOptions: [],
+        standardColourHex: "#111111", hexOptions: [{ colourHex: "#111111", skuCount: 3 }] }],
+      summary: { totalRules: 2, fillable: 0, missing: 1, nameConflict: 1, swatchConflict: 0,
+        complete: 0, fillableSkus: 0, invalidIdentitySkuCount: 0, invalidIdentitySampleMaterialCodes: [] },
+    });
+    render(createElement(BomAdminPanel));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit tools" }));
+    const missingStandard = await screen.findByRole("button", { name: /Missing standard/ });
+    await waitFor(() => expect(within(missingStandard).getByText("1")).toBeTruthy());
+    const missingHex = screen.getByRole("button", { name: /Missing HEX/ });
+    expect(within(missingHex).getByText("1")).toBeTruthy();
+    fireEvent.click(missingHex);
+    await screen.findByRole("dialog", { name: "Colour rule details" });
+    expect(screen.getByText("OMODA · SY")).toBeTruthy();
+    expect(screen.queryByText("OMODA · CL")).toBeNull();
+    expect(screen.getByRole("button", { name: /Misty Green · Enter HEX/ })).toBeTruthy();
   });
 
   it("does not report all confirmed when conflicts are excluded from batch", async () => {

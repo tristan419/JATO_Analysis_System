@@ -3695,20 +3695,19 @@ const EMPTY_COLOUR_HEX_RULE_SUMMARY: ColourHexRuleSummary = {
   invalidIdentitySampleMaterialCodes: [],
 };
 
+type ColourRuleDetailsCategory = ColourHexRuleStatus | "missing_hex";
+
 const COLOUR_RULE_STATUS_META: ReadonlyArray<{
-  status: ColourHexRuleStatus;
+  status: ColourRuleDetailsCategory;
   label: string;
-  summaryKey: keyof Pick<
-    ColourHexRuleSummary,
-    "fillable" | "missing" | "nameConflict" | "swatchConflict" | "complete"
-  >;
   colour: string;
 }> = [
-  { status: "fillable", label: "Can fill", summaryKey: "fillable", colour: "#0f766e" },
-  { status: "missing", label: "Missing HEX / 缺色卡", summaryKey: "missing", colour: "#64748b" },
-  { status: "name_conflict", label: "Name conflict", summaryKey: "nameConflict", colour: "#b45309" },
-  { status: "swatch_conflict", label: "Swatch conflict", summaryKey: "swatchConflict", colour: "#dc2626" },
-  { status: "complete", label: "Complete", summaryKey: "complete", colour: "#15803d" },
+  { status: "fillable", label: "Can fill", colour: "#0f766e" },
+  { status: "missing", label: "Missing standard / 缺标准", colour: "#64748b" },
+  { status: "missing_hex", label: "Missing HEX / 缺色卡", colour: "#64748b" },
+  { status: "name_conflict", label: "Name conflict", colour: "#b45309" },
+  { status: "swatch_conflict", label: "Swatch conflict", colour: "#dc2626" },
+  { status: "complete", label: "Complete", colour: "#15803d" },
 ];
 
 function normalizeColourPickerValue(value: string, fallback = MISSING_COLOUR_SWATCH_HEX): string {
@@ -3747,6 +3746,13 @@ function getColourRuleStandardChoices(rule: ColourHexRule): Array<{ colourName: 
   if (hexes.length === 0 && rule.standardColourHex) hexes.push(rule.standardColourHex);
   if (hexes.length === 0) hexes.push("");
   return names.flatMap((colourName) => hexes.map((colourHex) => ({ colourName, colourHex })));
+}
+
+function getColourRuleDetails(rules: ColourHexRule[], status: ColourRuleDetailsCategory): ColourHexRule[] {
+  if (status === "missing_hex") return rules.filter(rule => rule.missingSwatchSkuCount > 0);
+  if (status === "name_conflict") return rules.filter(rule => rule.hasNameConflict);
+  if (status === "swatch_conflict") return rules.filter(rule => rule.hasSwatchConflict);
+  return rules.filter(rule => rule.status === status);
 }
 
 function formatColourRuleLookupNote(lookup: ColourHexRuleLookup, manuallyChanged: boolean): string {
@@ -3985,7 +3991,7 @@ export function BomAdminPanel({
   const [colourHexRuleSummary, setColourHexRuleSummary] = useState<ColourHexRuleSummary>(EMPTY_COLOUR_HEX_RULE_SUMMARY);
   const [colourHexRuleStatus, setColourHexRuleStatus] = useState("");
   const [loadingColourHexRules, setLoadingColourHexRules] = useState(false);
-  const [colourRuleDetailsStatus, setColourRuleDetailsStatus] = useState<ColourHexRuleStatus | null>(null);
+  const [colourRuleDetailsStatus, setColourRuleDetailsStatus] = useState<ColourRuleDetailsCategory | null>(null);
   const [showColourRulePreview, setShowColourRulePreview] = useState(false);
   const [colourRulePreview, setColourRulePreview] = useState<ColourHexRulePreview | null>(null);
   const [colourRuleApplyResult, setColourRuleApplyResult] = useState<ColourHexRuleApplyResult | null>(null);
@@ -4135,13 +4141,7 @@ export function BomAdminPanel({
 
   const selectedColourRuleDetails = useMemo(() => {
     if (!colourRuleDetailsStatus) return [];
-    if (colourRuleDetailsStatus === "name_conflict") {
-      return colourHexRules.filter((rule) => rule.hasNameConflict);
-    }
-    if (colourRuleDetailsStatus === "swatch_conflict") {
-      return colourHexRules.filter((rule) => rule.hasSwatchConflict);
-    }
-    return colourHexRules.filter((rule) => rule.status === colourRuleDetailsStatus);
+    return getColourRuleDetails(colourHexRules, colourRuleDetailsStatus);
   }, [colourHexRules, colourRuleDetailsStatus]);
 
   const formatBomFobTooltip = (
@@ -7040,7 +7040,7 @@ export function BomAdminPanel({
                     </button>
                   </div>
                   <div style={{ fontSize: 10, color: "#64748b", marginBottom: 7 }}>
-                    {colourHexRuleSummary.totalRules} brand + code groups · missing HEX is not a colour-code conflict / 缺色卡不等于色码错误
+                    {colourHexRuleSummary.totalRules} brand + code groups · categories may overlap / 分类可重叠 · missing HEX is not a colour-code conflict / 缺色卡不等于色码错误
                   </div>
                   {colourHexRuleSummary.invalidIdentitySkuCount > 0 ? (
                     <div style={{ marginBottom: 7, padding: "6px 8px", border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", fontSize: 10, lineHeight: 1.35 }}>
@@ -7051,7 +7051,7 @@ export function BomAdminPanel({
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))", gap: 4 }}>
                     {COLOUR_RULE_STATUS_META.map((meta) => (
                       <button key={meta.status} type="button" className="btn btn-sm btn-ghost" onClick={() => setColourRuleDetailsStatus(meta.status)} style={{ padding: 4, display: "grid", gap: 2, color: meta.colour, whiteSpace: "normal", height: "auto", minHeight: 44 }}>
-                        <strong>{colourHexRuleSummary[meta.summaryKey]}</strong><span style={{ fontSize: 10 }}>{meta.label}</span>
+                        <strong>{getColourRuleDetails(colourHexRules, meta.status).length}</strong><span style={{ fontSize: 10 }}>{meta.label}</span>
                       </button>
                     ))}
                   </div>
