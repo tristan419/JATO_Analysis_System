@@ -678,7 +678,11 @@ export function OrderGeniusVehicleAllocationPage() {
     setCocDownloadConfirm(null);
     setCocBusy(true); setCocError("");
     try {
-      const blob = await api.piCocDownload(piCode, available);
+      const confirmedVins: Record<string, string> = {};
+      for (const item of cocResult.items) {
+        if (available.includes(item.carCode) && item.vin) confirmedVins[item.carCode] = item.vin;
+      }
+      const blob = await api.piCocDownload(piCode, available, confirmedVins);
       if (request === cocRequest.current) buildDownload(blob, `${piCode}-COC.zip`);
     }
     catch (reason) { if (request === cocRequest.current) setCocError(actionableError(reason, "Could not download; search library again and select available rows / 下载未完成，请重新查库并勾选有 PDF 的车辆。")); }
@@ -1188,7 +1192,7 @@ export function OrderGeniusVehicleAllocationPage() {
         .vehicle-allocation-page .btn-secondary:hover,.vehicle-allocation-page .btn-ghost:hover{background:#f8fafc;border-color:#b8c2ce}
         .vehicle-allocation-page .btn-danger{background:#dc2626;color:#fff;border-color:#dc2626}
         .vehicle-allocation-page button:disabled{background:#a8b3c1;border-color:#a8b3c1;cursor:not-allowed}
-        .va-message{padding:10px 12px;border-radius:6px;margin-bottom:14px}
+        .va-message{padding:10px 12px;border-radius:6px;margin-bottom:14px;max-height:18vh;overflow:auto;overflow-wrap:anywhere}
         .va-message.is-error{background:#fff1f0;color:#a8071a;border:1px solid #ffa39e}
         .va-message.is-notice{background:#f0f7ff;color:#174ea6;border:1px solid #b7d6ff}
         .va-layout{display:grid;grid-template-columns:clamp(280px,20vw,360px) minmax(0,1fr);gap:16px;align-items:stretch;flex:1;min-height:360px}

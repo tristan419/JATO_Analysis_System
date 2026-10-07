@@ -107,6 +107,11 @@ def download_pi_cocs(pi_code: str, payload: dict, session: Session = Depends(get
     selected = [vehicles[c] for c in codes]
     if any(not v.vin for v in selected):
         raise HTTPException(409, "VIN missing; select available rows / 存在未录VIN车辆，请勾选可用项")
+    confirmed_vins = payload.get("vinsByCarCode")
+    if (not isinstance(confirmed_vins, dict) or set(confirmed_vins) != set(codes)
+            or any(not isinstance(confirmed_vins[v.car_code], str)
+                   or confirmed_vins[v.car_code].strip().upper() != v.vin.upper() for v in selected)):
+        raise HTTPException(409, "VIN confirmation changed or missing; search the library again / VIN确认已变化或缺失，请重新查库")
     temporary = tempfile.TemporaryDirectory(prefix="jato-coc-download-")
     path = Path(temporary.name) / "coc.zip"
     try:
@@ -209,6 +214,16 @@ def _accessible_market_countries(session: Session, user: UserContext, countries:
 def _validate_target_countries(session: Session, user: UserContext, vehicles: list[dict]) -> None:
     # Validate the complete target set before any write; never silently trim a batch.
     for country in {vehicle["countryCode"] for vehicle in vehicles}:
+        _validate_country(session, user, country)
+
+
+def _validate_line_countries(session: Session, user: UserContext, detail: dict, line_code: str) -> None:
+    targets = [vehicle for vehicle in detail["vehicles"] if vehicle["piLineCode"] == line_code]
+    countries = {vehicle["countryCode"] for vehicle in targets}
+    for line in detail["lines"]:
+        if line["piLineCode"] == line_code:
+            countries.update(allocation["marketCountryCode"] for allocation in line["allocations"])
+    for country in countries or {detail["header"]["countryCode"]}:
         _validate_country(session, user, country)
 
 
@@ -457,7 +472,9 @@ def patch_pi_order_line(
     if not existing:
         raise HTTPException(status_code=404, detail="PI line not found")
     detail = get_pi_detail(session, existing.pi_code)
-    _validate_pi_detail_access(session, user, detail)
+    _validate_line_countries(session, user, detail, existing.pi_line_code)
+    if "quantity" in body:
+        _validate_country(session, user, detail["header"]["countryCode"])
     line = update_pi_line(session, pi_line_code.upper(), body, user.name)
     session.commit()
     return line
@@ -467,9 +484,13 @@ def patch_pi_order_line(
 def delete_pi_order_line(
     pi_line_code: str,
     session: Session = Depends(get_db_session),
-    _: UserContext = Depends(require_min_role("order_filler")),
+    user: UserContext = Depends(require_min_role("order_filler")),
 ) -> dict:
     """Hard-delete a PI line and its allocations, vehicles."""
+    existing = vehicle_repo.get_line_by_code(session, pi_line_code.upper())
+    if not existing:
+        raise HTTPException(status_code=404, detail="PI line not found")
+    _validate_line_countries(session, user, get_pi_detail(session, existing.pi_code), existing.pi_line_code)
     try:
         result = delete_pi_line(session, pi_line_code.upper())
         session.commit()
@@ -585,12 +606,12 @@ def bulk_update_vehicles(
         raise HTTPException(status_code=400, detail="piCode or piLineCode is required")
     _validate_pi_detail_access(session, user, detail)
     raw_codes = body.get("carCodes", body.get("car_codes"))
-    if raw_codes is not None and (not isinstance(raw_codes, list) or not raw_codes or any(not isinstance(code, str) or not code.strip() for code in raw_codes)):
+    if not isinstance(raw_codes, list) or not raw_codes or any(not isinstance(code, str) or not code.strip() for code in raw_codes):
         raise HTTPException(400, "Select vehicle rows / 请明确勾选车辆")
-    codes = {code.strip().upper() for code in raw_codes} if raw_codes is not None else None
+    codes = {code.strip().upper() for code in raw_codes}
     targets = [vehicle for vehicle in detail["vehicles"]
                if (not pi_line_code or vehicle["piLineCode"] == pi_line_code.upper())
-               and (codes is None or vehicle["carCode"] in codes)]
+               and vehicle["carCode"] in codes]
     _validate_target_countries(session, user, targets)
     result = bulk_update_vehicle_units(session, body, user.name)
     session.commit()

@@ -378,10 +378,10 @@ export interface UpdateVehiclePayload {
 }
 
 export interface BulkVehicleUpdatePayload {
-  rowVersions?: Record<string, number>;
+  rowVersions: Record<string, number>;
   piCode?: string;
   piLineCode?: string;
-  carCodes?: string[];
+  carCodes: string[];
   vinList?: string[];
   fields?: UpdateVehiclePayload;
 }

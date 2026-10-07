@@ -2,7 +2,9 @@
 
 > 历史基础规格，不再作为新开发的完整执行指令。当前唯一业务规则维护在交接文档的ORDER_GENIUS_GOAL_EXECUTE_2026-09-28.md 4.1：只有选品创建PI；分车不保留Create PI/Generate/Add line。2026-10-04本批还包含共享FloatingDeck、状态摘要、字段搜索/VIN批量勾选、明细动力色、列分组/排序及所见导出；运费/保费已确认按每台EUR独立保存，单车或勾选批量编辑，不改FOB。一次性比对包下载口径见Goal 5.1。旧创建建议及常驻明细布局已失效。字段/接口历史定义保留，不据此恢复旧入口。
 
-> 2026-10-06 Grid批：按同一Goal 4.1/7在`codex/pi-grid-editor`本地实现，未发布Candidate。本批使用已有AG Grid Community及一个单/多车编辑面板：普通筛选变化清勾选，分页/排序/列操作/Show selected保留；表头全选完整筛选范围跨页，Show selected为空不回退全批；只提交明确CarCode及修改字段，Keep不提交、Clear显式清空、0设零，禁止批量同值VIN。现有service补版本重校，所见导出按完整筛选/排序、可见列与列序；不恢复左右箭头、双表单或单车空白自动清空规则，不加迁移/依赖、不改BOM/FOB/生命周期。当前进度/未验项维护于交接文档Progress/Index，旧字段/接口建议不能覆盖新契约。
+> 当前Grid及响应式布局已通过#256/#257/#258送Candidate，不再按旧“本地实现、未发布”状态执行。使用已有AG Grid Community及一个单/多车编辑面板：普通筛选变化清勾选，分页/排序/列操作/Show selected保留；表头全选完整筛选范围跨页，Show selected为空不回退全批。VIN匹配默认当前授权PI/scope的全局，可切当前筛选；明确Select后才勾选，持续显示全局及当前已选计数。order_filler按实际车辆/allocation获配国家单元读写，admin全部可见；不是按PI抬头国家判断整个PI权限。
+
+> 2026-10-08接口收口沿原route/service：旧整line更新/删除检查全部实际车辆及allocation国家；单车必须有效rowVersion，批量必须非空明确CarCodes及完全对应rowVersions，拒绝省略目标的隐式整批更新；缺参、失效目标或旧版本不允许部分保存。COC下载沿原接口携带本次查库确认的CarCode→VIN映射，VIN变化要求重新查库，不能下载另一个VIN的PDF。Keep不提交、Clear显式清空、0设零，禁止批量同值VIN。导出按完整筛选/排序、可见列与列序；长反馈内部滚动，不挤走Grid分页。不恢复旧创建入口、左右箭头、双表单或空白自动清空规则，不加表/迁移/依赖，不改BOM/FOB/生命周期。最新规则只见交接Goal，验证/发布只见Progress；下文历史字段/接口建议不能覆盖这些契约。
 
 > 目标：在现有 Order Genius 选品/PI 导出能力后，新增一个“PI 车辆池 + 虚拟车号 + VIN 绑定 + 物流交付查询”页面。
 >

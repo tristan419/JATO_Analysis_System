@@ -1203,7 +1203,7 @@ def test_bulk_vehicle_update_assigns_vins_to_empty_units_in_car_code_order(monke
     ]
     monkeypatch.setattr(vehicle_repo, "get_header_by_code", lambda session, pi_code: SimpleNamespace(pi_code=pi_code))
     monkeypatch.setattr(vehicle_repo, "get_line_by_code", lambda session, pi_line_code: SimpleNamespace(pi_code="PI-RO-202607-001"))
-    monkeypatch.setattr(vehicle_repo, "list_vehicles_for_bulk_update", lambda session, pi_code, pi_line_code: vehicles)
+    monkeypatch.setattr(vehicle_repo, "list_vehicles_for_bulk_update", lambda session, pi_code, pi_line_code, **kwargs: vehicles)
     monkeypatch.setattr(vehicle_repo, "get_vehicle_by_vin", lambda session, vin: None)
 
     session = SimpleNamespace(flush=lambda: None)
@@ -1213,6 +1213,8 @@ def test_bulk_vehicle_update_assigns_vins_to_empty_units_in_car_code_order(monke
         {
             "piCode": "PI-RO-202607-001",
             "piLineCode": "PI-RO-202607-001-L01",
+            "carCodes": [vehicle.car_code for vehicle in vehicles],
+            "rowVersions": {vehicle.car_code: vehicle.row_version for vehicle in vehicles},
             "vinList": ["vin-a", "vin-b"],
             "fields": {"eta": "2026-08-02", "shipName": "Baltic Star"},
         },
@@ -1237,7 +1239,7 @@ def test_bulk_vehicle_update_rejects_duplicate_pasted_vins(monkeypatch) -> None:
     monkeypatch.setattr(
         vehicle_repo,
         "list_vehicles_for_bulk_update",
-        lambda session, pi_code, pi_line_code: [_fake_vehicle("CAR-RO-2607-001-L01-0001")],
+        lambda session, pi_code, pi_line_code, **kwargs: [_fake_vehicle("CAR-RO-2607-001-L01-0001")],
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -1245,6 +1247,8 @@ def test_bulk_vehicle_update_rejects_duplicate_pasted_vins(monkeypatch) -> None:
             SimpleNamespace(flush=lambda: None),
             {
                 "piCode": "PI-RO-202607-001",
+                "carCodes": ["CAR-RO-2607-001-L01-0001"],
+                "rowVersions": {"CAR-RO-2607-001-L01-0001": 1},
                 "vinList": ["VIN-A", "VIN-A"],
             },
             "tester",
@@ -1387,7 +1391,7 @@ def test_bulk_country_denial_is_atomic(vehicle_db, mixed_market_pi, scope):
         body.update(carCodes=[car.car_code for car in selected], rowVersions={car.car_code: car.row_version for car in selected})
     with pytest.raises(HTTPException) as error:
         vehicle_route.bulk_update_vehicles(body, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
-    assert error.value.status_code == 403
+    assert error.value.status_code == (400 if scope == "implicit" else 403)
     assert all(car.remark is None for car in cars)
 
 
@@ -1469,7 +1473,8 @@ def test_checked_update_validates_all_targets_before_writing(vehicle_db, conflic
     codes = [car.car_code for car in cars]
     versions = {car.car_code: car.row_version for car in cars}
     if conflict == "stale":
-        versions[codes[-1]] -= 1
+        cars[-1].row_version += 1
+        vehicle_db.flush()
     elif conflict == "missing":
         del versions[codes[-1]]
     elif conflict == "out_of_scope":
@@ -1480,7 +1485,7 @@ def test_checked_update_validates_all_targets_before_writing(vehicle_db, conflic
     with pytest.raises(HTTPException) as error:
         bulk_update_vehicle_units(vehicle_db, {"piCode": pi, "carCodes": codes, "rowVersions": versions,
                                                "fields": {"freightEur": 0, "remark": "must not write"}}, "tester")
-    assert error.value.status_code == 409
+    assert error.value.status_code == (400 if conflict == "empty" else 409)
     assert all(car.remark is None and car.freight_eur is None for car in cars)
 
 
@@ -1513,13 +1518,13 @@ def test_export_uses_complete_ordered_view_not_first_page(vehicle_db):
 def test_vehicle_costs_single_and_checked_batch_keep_fob_vin_and_quantities(vehicle_db):
     pi, cars = _vin_fill_pi(vehicle_db, quantity=2)
     first, second = cars
-    result = vehicle_service.update_vehicle_unit(vehicle_db, first.car_code, {"freightEur": 123.45, "insuranceEur": 10}, "tester")
+    result = vehicle_service.update_vehicle_unit(vehicle_db, first.car_code, {"rowVersion": first.row_version, "freightEur": 123.45, "insuranceEur": 10}, "tester")
     assert (result["freightEur"], result["insuranceEur"], result["fobEur"]) == (123.45, 10, 12345)
-    bulk_update_vehicle_units(vehicle_db, {"piCode": pi, "carCodes": [first.car_code], "fields": {"freightEur": 0}}, "tester")
+    bulk_update_vehicle_units(vehicle_db, {"piCode": pi, "carCodes": [first.car_code], "rowVersions": {first.car_code: first.row_version}, "fields": {"freightEur": 0}}, "tester")
     assert first.freight_eur == 0 and first.insurance_eur == 10
     assert second.freight_eur is None and second.insurance_eur is None
     assert first.vin is None and second.vin is None
-    vehicle_service.update_vehicle_unit(vehicle_db, first.car_code, {"insuranceEur": None}, "tester")
+    vehicle_service.update_vehicle_unit(vehicle_db, first.car_code, {"rowVersion": first.row_version, "insuranceEur": None}, "tester")
     assert first.insurance_eur is None
     line = vehicle_repo.get_line_by_code(vehicle_db, first.pi_line_code)
     assert line.quantity == 2 and line.fob_eur == 12345
@@ -1531,7 +1536,66 @@ def test_vehicle_costs_single_and_checked_batch_keep_fob_vin_and_quantities(vehi
 def test_invalid_vehicle_cost_is_rejected_before_any_row_change(vehicle_db, value):
     pi, cars = _vin_fill_pi(vehicle_db, quantity=1)
     with pytest.raises(HTTPException, match="non-negative EUR"):
-        vehicle_service.update_vehicle_unit(vehicle_db, cars[0].car_code, {"freightEur": value, "remark": "must not persist"}, "tester")
+        vehicle_service.update_vehicle_unit(vehicle_db, cars[0].car_code, {"rowVersion": cars[0].row_version, "freightEur": value, "remark": "must not persist"}, "tester")
+
+
+@pytest.mark.parametrize("version", [None, 0, -1, True, "1", 1.5])
+def test_single_update_requires_valid_version_before_any_write(vehicle_db, version):
+    _, cars = _vin_fill_pi(vehicle_db, quantity=1)
+    previous = cars[0].row_version
+    with pytest.raises(HTTPException) as error:
+        vehicle_service.update_vehicle_unit(vehicle_db, cars[0].car_code,
+            {"rowVersion": version, "remark": "must not save"}, "tester")
+    assert error.value.status_code == 400
+    assert cars[0].remark is None and cars[0].row_version == previous
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"carCodes": []}, {"carCodes": "CAR"}, {"carCodes": [""]},
+    {"carCodes": ["CAR"], "rowVersions": {}},
+    {"carCodes": ["CAR"], "rowVersions": {"CAR": True}},
+])
+def test_bulk_update_requires_targets_and_versions(vehicle_db, payload):
+    pi, cars = _vin_fill_pi(vehicle_db)
+    with pytest.raises(HTTPException) as error:
+        vehicle_route.bulk_update_vehicles({"piCode": pi, "fields": {"remark": "must not save"}, **payload},
+            vehicle_db, UserContext(role="admin", name="admin"))
+    assert error.value.status_code == 400
+    assert all(car.remark is None for car in cars)
+
+
+@pytest.mark.parametrize("operation", ["update", "delete"])
+@pytest.mark.parametrize("allocation_only", [False, True])
+def test_shared_line_write_requires_every_target_country(vehicle_db, mixed_market_pi, operation, allocation_only):
+    pi, cars = mixed_market_pi
+    line = vehicle_repo.get_line_by_code(vehicle_db, cars[0].pi_line_code)
+    if allocation_only:
+        vehicle_db.add(models.PiOrderLineAllocation(pi_id=line.pi_id, pi_line_id=line.pi_line_id,
+            pi_code=pi, pi_line_code=line.pi_line_code, market_country_code="SE",
+            material_code=line.material_code, order_year=2026, order_month=9, quantity=2, fob_eur=12345))
+        for car in cars:
+            vehicle_db.delete(car)
+        vehicle_db.flush()
+    previous = line.row_version
+    with pytest.raises(HTTPException) as error:
+        user = UserContext(role="order_filler", name="ch-filler")
+        if operation == "update":
+            vehicle_route.patch_pi_order_line(line.pi_line_code, {"powertrain": "BEV"}, vehicle_db, user)
+        else:
+            vehicle_route.delete_pi_order_line(line.pi_line_code, vehicle_db, user)
+    assert error.value.status_code == 403
+    assert line.powertrain == "HEV" and line.row_version == previous
+    assert vehicle_repo.get_line_by_code(vehicle_db, line.pi_line_code) is line
+    if not allocation_only:
+        assert all(car.powertrain == "HEV" for car in cars)
+
+
+@pytest.mark.parametrize("role,username", [("admin", "admin"), ("order_filler", "multi-filler")])
+def test_shared_line_write_succeeds_for_all_country_grants(vehicle_db, mixed_market_pi, role, username):
+    _, cars = mixed_market_pi
+    result = vehicle_route.patch_pi_order_line(cars[0].pi_line_code, {"remark": "authorized"}, vehicle_db,
+        UserContext(role=role, name=username))
+    assert result["remark"] == "authorized"
     assert cars[0].freight_eur is None and cars[0].remark is None
 
 

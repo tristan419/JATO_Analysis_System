@@ -1,4 +1,5 @@
 import io
+import asyncio
 import json
 import os
 import zipfile
@@ -312,6 +313,32 @@ def test_pi_counts_and_market_authorization(tmp_path, monkeypatch):
     assert calls == ["CH", "SE"]
     with pytest.raises(HTTPException):
         route.download_pi_cocs("PI", {"carCodes": ["d"]}, None, SimpleNamespace())
+
+
+@pytest.mark.parametrize("confirmation", [None, {}, {"a": VIN}, {"a": 123}])
+def test_pi_download_rejects_missing_or_changed_vin_confirmation(monkeypatch, confirmation):
+    unit = SimpleNamespace(car_code="a", vin=VIN2, country_code="CH")
+    monkeypatch.setattr(route, "_coc_pi_vehicles", lambda *_: [unit])
+    writes = []
+    monkeypatch.setattr(library, "write_pdf_zip", lambda *_: writes.append(True))
+    with pytest.raises(HTTPException) as error:
+        route.download_pi_cocs("PI", {"carCodes": ["a"], "vinsByCarCode": confirmation}, None, SimpleNamespace())
+    assert error.value.status_code == 409
+    assert "重新查库" in error.value.detail and not writes
+
+
+def test_pi_download_keeps_confirmed_vin_pdf_bytes(tmp_path, monkeypatch):
+    sid = source(tmp_path, "confirmed.zip", [(f"{VIN}.pdf", b"original PDF bytes")])
+    activate(sid)
+    monkeypatch.setattr(route, "_coc_pi_vehicles", lambda *_: [SimpleNamespace(car_code="a", vin=VIN, country_code="CH")])
+    response = route.download_pi_cocs("PI", {"carCodes": ["a"], "vinsByCarCode": {"a": VIN}}, None, SimpleNamespace())
+    try:
+        with zipfile.ZipFile(response.path) as archive:
+            assert archive.namelist() == [f"{VIN}.pdf"]
+            assert archive.read(f"{VIN}.pdf") == b"original PDF bytes"
+    finally:
+        asyncio.run(response.background())
+    assert not Path(response.path).exists()
 
 
 def test_100000_vin_index_uses_batched_lookup(tmp_path):

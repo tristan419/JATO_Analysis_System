@@ -4729,7 +4729,7 @@ export const api = {
   cocLibraryDeletePreview: (id: string) => request<CocDeletePreview>(`/coc-match/library/sources/${encodeURIComponent(id)}/delete-preview`, { method: "POST" }),
   cocLibraryDelete: (preview: CocDeletePreview) => request<{ deleted: boolean }>(`/coc-match/library/sources/${encodeURIComponent(preview.sourceId)}`, { method: "DELETE", body: JSON.stringify({ fingerprint: preview.fingerprint }) }),
   piCocLookup: (piCode: string) => request<PiCocLookup>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/coc-library`),
-  piCocDownload: (piCode: string, carCodes: string[]) => requestBlob(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/coc-download`, { method: "POST", body: JSON.stringify({ carCodes }) }),
+  piCocDownload: (piCode: string, carCodes: string[], vinsByCarCode: Record<string, string>) => requestBlob(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/coc-download`, { method: "POST", body: JSON.stringify({ carCodes, vinsByCarCode }) }),
 
   cocMatchUploadAndCreateJob: async (
     excel: File,
@@ -5392,7 +5392,7 @@ export const api = {
       `/order-genius/vehicle-allocation/vehicles/${encodeURIComponent(carCode)}`,
     ),
 
-  updateVehicleAllocationVehicle: (carCode: string, body: UpdateVehiclePayload) =>
+  updateVehicleAllocationVehicle: (carCode: string, body: UpdateVehiclePayload & { rowVersion: number }) =>
     request<PiVehicleUnit>(
       `/order-genius/vehicle-allocation/vehicles/${encodeURIComponent(carCode)}`,
       { method: "PATCH", body: JSON.stringify(body) },

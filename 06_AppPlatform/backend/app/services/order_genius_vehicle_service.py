@@ -562,16 +562,27 @@ def update_vehicle_unit(session: Session, car_code: str, payload: dict[str, Any]
     vehicle = repo.get_vehicle_by_car_code(session, car_code)
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
-    if "rowVersion" in payload:
-        session.refresh(vehicle, with_for_update=True)
-        if payload["rowVersion"] != vehicle.row_version:
-            raise HTTPException(409, "Vehicle changed; nothing saved. Re-read PI / 车辆已变化，未保存，请重新读取 PI")
+    version = payload.get("rowVersion")
+    if type(version) is not int or version < 1:
+        raise HTTPException(400, "Vehicle version required; re-read PI / 缺少有效车辆版本，请重新读取 PI")
+    session.refresh(vehicle, with_for_update=True)
+    if version != vehicle.row_version:
+        raise HTTPException(409, "Vehicle changed; nothing saved. Re-read PI / 车辆已变化，未保存，请重新读取 PI")
     _apply_vehicle_updates(session, vehicle, payload, username)
     session.flush()
     return vehicle_to_dict(session, vehicle)
 
 
 def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], username: str) -> dict:
+    raw_codes = payload.get("carCodes", payload.get("car_codes"))
+    if (not isinstance(raw_codes, list) or not raw_codes
+            or any(not isinstance(code, str) or not code.strip() for code in raw_codes)):
+        raise HTTPException(400, "Select vehicle rows / 请明确勾选车辆")
+    car_codes = [code.strip().upper() for code in raw_codes]
+    versions = payload.get("rowVersions")
+    if (not isinstance(versions, dict) or not versions
+            or any(type(version) is not int or version < 1 for version in versions.values())):
+        raise HTTPException(400, "Vehicle versions required; re-read PI / 缺少有效车辆版本，请重新读取 PI")
     pi_code = _clean(payload.get("piCode") or payload.get("pi_code"))
     pi_line_code = _clean(payload.get("piLineCode") or payload.get("pi_line_code"))
     if pi_code:
@@ -595,37 +606,16 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
         session,
         pi_code=pi_code,
         pi_line_code=pi_line_code,
-        **({"lock": True} if "rowVersions" in payload else {}),
+        lock=True,
     )
-    if not vehicles and "rowVersions" not in payload:
-        return {
-            "piCode": pi_code,
-            "piLineCode": pi_line_code,
-            "matchedUnits": 0,
-            "updatedUnits": 0,
-            "vinAssigned": 0,
-            "fieldsUpdated": [],
-        }
-
-    # Car-code-based selection (checkbox multi-select)
-    car_codes: list[str] | None = None
-    raw_car_codes = payload.get("carCodes") or payload.get("car_codes")
-    if raw_car_codes and isinstance(raw_car_codes, list):
-        car_codes = [str(c).strip().upper() for c in raw_car_codes if c]
-    if car_codes:
-        code_set = set(car_codes)
-        vehicles = [v for v in vehicles if v.car_code in code_set]
-    if "rowVersions" in payload:
-        versions = payload["rowVersions"]
-        if (not car_codes or not isinstance(versions, dict)
-                or set(versions) != set(car_codes)
-                or {vehicle.car_code for vehicle in vehicles} != set(car_codes)
-                or any(versions[vehicle.car_code] != vehicle.row_version for vehicle in vehicles)):
-            raise HTTPException(409, "Selection changed; nothing saved. Re-read PI and select again / 勾选车辆已变化，未保存，请重新读取 PI 并重新勾选")
+    code_set = set(car_codes)
+    vehicles = [vehicle for vehicle in vehicles if vehicle.car_code in code_set]
+    if (len(code_set) != len(car_codes) or set(versions) != code_set
+            or {vehicle.car_code for vehicle in vehicles} != code_set
+            or any(versions[vehicle.car_code] != vehicle.row_version for vehicle in vehicles)):
+        raise HTTPException(409, "Selection changed; nothing saved. Re-read PI and select again / 勾选车辆已变化，未保存，请重新读取 PI 并重新勾选")
 
     field_payload = _bulk_field_payload(payload.get("fields"))
-    if {"freightEur", "insuranceEur"} & field_payload.keys() and not car_codes:
-        raise HTTPException(400, "Select vehicle rows before updating costs / 更新运保费前请明确勾选车辆")
     vin_list = _bulk_vin_list(payload.get("vinList") or payload.get("vins"))
     if not field_payload and not vin_list:
         raise HTTPException(status_code=400, detail="No VINs or bulk fields provided")
