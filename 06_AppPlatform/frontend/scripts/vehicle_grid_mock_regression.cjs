@@ -346,7 +346,15 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
       }).catch(async () => { throw new Error(JSON.stringify({ viewport, geometry: await layoutGeometry() })); });
       const size = await layoutGeometry();
       assert(Math.abs(size.side.top - size.main.top) <= 2 && Math.abs(size.side.bottom - size.main.bottom) <= 2, JSON.stringify(size));
-      assert(size.body.height > 150 && size.pagination.bottom <= viewport.height, JSON.stringify(size));
+      assert(size.body.height > 150, JSON.stringify(size));
+      if (size.page.bottom > viewport.height + 2) {
+        // The existing minimum workspace height intentionally allows outer scrolling.
+        assert.equal(Math.round(size.page.height), 640);
+        await page.locator(".ag-paging-panel").scrollIntoViewIfNeeded();
+        const scrolled = await layoutGeometry();
+        assert(await page.evaluate(() => window.scrollY > 0));
+        assert(scrolled.pagination.top >= 0 && scrolled.pagination.bottom <= viewport.height, JSON.stringify(scrolled));
+      } else assert(size.pagination.bottom <= viewport.height, JSON.stringify(size));
       assert(!size.overflowX);
       if (viewport.width === 1920) { desktopHeight = size.body.height; assert(size.piList.scroll > size.piList.client); }
       if (viewport.width === 3840) assert(size.body.height > desktopHeight + 600 && size.main.width > 2800);
@@ -365,6 +373,7 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     await page.locator(".va-month-browser summary").click();
     // A taller shell (e.g. Candidate banner/wrapped navigation) must be measured, not hardcoded.
     await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.evaluate(() => window.scrollTo(0, 0));
     await page.locator(".top-bar").evaluate((element) => { element.style.minHeight = "130px"; });
     await page.waitForFunction(() => Math.abs(document.querySelector(".vehicle-allocation-page").getBoundingClientRect().bottom - innerHeight) <= 2);
     assert((await layoutGeometry()).pagination.bottom <= 1080);
@@ -378,6 +387,10 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     await page.setViewportSize({ width: 1920, height: 500 });
     await page.getByText("450 selected / 已选", { exact: false }).waitFor();
     assert((await layoutGeometry()).page.height >= 640); // Short windows scroll; controls are not clipped.
+    await page.locator(".ag-paging-panel").scrollIntoViewIfNeeded();
+    size = await layoutGeometry();
+    assert(await page.evaluate(() => window.scrollY > 0));
+    assert(size.pagination.top >= 0 && size.pagination.bottom <= 500, JSON.stringify(size));
     await page.setViewportSize({ width: 700, height: 950 });
     await page.evaluate(() => window.scrollTo(0, 0));
     size = await layoutGeometry();
@@ -392,7 +405,7 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     await page.getByRole("button", { name: "Save changes / 保存修改" }).waitFor();
     assert((await page.getByRole("button", { name: "Save changes / 保存修改" }).boundingBox()).y < 1080);
     await page.getByRole("button", { name: "Close", exact: true }).click();
-    checks.push("Responsive 1080p/4K/zoom-equivalent/short/narrow layouts; aligned columns, visible pagination, taller-shell resize, selection and column state retained");
+    checks.push("Responsive 1080p/4K/zoom-equivalent/short/narrow layouts; aligned columns, pagination visible or reachable by real short-window scrolling, taller-shell resize, selection and column state retained");
     // Exercise real scroll offsets, not just scrollHeight metadata.
     extraLines = 40;
     await page.getByRole("button", { name: new RegExp("^" + PI) }).click();
