@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { LoadingActionButton } from "./LoadingActionButton";
@@ -61,10 +61,23 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
+  const overlayRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const onCancelRef = useRef(onCancel);
   const submittingRef = useRef(submitting);
+
+  useLayoutEffect(() => {
+    const banner = document.querySelector(".candidate-environment-banner");
+    if (!banner) return undefined;
+    const measure = () => overlayRef.current?.style.setProperty(
+      "--confirm-banner-height", `${Math.max(0, banner.getBoundingClientRect().bottom)}px`,
+    );
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(banner);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     onCancelRef.current = onCancel;
@@ -137,6 +150,7 @@ export function ConfirmDialog({
 
   return createPortal(
     <div
+      ref={overlayRef}
       className={`confirm-dialog-overlay${className ? ` ${className}` : ""}`}
       role="presentation"
       onClick={(event) => {

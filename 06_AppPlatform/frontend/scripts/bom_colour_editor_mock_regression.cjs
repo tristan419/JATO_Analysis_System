@@ -130,9 +130,22 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     checks.push("Both entries same editor; explicit code/material preview; correction cancel no write");
 
     await page.setViewportSize({ width: 390, height: 640 });
+    await page.evaluate(() => {
+      const banner = document.createElement("aside");
+      banner.className = "candidate-environment-banner";
+      banner.style.height = "120px";
+      banner.textContent = "Mock multi-line Candidate banner";
+      document.body.appendChild(banner);
+    });
     await swatch.click();
     const box = await editor.boundingBox();
-    assert(box.x >= 0 && box.x + box.width <= 390 && box.y >= 0 && box.y + box.height <= 640);
+    assert(box.x >= 0 && box.x + box.width <= 390 && box.y >= 120 && box.y + box.height <= 640);
+    await page.locator(".candidate-environment-banner").evaluate(el => { el.style.height = "160px"; });
+    await page.waitForFunction(() => document.querySelector(".bom-colour-confirmation")?.style.getPropertyValue("--confirm-banner-height") === "160px");
+    const title = editor.locator("h2");
+    const titleBox = await title.boundingBox();
+    assert(titleBox.y >= 160);
+    assert(await title.evaluate(el => { const r = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.x + 10, r.y + 5)); }));
     await editor.getByRole("checkbox", { name: /Dual swatch/ }).check();
     await editor.getByLabel("Second HEX", { exact: true }).fill("#222222");
     await editor.getByRole("button", { name: "Use this swatch", exact: true }).waitFor();
@@ -152,7 +165,7 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     await confirmation.getByRole("button", { name: "Back / 返回编辑", exact: true }).click();
     assert.equal(await editor.getByLabel("Shared colour name", { exact: true }).inputValue(), "New name");
     assert.equal(await editor.getByLabel("Second HEX", { exact: true }).inputValue(), "#222222");
-    checks.push("390x640 fixed footer; body scroll; invalid HEX blocks; rejected save retains dual draft");
+    checks.push("390x640 tracks 120→160px Candidate banner; uncovered title; fixed footer; body scroll; invalid HEX blocks; rejected save retains dual draft");
     failMatrix = true;
     await save.click();
     await confirmation.getByRole("button", { name: "Confirm save / 确认保存", exact: true }).click();

@@ -44,9 +44,35 @@ function renderDialog({
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("ConfirmDialog", () => {
+  it("measures the actual Candidate banner and tracks its wrapping without global layout state", () => {
+    const banner = document.createElement("aside");
+    banner.className = "candidate-environment-banner";
+    document.body.appendChild(banner);
+    const bounds = vi.spyOn(banner, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 390, 117));
+    const disconnect = vi.fn();
+    let resize: () => void = () => undefined;
+    vi.stubGlobal("ResizeObserver", class implements ResizeObserver {
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = disconnect;
+      constructor(callback: ResizeObserverCallback) { resize = () => { callback([], this); }; }
+    });
+    try {
+      const result = renderDialog();
+      const overlay = document.querySelector<HTMLElement>(".confirm-dialog-overlay");
+      expect(overlay?.style.getPropertyValue("--confirm-banner-height")).toBe("117px");
+      bounds.mockReturnValue(new DOMRect(0, 0, 390, 160));
+      resize();
+      expect(overlay?.style.getPropertyValue("--confirm-banner-height")).toBe("160px");
+      result.unmount();
+      expect(disconnect).toHaveBeenCalledTimes(1);
+    } finally { banner.remove(); }
+  });
+
   it("exposes accessible dialog semantics and initially focuses the safe cancel action", async () => {
     renderDialog();
 
