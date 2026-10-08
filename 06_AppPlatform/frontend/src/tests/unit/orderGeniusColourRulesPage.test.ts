@@ -35,7 +35,6 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("nameCandidates.map");
     expect(pageSource).toContain("No reusable Brand + Code rule");
     expect(pageSource).toContain("Wait for the Brand + Code rule check to finish.");
-    expect(pageSource).toContain("This code cannot be auto-filled: enter a colour name before saving it.");
     expect(pageSource).toContain("const BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS = 1200;");
     expect(pageSource).toContain("}, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);");
     expect(pageSource).toContain("colourCodeEditorTargetKey");
@@ -73,7 +72,7 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("invalidIdentitySkuCount");
     expect(pageSource).toContain("invalidIdentitySampleMaterialCodes");
     expect(pageSource).toContain("setOrderGeniusColourHexRuleStandard");
-    expect(pageSource).toContain("Updated shared");
+    expect(pageSource).toContain("Saved shared");
     expect(pageSource).toContain("Confirm Brand + Code standards");
     expect(pageSource).toContain("Confirm ${colourRulePreview.rules.length} shared standards");
     expect(pageSource).toContain("No conflict-free standards to confirm");
@@ -145,6 +144,7 @@ describe("Shared colour standard confirmation interactions", () => {
       summary: { totalRules: 1, fillable: 0, missing: 0, nameConflict: 1, swatchConflict: 0,
         complete: 0, fillableSkus: 0, invalidIdentitySkuCount: 0, invalidIdentitySampleMaterialCodes: [] },
     });
+    vi.spyOn(api, "lookupOrderGeniusColourHexRule").mockResolvedValue({ brand: "OMODA", colourCode: "SY", status: "none", colourName: null, colourHex: null, source: "none", hasNameConflict: false, hasSwatchConflict: false, nameCandidates: [] });
   });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -162,19 +162,19 @@ describe("Shared colour standard confirmation interactions", () => {
     expect(screen.queryByRole("dialog", { name: "Colour rule details" })).toBeNull();
     expect(screen.getByLabelText("Shared colour name").getAttribute("value")).toBe("Misty Green");
     expect(screen.getByLabelText("Primary HEX").getAttribute("value")).toBe("");
-    expect(screen.getByRole("button", { name: "Save shared colour standard" }).hasAttribute("disabled")).toBe(false);
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(false);
     expect(save).not.toHaveBeenCalled();
   });
 
   it("saves a confirmed name without submitting a placeholder HEX", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const save = vi.spyOn(api, "setOrderGeniusColourHexRuleStandard").mockResolvedValue({
       brand: "OMODA", colourCode: "SY", colourName: "Misty Green", normalizedColourName: "misty green",
       colourHex: null, updated: 3, materialCodes: ["A", "B", "C"],
     });
     await openConflict();
     fireEvent.click(screen.getByRole("button", { name: /Misty Green · Enter HEX/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Save shared colour standard" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm save / 确认保存" }));
     await waitFor(() => expect(save).toHaveBeenCalledWith({
       brand: "OMODA", colourCode: "SY", colourName: "Misty Green", colourHex: undefined,
     }));
@@ -187,15 +187,15 @@ describe("Shared colour standard confirmation interactions", () => {
     await openConflict();
     fireEvent.click(screen.getByRole("button", { name: /Misty Green · Enter HEX/ }));
     fireEvent.change(screen.getByLabelText("Primary HEX"), { target: { value: "#12345" } });
-    expect(screen.getByRole("button", { name: "Save shared colour standard" }).hasAttribute("disabled")).toBe(true);
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
     fireEvent.change(screen.getByLabelText("Primary HEX"), { target: { value: "#112233" } });
     fireEvent.click(screen.getByRole("checkbox", { name: /Dual swatch/ }));
-    expect(screen.getByRole("button", { name: "Save shared colour standard" }).hasAttribute("disabled")).toBe(true);
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
     expect(save).not.toHaveBeenCalled();
   });
 
   it("confirms the shared range and cancellation writes nothing", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirm = vi.spyOn(window, "confirm");
     const save = vi.spyOn(api, "setOrderGeniusColourHexRuleStandard").mockResolvedValue({
       brand: "OMODA", colourCode: "SY", colourName: "Misty Green", normalizedColourName: "misty green",
       colourHex: "#8BA99A", updated: 3, materialCodes: ["A", "B", "C"],
@@ -203,11 +203,14 @@ describe("Shared colour standard confirmation interactions", () => {
     await openConflict();
     fireEvent.click(screen.getByRole("button", { name: /Misty Green · Enter HEX/ }));
     fireEvent.change(screen.getByLabelText("Primary HEX"), { target: { value: "#8BA99A" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save shared colour standard" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
     expect(save).not.toHaveBeenCalled();
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("3 active SKUs"));
-    confirm.mockReturnValue(true);
-    fireEvent.click(screen.getByRole("button", { name: "Save shared colour standard" }));
+    expect(screen.getByText(/Affects 3 materials/)).toBeTruthy();
+    expect(confirm).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Back / 返回编辑" }));
+    expect(screen.getByLabelText("Primary HEX").getAttribute("value")).toBe("#8BA99A");
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm save / 确认保存" }));
     await waitFor(() => expect(save).toHaveBeenCalledWith({
       brand: "OMODA", colourCode: "SY", colourName: "Misty Green", colourHex: "#8BA99A",
     }));
@@ -252,5 +255,154 @@ describe("Shared colour standard confirmation interactions", () => {
     fireEvent.click(screen.getByRole("button", { name: /Review name conflicts/ }));
     await screen.findByRole("dialog", { name: "Colour rule details" });
     expect(apply).not.toHaveBeenCalled();
+  });
+
+  const material = { materialCode: "T6480J1BXLX0017", bomTemplate: "T6480J1**LX0017", brand: "OMODA", modelName: "OMODA9 SHS", version: "Exclusive-AWD", powertrain: "PHEV", colour: "Khaki white", colourCode: "BX", colourHex: null, colourTier: "single", interiorColorName: "Black-Red", lifecycleStatus: "active", fobByCountry: { NL: { finalFobEur: 25400 } }, rowVersion: 1 };
+  const bxRule: ColourHexRule = { ...conflict, colourCode: "BX", colourName: "Khaki white", standardColourName: "Khaki white", normalizedColourName: "khaki white", skuCount: 2, missingSwatchSkuCount: 2, status: "missing", hasNameConflict: false, nameOptions: [{ colourName: "Khaki white", normalizedColourName: "khaki white", skuCount: 2 }] };
+
+  async function openMaterial(onFobChanged = vi.fn().mockResolvedValue(undefined)) {
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue({ items: [material], countries: ["NL"] });
+    vi.spyOn(api, "getOrderGeniusColourHexRules").mockResolvedValue({ items: [bxRule], summary: { totalRules: 1, fillable: 0, missing: 1, nameConflict: 0, swatchConflict: 0, complete: 0, fillableSkus: 0, invalidIdentitySkuCount: 0, invalidIdentitySampleMaterialCodes: [] } });
+    render(createElement(BomAdminPanel, { onFobChanged }));
+    fireEvent.click(await screen.findByText("OMODA OMODA9 SHS"));
+    fireEvent.click(await screen.findByRole("button", { name: /Edit swatch rule for OMODA BX/ }));
+    return onFobChanged;
+  }
+
+  function mockSaved() {
+    return vi.spyOn(api, "setOrderGeniusColourHexRuleStandard").mockResolvedValue({ brand: "OMODA", colourCode: "BX", colourName: "Khaki white", normalizedColourName: "khaki white", colourHex: "#F2F4F8", updated: 2, materialCodes: [material.materialCode, "T6480J1BXLX0018"] });
+  }
+
+  function nameSuggestion() {
+    vi.mocked(api.lookupOrderGeniusColourHexRule).mockResolvedValue({ brand: "OMODA", colourCode: "BX", status: "complete", colourName: "Khaki white", colourHex: "#F2F4F8", source: "name_candidate", hasNameConflict: false, hasSwatchConflict: false, nameCandidates: [{ brand: "OMODA", colourCode: "BW", colourName: "Khaki white", colourHex: "#F2F4F8", status: "complete", hasNameConflict: false, hasSwatchConflict: false }] });
+  }
+
+  it("opens the same compact editor from swatch and colour text, keeping code read-only", async () => {
+    await openMaterial();
+    expect(screen.getByRole("dialog", { name: "Edit colour · OMODA · BX" })).toBeTruthy();
+    expect(screen.queryByLabelText("Colour code")).toBeNull();
+    expect(screen.getByRole("button", { name: "Correct code" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByText("BX", { exact: true }));
+    expect(screen.getByRole("dialog", { name: "Edit colour · OMODA · BX" })).toBeTruthy();
+    expect(screen.getByLabelText("Primary HEX").getAttribute("value")).toBe("");
+  });
+
+  it("does not adopt a same-name different-code swatch unless explicitly chosen", async () => {
+    nameSuggestion();
+    const save = mockSaved();
+    await openMaterial();
+    await screen.findByText("Suggested from OMODA · BW", {}, { timeout: 3000 });
+    expect(screen.getByLabelText("Primary HEX").getAttribute("value")).toBe("");
+    fireEvent.change(screen.getByLabelText("Shared colour name"), { target: { value: "Reviewed white" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm save / 确认保存" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ brand: "OMODA", colourCode: "BX", colourName: "Reviewed white", colourHex: undefined }));
+  });
+
+  it("adopts BW HEX into BX draft, confirmation and request without touching the picker", async () => {
+    nameSuggestion();
+    const save = mockSaved();
+    const move = vi.spyOn(api, "updateColourCode");
+    const refreshSelection = await openMaterial();
+    fireEvent.click(await screen.findByRole("button", { name: "Use this swatch" }, { timeout: 3000 }));
+    expect(screen.getByLabelText("Primary HEX").getAttribute("value")).toBe("#F2F4F8");
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    expect(screen.getByText("Suggested from OMODA · BW")).toBeTruthy();
+    expect(screen.getByText("#F2F4F8")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm save / 确认保存" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ brand: "OMODA", colourCode: "BX", colourName: "Khaki white", colourHex: "#F2F4F8" }));
+    await waitFor(() => expect(refreshSelection).toHaveBeenCalledTimes(1));
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("submits authoritative same-code HEX auto-filled into the actual draft", async () => {
+    vi.mocked(api.lookupOrderGeniusColourHexRule).mockResolvedValue({ brand: "OMODA", colourCode: "BX", status: "complete", colourName: "Khaki white", colourHex: "#ECEEF4", source: "persistent_rule", hasNameConflict: false, hasSwatchConflict: false, nameCandidates: [] });
+    const save = mockSaved();
+    await openMaterial();
+    await waitFor(() => expect(screen.getByLabelText("Primary HEX").getAttribute("value")).toBe("#ECEEF4"), { timeout: 3000 });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm save / 确认保存" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ brand: "OMODA", colourCode: "BX", colourName: "Khaki white", colourHex: "#ECEEF4" }));
+  });
+
+  it("keeps unchanged saves read-only and exposes code/material preview only after Correct code", async () => {
+    const save = mockSaved();
+    const move = vi.spyOn(api, "updateColourCode");
+    await openMaterial();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    expect(screen.getByText(/No actual changes/)).toBeTruthy();
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Edit swatch rule for OMODA BX/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Correct code" }));
+    fireEvent.change(screen.getByLabelText("Colour code"), { target: { value: "ZZ" } });
+    fireEvent.change(screen.getByLabelText("Shared colour name"), { target: { value: "Reviewed white" } });
+    await waitFor(() => expect(screen.queryByText(/Checking Brand \+ Code/)).toBeNull(), { timeout: 3000 });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("dialog", { name: /Confirm code correction/ })).toBeTruthy();
+    expect(screen.getByText("BX → ZZ")).toBeTruthy();
+    expect(screen.getByText("T6480J1BXLX0017 → T6480J1ZZLX0017")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back / 返回编辑" }));
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("retains failed-save input and prevents duplicate confirmation while saving", async () => {
+    let rejectSave: (reason: Error) => void = () => undefined;
+    const save = vi.spyOn(api, "setOrderGeniusColourHexRuleStandard").mockImplementation(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    await openMaterial();
+    fireEvent.change(screen.getByLabelText("Primary HEX"), { target: { value: "#112233" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    const confirm = screen.getByRole("button", { name: "Confirm save / 确认保存" });
+    fireEvent.click(confirm); fireEvent.click(confirm);
+    expect(save).toHaveBeenCalledTimes(1);
+    rejectSave(new Error("Denied"));
+    await screen.findByText(/Save failed; draft kept/);
+    fireEvent.click(screen.getByRole("button", { name: "Back / 返回编辑" }));
+    expect(screen.getByLabelText("Primary HEX").getAttribute("value")).toBe("#112233");
+  });
+
+  it("reports saved-but-refresh-failed and retries only reads including selection", async () => {
+    const refreshSelection = vi.fn().mockRejectedValueOnce(new Error("Selection unavailable")).mockResolvedValue(undefined);
+    const save = mockSaved();
+    await openMaterial(refreshSelection);
+    fireEvent.change(screen.getByLabelText("Primary HEX"), { target: { value: "#112233" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm save / 确认保存" }));
+    await screen.findByText(/Saved, but refresh failed/);
+    expect(screen.queryByLabelText("Primary HEX")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Re-read saved colour/ }));
+    await screen.findByText(/Tables refreshed/);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(refreshSelection).toHaveBeenCalledTimes(2);
+    expect(api.getBomAdmin).toHaveBeenCalledTimes(3);
+    expect(api.getOrderGeniusColourHexRules).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["BOM", "rules"])("treats a failed %s re-read as saved and never repeats its write", async (failedRead) => {
+    const save = mockSaved();
+    await openMaterial();
+    if (failedRead === "BOM") vi.mocked(api.getBomAdmin).mockRejectedValueOnce(new Error("BOM unavailable"));
+    else vi.mocked(api.getOrderGeniusColourHexRules).mockRejectedValueOnce(new Error("Rules unavailable"));
+    fireEvent.change(screen.getByLabelText("Primary HEX"), { target: { value: "#112233" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm save / 确认保存" }));
+    await screen.findByText(/Saved, but refresh failed/);
+    fireEvent.click(screen.getByRole("button", { name: /Re-read saved colour/ }));
+    await screen.findByText(/Tables refreshed/);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a late authoritative lookup after the user has entered confirmation", async () => {
+    let resolveLookup: (value: Awaited<ReturnType<typeof api.lookupOrderGeniusColourHexRule>>) => void = () => undefined;
+    vi.mocked(api.lookupOrderGeniusColourHexRule).mockImplementation(() => new Promise(resolve => { resolveLookup = resolve; }));
+    const save = mockSaved();
+    await openMaterial();
+    await waitFor(() => expect(api.lookupOrderGeniusColourHexRule).toHaveBeenCalled(), { timeout: 3000 });
+    fireEvent.change(screen.getByLabelText("Primary HEX"), { target: { value: "#112233" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    resolveLookup({ brand: "OMODA", colourCode: "BX", status: "complete", colourName: "Late name", colourHex: "#EEEEEE", source: "persistent_rule", hasNameConflict: false, hasSwatchConflict: false, nameCandidates: [] });
+    await waitFor(() => expect(screen.queryByText("#EEEEEE")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Confirm save / 确认保存" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ brand: "OMODA", colourCode: "BX", colourName: "Khaki white", colourHex: "#112233" }));
   });
 });

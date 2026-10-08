@@ -1,4 +1,5 @@
 export const MISSING_COLOUR_SWATCH_HEX = "#94A3B8";
+export const MISSING_COLOUR_SWATCH_BACKGROUND = "repeating-conic-gradient(#CBD5E1 0% 25%, #FFFFFF 0% 50%) 0 / 8px 8px";
 
 const COLOUR_HEX_PATTERN = /^#[0-9A-F]{6}$/;
 
@@ -24,7 +25,7 @@ export function parseOrderGeniusColourSwatch(value: unknown): OrderGeniusColourS
   ) {
     return {
       colours: [MISSING_COLOUR_SWATCH_HEX],
-      background: MISSING_COLOUR_SWATCH_HEX,
+      background: MISSING_COLOUR_SWATCH_BACKGROUND,
       isDual: false,
       isMissing: true,
     };
