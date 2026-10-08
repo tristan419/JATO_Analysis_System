@@ -10989,8 +10989,14 @@ table.data-table tr.data-table-group-row.contains-selection td {
   backdrop-filter: blur(4px);
 }
 
-.confirm-dialog-overlay.bom-colour-confirmation { z-index: 4300; }
-.bom-colour-confirmation .confirm-dialog { width: min(560px, 100%); }
+.confirm-dialog-overlay.bom-colour-confirmation {
+  z-index: 4300;
+  top: var(--confirm-banner-height, 0px);
+}
+.bom-colour-confirmation .confirm-dialog {
+  width: min(560px, 100%);
+  max-height: min(820px, calc(100dvh - var(--confirm-banner-height, 0px) - 48px));
+}
 .bom-colour-edit-fields { display: grid; gap: 12px; }
 .bom-colour-edit-fields > label { display: grid; gap: 5px; font-size: 13px; color: #334155; }
 .bom-colour-edit-fields input:not([type="checkbox"]):not([type="color"]) {
