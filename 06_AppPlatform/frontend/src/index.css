@@ -10989,6 +10989,29 @@ table.data-table tr.data-table-group-row.contains-selection td {
   backdrop-filter: blur(4px);
 }
 
+.confirm-dialog-overlay.bom-colour-confirmation { z-index: 4300; }
+.bom-colour-confirmation .confirm-dialog { width: min(560px, 100%); }
+.bom-colour-edit-fields { display: grid; gap: 12px; }
+.bom-colour-edit-fields > label { display: grid; gap: 5px; font-size: 13px; color: #334155; }
+.bom-colour-edit-fields input:not([type="checkbox"]):not([type="color"]) {
+  width: 100%; min-width: 0; height: 36px; padding: 6px 10px;
+  border: 1px solid #cbd5e1; border-radius: 5px; background: #fff; color: #0f172a;
+}
+.bom-colour-edit-fields small, .bom-colour-edit-fields p { margin: 0; color: #475569; overflow-wrap: anywhere; }
+.bom-colour-edit-fields .bom-colour-edit-dual { display: flex; align-items: center; gap: 6px; }
+.bom-colour-edit-code, .bom-colour-edit-suggestion { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bom-colour-edit-code { justify-content: space-between; }
+.bom-colour-edit-code .btn { font-size: 11px; }
+.bom-colour-edit-suggestion { padding: 8px; background: #f1f5f9; border-radius: 5px; font-size: 12px; }
+.bom-colour-edit-suggestion > span:nth-child(2) { flex: 1; }
+.bom-colour-edit-swatch { display: inline-block; width: 30px; height: 30px; border: 1px solid #cbd5e1; border-radius: 4px; flex-shrink: 0; }
+.bom-colour-edit-hex { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 8px; align-items: center; }
+.bom-colour-picker { position: relative; height: 30px; }
+.bom-colour-picker input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.bom-colour-picker:focus-within { outline: 2px solid #2563eb; outline-offset: 2px; }
+.bom-colour-edit-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.bom-colour-edit-comparison > div { display: grid; gap: 6px; padding: 10px; border: 1px solid #e2e8f0; border-radius: 5px; overflow-wrap: anywhere; }
+
 .confirm-dialog {
   position: relative;
   display: grid;

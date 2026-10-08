@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, AUTH_FAILURE_EVENT } from "../../api/client";
 import {
   buildOrderGeniusColourSwatch,
-  MISSING_COLOUR_SWATCH_HEX,
+  MISSING_COLOUR_SWATCH_BACKGROUND,
   parseOrderGeniusColourSwatch,
 } from "../../utils/orderGeniusColourSwatch";
 
@@ -34,10 +34,11 @@ describe("Order Genius colour swatches", () => {
 
   it("treats an absent or partly invalid database value as missing", () => {
     expect(parseOrderGeniusColourSwatch(null)).toMatchObject({
-      background: MISSING_COLOUR_SWATCH_HEX, isMissing: true,
+      background: MISSING_COLOUR_SWATCH_BACKGROUND, isMissing: true,
     });
     expect(parseOrderGeniusColourSwatch("#FF0000|bad").isMissing).toBe(true);
     expect(parseOrderGeniusColourSwatch("#FF0000|#00FF00|#0000FF").isMissing).toBe(true);
+    expect(parseOrderGeniusColourSwatch("#94A3B8")).toMatchObject({ background: "#94A3B8", isMissing: false });
   });
 
   it("builds normalized single and dual payloads", () => {

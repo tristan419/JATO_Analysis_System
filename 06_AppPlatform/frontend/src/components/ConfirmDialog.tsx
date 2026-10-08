@@ -20,6 +20,7 @@ export interface ConfirmDialogError {
 }
 
 interface ConfirmDialogProps {
+  className?: string;
   title: string;
   description: ReactNode;
   children?: ReactNode;
@@ -27,6 +28,7 @@ interface ConfirmDialogProps {
   confirmLabel: string;
   loadingLabel: string;
   submitting: boolean;
+  confirmDisabled?: boolean;
   error: ConfirmDialogError | null;
   tone?: ConfirmDialogTone;
   onCancel: () => void;
@@ -43,6 +45,7 @@ const focusableSelector = [
 ].join(",");
 
 export function ConfirmDialog({
+  className,
   title,
   description,
   children,
@@ -50,6 +53,7 @@ export function ConfirmDialog({
   confirmLabel,
   loadingLabel,
   submitting,
+  confirmDisabled = false,
   error,
   tone = "default",
   onCancel,
@@ -133,7 +137,7 @@ export function ConfirmDialog({
 
   return createPortal(
     <div
-      className="confirm-dialog-overlay"
+      className={`confirm-dialog-overlay${className ? ` ${className}` : ""}`}
       role="presentation"
       onClick={(event) => {
         if (event.target === event.currentTarget && !submitting) {
@@ -205,7 +209,7 @@ export function ConfirmDialog({
             variant={tone === "danger" ? "danger" : "primary"}
             loading={submitting}
             loadingLabel={loadingLabel}
-            disabled={error?.retryBlocked}
+            disabled={confirmDisabled || error?.retryBlocked}
             onClick={onConfirm}
           >
             {confirmLabel}
