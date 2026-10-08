@@ -562,14 +562,14 @@ def set_colour_hex_rule_standard(
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("editor")),
 ) -> dict:
-    """Apply one chosen name and swatch to a brand+code colour rule."""
+    """Confirm a shared name, optionally updating its single/dual swatch."""
     try:
         result = repo.set_standard_colour_hex_for_rule(
             session,
             brand=str(body.get("brand") or ""),
             colour_code=str(body.get("colourCode", body.get("colour_code")) or ""),
             colour_name=str(body.get("colourName", body.get("colour_name")) or ""),
-            colour_hex=str(body.get("colourHex", body.get("colour_hex")) or ""),
+            colour_hex=body.get("colourHex", body.get("colour_hex")),
         )
     except ValueError as exc:
         session.rollback()

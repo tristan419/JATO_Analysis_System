@@ -304,16 +304,29 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
             )
             continue
 
+        # Keep carry-forward/forward references inside material blocks. A blank
+        # separator ends the block; isolated footer text is not an interior row.
+        material_row_indexes: list[int] = []
+        in_material_block = False
+        context_columns = (idx_code_name, idx_full_name, idx_config, idx_bom, idx_ext_colour)
+        for i in range(header_idx + 1, len(raw_rows)):
+            row = raw_rows[i]
+            if not any(value is not None and str(value).strip() for value in row):
+                in_material_block = False
+                continue
+            if any(0 <= column < len(row) and row[column] is not None
+                   and str(row[column]).strip() for column in context_columns):
+                in_material_block = True
+            if in_material_block:
+                material_row_indexes.append(i)
+
         # ── Pass 1: collect interior → BOM-template mappings ──────
         # Must run BEFORE the main pass because interior rows may appear
         # after colour rows in the Excel — a forward-reference problem.
         _pass1_model: dict[str, str] = {"code_name": "", "full_name": "", "configuration": "", "bom": ""}
-        for i in range(header_idx + 1, len(raw_rows)):
+        for i in material_row_indexes:
             row = raw_rows[i]
             if idx_int_colour < 0 or len(row) <= max(idx_int_colour, idx_bom if idx_bom >= 0 else 0):
-                continue
-            int_val = row[idx_int_colour]
-            if int_val is None or not str(int_val).strip():
                 continue
             # Carry-forward model fields
             if idx_code_name >= 0 and idx_code_name < len(row) and row[idx_code_name]:
@@ -324,6 +337,9 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
                 _pass1_model["configuration"] = str(row[idx_config]).strip()
             if idx_bom >= 0 and idx_bom < len(row) and row[idx_bom]:
                 _pass1_model["bom"] = str(row[idx_bom]).strip()
+            int_val = row[idx_int_colour]
+            if int_val is None or not str(int_val).strip():
+                continue
             bom_raw = _pass1_model.get("bom", "")
             bom_tmpl = _extract_bom_template(bom_raw) if bom_raw else None
             raw_int = str(int_val).strip()
@@ -346,7 +362,7 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
             "interior_bom_template": "",
         }
 
-        for i in range(header_idx + 1, len(raw_rows)):
+        for i in material_row_indexes:
             row = raw_rows[i]
             if len(row) <= idx_ext_colour:
                 continue

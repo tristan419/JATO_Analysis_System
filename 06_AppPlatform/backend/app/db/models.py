@@ -1975,7 +1975,7 @@ class BrandColourSwatchRule(TimestampMixin, Base):
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     colour_code: Mapped[str] = mapped_column(Text, nullable=False)
     colour_name: Mapped[str] = mapped_column(Text, nullable=False)
-    colour_hex: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 

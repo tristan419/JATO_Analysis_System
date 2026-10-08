@@ -1,5 +1,11 @@
 # BOM Colour Rules 统一目标与实施契约
 
+> 本文原 2026-08 实施/发布记录为历史，不作为当前状态或待办。当前统一契约见交接目录 ORDER_GENIUS_GOAL_EXECUTE_2026-09-28.md / ORDER_GENIUS_PROGRESS_2026-09-24.md。
+>
+> 2026-10-08 当前补修：页尾独立注释不进入内饰映射；名称/HEX 冲突组从批量标准 Preview/Apply 排除，逐组确认，不按多数名称覆盖。缺 HEX 独立计数/筛选，可与冲突重叠。单组编辑允许只保存名称；未提交 HEX 保留物料现有值，不保存占位灰、不掩盖缺 HEX 或 HEX 冲突；已填 HEX 必须完整有效。从详情切换编辑时关闭原详情层。共享保存同步同品牌＋色码有效 SKU（含 phase_out），BOM/选品共用显示；不改物料号/tier/FOB/动力/生命周期或历史 PI。只调整现有标准表 HEX 可空，无新表/依赖；确认值不写死。XLSX 核对通过 skill 复用解析器/同一业务 API，保留人工修改；局部文件不能调用完整基线替换。该补修待送 Candidate，正式数据仍需独立授权。现行规则只看 handover 的 Goal 3.8。
+
+## 历史契约与实施记录（以下非当前待办）
+
 > Goal ID: `bom-colour-rules-unified`
 >
 > 状态：`DRAFT_PR_CI_GREEN`
