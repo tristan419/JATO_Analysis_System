@@ -1572,7 +1572,7 @@ def test_preview_and_apply_colour_rule_fills_use_same_material_codes() -> None:
     )
 
 
-def test_colour_rule_apply_generates_and_persists_one_shared_standard() -> None:
+def test_colour_rule_apply_fills_missing_name_without_guessing_hex() -> None:
     first = SimpleNamespace(
         material_code="A",
         brand="JAECOO",
@@ -1585,7 +1585,7 @@ def test_colour_rule_apply_generates_and_persists_one_shared_standard() -> None:
         material_code="B",
         brand="JAECOO",
         exterior_color_code="BW",
-        exterior_color_name="Khaki white",
+        exterior_color_name="BW",
         colour_hex=None,
         updated_at_utc=None,
     )
@@ -1594,20 +1594,20 @@ def test_colour_rule_apply_generates_and_persists_one_shared_standard() -> None:
     preview = repo.preview_colour_rule_fills(session)
 
     assert preview["ruleCount"] == 1
-    assert preview["generatedRuleCount"] == 1
+    assert preview["generatedRuleCount"] == 0
     assert preview["rules"][0] == {
         "brand": "JAECOO",
         "colourCode": "BW",
         "colourName": "Khaki white",
-        "colourHex": "#F0ECE0",
-        "source": "generated_from_name",
+        "colourHex": None,
+        "source": "existing_sku",
         "skuCount": 2,
         "hasNameConflict": False,
         "hasSwatchConflict": False,
         "nameOptions": [{
             "colourName": "Khaki white",
             "normalizedColourName": "khaki white",
-            "skuCount": 2,
+            "skuCount": 1,
         }],
     }
 
@@ -1618,9 +1618,10 @@ def test_colour_rule_apply_generates_and_persists_one_shared_standard() -> None:
     )
 
     assert result["rulesCreated"] == 1
-    assert result["generatedRules"] == 1
-    assert result["updated"] == 2
-    assert first.colour_hex == second.colour_hex == "#F0ECE0"
+    assert result["generatedRules"] == 0
+    assert result["updated"] == 1
+    assert first.colour_hex is second.colour_hex is None
+    assert second.exterior_color_name == "Khaki white"
     assert isinstance(session.added[0], BrandColourSwatchRule)
 
     session.execute_values.append(session.added[0])
@@ -1677,6 +1678,8 @@ def test_colour_rule_batch_excludes_hex_conflicts_and_only_fills_missing_hex() -
                         exterior_color_name="Black & Gray", colour_hex="#111111|#888888", updated_at_utc=None),
         SimpleNamespace(material_code="C", brand="OMODA", exterior_color_code="BW",
                         exterior_color_name="Khaki white", colour_hex=None, updated_at_utc=None),
+        SimpleNamespace(material_code="D", brand="OMODA", exterior_color_code="BW",
+                        exterior_color_name="Khaki white", colour_hex="#F0ECE0", updated_at_utc=None),
     ]
     session = _FakeSession(rows)
     preview = repo.preview_colour_rule_fills(session)
@@ -1716,7 +1719,67 @@ def test_colour_rule_preview_never_regenerates_a_persistent_standard() -> None:
 
     assert preview["rules"] == []
     assert preview["items"] == []
+    assert preview["unresolvedConflictCount"] == 1
     assert session.added == []
+
+
+@pytest.mark.parametrize("hex_value", [None, "#112233"])
+def test_existing_standard_fills_only_missing_fields_and_repeats_zero(hex_value) -> None:
+    standard = BrandColourSwatchRule(brand="OMODA", colour_code="BW", colour_name="Khaki white",
+                                    colour_hex=hex_value, is_active=True)
+    first = SimpleNamespace(material_code="A", brand="OMODA", exterior_color_code="BW",
+                            exterior_color_name="Khaki white", colour_hex=hex_value, row_version=3)
+    missing = SimpleNamespace(material_code="B", brand="OMODA", exterior_color_code="BW",
+                              exterior_color_name="", colour_hex=None, row_version=7)
+    class ColourSession(_FakeSession):
+        def execute(self, stmt):
+            model = BrandColourSwatchRule if "brand_colour_swatch_rule" in str(stmt) else SimpleNamespace
+            return _ExecuteResult([row for row in self.execute_values if isinstance(row, model)])
+    session = ColourSession([first, missing, standard])
+    preview = repo.preview_colour_rule_fills(session)
+    assert preview["rules"][0]["source"] == "persistent_rule"
+    assert [item["materialCode"] for item in preview["items"]] == ["B"]
+    assert missing.exterior_color_name == "" and missing.colour_hex is None
+    assert session.added == []
+    result = repo.apply_colour_rule_fills(session, ["B"], preview["fingerprint"])
+    assert result["updated"] == 1 and result["rulesCreated"] == 0
+    assert missing.exterior_color_name == "Khaki white" and missing.colour_hex == hex_value
+    assert missing.row_version == 8 and first.row_version == 3
+    repeated = repo.preview_colour_rule_fills(session)
+    assert repeated["items"] == [] and repeated["rules"] == []
+    assert repo.apply_colour_rule_fills(session, [], repeated["fingerprint"])["updated"] == 0
+
+
+@pytest.mark.parametrize("field,value,flag", [
+    ("exterior_color_name", "Different white", "hasNameConflict"),
+    ("colour_hex", "#445566", "hasSwatchConflict"),
+])
+def test_standard_mismatch_remains_visible_and_excludes_whole_fill_group(field, value, flag) -> None:
+    standard = BrandColourSwatchRule(brand="OMODA", colour_code="BW", colour_name="Khaki white",
+                                    colour_hex="#112233", is_active=True)
+    row = SimpleNamespace(material_code="A", brand="OMODA", exterior_color_code="BW",
+                          exterior_color_name="Khaki white", colour_hex="#112233")
+    setattr(row, field, value)
+    missing = SimpleNamespace(material_code="B", brand="OMODA", exterior_color_code="BW",
+                              exterior_color_name="BW", colour_hex=None)
+    session = _FakeSession([row, missing, standard])
+    rule = repo.list_colour_hex_rules(session)[0]
+    assert rule[flag] is True and rule["fillableSkuCount"] == 0
+    lookup = repo.lookup_colour_rule(session, "OMODA", "BW")
+    assert lookup[flag] is True
+    preview = repo.preview_colour_rule_fills(session)
+    assert preview["items"] == [] and preview["unresolvedConflictCount"] == 1
+    assert missing.exterior_color_name == "BW" and missing.colour_hex is None
+
+
+def test_same_name_other_code_cannot_supply_batch_hex() -> None:
+    rows = [SimpleNamespace(material_code="A", brand="OMODA", exterior_color_code="BW",
+                            exterior_color_name="Khaki white", colour_hex="#112233"),
+            SimpleNamespace(material_code="B", brand="OMODA", exterior_color_code="BX",
+                            exterior_color_name="BX", colour_hex=None)]
+    preview = repo.preview_colour_rule_fills(_FakeSession(rows))
+    assert preview["items"] == [] and preview["unresolvedRuleCount"] == 1
+    assert preview["generatedRuleCount"] == 0
 
 
 def test_preview_and_apply_exclude_inactive_skus() -> None:
@@ -1919,6 +1982,35 @@ def test_patch_colour_code_rejects_unknown_code_without_name(monkeypatch) -> Non
     assert sku.exterior_color_code == "X4"
     assert sku.exterior_color_name == "Old dual"
     assert sku.colour_hex == "#111111|#CCCCCC"
+    assert session.committed is False
+
+
+@pytest.mark.parametrize("original_hex", [None, "#123456"])
+def test_code_correction_omitted_hex_keeps_original_without_adopting_suggestion(monkeypatch, original_hex) -> None:
+    session = _CreateMaterialSession()
+    sku = SimpleNamespace(material_code="T7000NHX4MY0002", brand="OMODA", exterior_color_code="X4",
+                          exterior_color_name="Original", colour_hex=original_hex,
+                          bom_template="T7000NH**MY0002")
+    monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
+    monkeypatch.setattr(repo, "update_bom_template_material_codes", lambda *_: {sku.material_code: "T7000NHZZMY0002"})
+    monkeypatch.setattr(repo, "resolve_colour_attributes", lambda *_args, **_kwargs: pytest.fail("Save must not adopt lookup suggestions"))
+    result = order_genius_routes.patch_colour_code(sku.material_code, {"colourCode": "ZZ", "colourName": "Khaki white"}, session=session)
+    assert result["colourName"] == "Khaki white" and result["colourHex"] == original_hex
+    assert sku.colour_hex == original_hex and session.committed is True
+
+
+def test_code_correction_rejects_unconfirmed_target_display_difference(monkeypatch) -> None:
+    standard = BrandColourSwatchRule(brand="OMODA", colour_code="ZZ", colour_name="Khaki white",
+                                    colour_hex="#F2F4F8", is_active=True)
+    session = _CreateMaterialSession()
+    session.execute_values = [standard]
+    sku = SimpleNamespace(material_code="SOURCE", brand="OMODA", exterior_color_code="BX",
+                          exterior_color_name="Khaki white", colour_hex="#123456", bom_template="SOURCE")
+    monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
+    with pytest.raises(HTTPException) as error:
+        order_genius_routes.patch_colour_code("SOURCE", {"colourCode": "ZZ", "colourName": "Khaki white"}, session=session)
+    assert error.value.status_code == 409
+    assert sku.exterior_color_code == "BX" and sku.colour_hex == "#123456"
     assert session.committed is False
 
 

@@ -287,15 +287,15 @@ export interface ColourHexRulePreviewItem {
   oldColourName: string | null;
   newColourName: string;
   oldColourHex: string | null;
-  newColourHex: string;
+  newColourHex: string | null;
 }
 
 export interface ColourHexRulePreviewRule {
   brand: string;
   colourCode: string;
   colourName: string;
-  colourHex: string;
-  source: "existing_sku" | "generated_from_name";
+  colourHex: string | null;
+  source: "existing_sku" | "persistent_rule";
   skuCount: number;
   hasNameConflict: boolean;
   hasSwatchConflict: boolean;
