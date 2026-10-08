@@ -67,7 +67,26 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20261004_0053"]
+    assert sorted(revisions - parent_revisions) == ["20261008_0054"]
+
+
+def test_optional_colour_hex_revision_only_changes_existing_nullability() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "colour_standard_revision_0054", VERSIONS_DIR / "20261008_0054_colour_standard_optional_hex.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = StringIO()
+    module.op = Operations(MigrationContext.configure(
+        dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output},
+    ))
+    module.upgrade()
+    assert "ALTER TABLE ordering.brand_colour_swatch_rule ALTER COLUMN colour_hex DROP NOT NULL" in output.getvalue()
+    assert "UPDATE" not in output.getvalue()
+    assert "DELETE" not in output.getvalue()
+    module.downgrade()
+    assert "ALTER COLUMN colour_hex SET NOT NULL" in output.getvalue()
 
 
 def test_fob_period_deletion_intent_revision_preserves_active_periods_and_history() -> None:

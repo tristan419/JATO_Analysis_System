@@ -162,6 +162,34 @@ describe("Shared colour standard confirmation interactions", () => {
     expect(screen.queryByRole("dialog", { name: "Colour rule details" })).toBeNull();
     expect(screen.getByLabelText("Shared colour name").getAttribute("value")).toBe("Misty Green");
     expect(screen.getByLabelText("Primary HEX").getAttribute("value")).toBe("");
+    expect(screen.getByRole("button", { name: "Save shared colour standard" }).hasAttribute("disabled")).toBe(false);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("saves a confirmed name without submitting a placeholder HEX", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const save = vi.spyOn(api, "setOrderGeniusColourHexRuleStandard").mockResolvedValue({
+      brand: "OMODA", colourCode: "SY", colourName: "Misty Green", normalizedColourName: "misty green",
+      colourHex: null, updated: 3, materialCodes: ["A", "B", "C"],
+    });
+    await openConflict();
+    fireEvent.click(screen.getByRole("button", { name: /Misty Green · Enter HEX/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save shared colour standard" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({
+      brand: "OMODA", colourCode: "SY", colourName: "Misty Green", colourHex: undefined,
+    }));
+    await waitFor(() => expect(screen.queryByLabelText("Shared colour name")).toBeNull());
+    expect(api.getBomAdmin).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects invalid or incomplete dual HEX instead of saving half a swatch", async () => {
+    const save = vi.spyOn(api, "setOrderGeniusColourHexRuleStandard");
+    await openConflict();
+    fireEvent.click(screen.getByRole("button", { name: /Misty Green · Enter HEX/ }));
+    fireEvent.change(screen.getByLabelText("Primary HEX"), { target: { value: "#12345" } });
+    expect(screen.getByRole("button", { name: "Save shared colour standard" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.change(screen.getByLabelText("Primary HEX"), { target: { value: "#112233" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Dual swatch/ }));
     expect(screen.getByRole("button", { name: "Save shared colour standard" }).hasAttribute("disabled")).toBe(true);
     expect(save).not.toHaveBeenCalled();
   });

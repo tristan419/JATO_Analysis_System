@@ -2596,7 +2596,7 @@ def resolve_colour_display_values(
     )
     standard = standards.get(key) if standards and key else None
     if standard is not None:
-        return standard.colour_name, standard.colour_hex
+        return standard.colour_name, standard.colour_hex or getattr(sku, "colour_hex", None)
     return (
         str(getattr(sku, "exterior_color_name", "") or "") or None,
         getattr(sku, "colour_hex", None),
@@ -2622,7 +2622,7 @@ def _persistent_colour_standard_candidates(
             "colourCode": row.colour_code,
             "colourName": row.colour_name,
             "colourHex": row.colour_hex,
-            "status": "complete",
+            "status": "complete" if row.colour_hex else "missing",
             "hasNameConflict": False,
             "hasSwatchConflict": False,
         })
@@ -2634,11 +2634,11 @@ def _upsert_persistent_colour_standard(
     brand: str,
     colour_code: str,
     colour_name: str,
-    colour_hex: str,
+    colour_hex: str | None,
 ) -> BrandColourSwatchRule:
     standard_hex = normalize_colour_hex_value(colour_hex)
-    if standard_hex is None:
-        raise ValueError("colourHex is required")
+    if colour_hex is not None and standard_hex is None:
+        raise ValueError("colourHex must be valid when supplied; omit it to keep existing swatches")
     key = _colour_rule_key(brand, colour_code)
     if key is None:
         raise ValueError("brand and colourCode are required")
@@ -2653,9 +2653,11 @@ def _upsert_persistent_colour_standard(
         )
     ).scalars().first()
     if isinstance(existing, BrandColourSwatchRule):
-        existing.colour_name = standard_name
-        existing.colour_hex = standard_hex
-        existing.updated_at_utc = datetime.now(timezone.utc)
+        if existing.colour_name != standard_name or (standard_hex is not None and existing.colour_hex != standard_hex):
+            existing.colour_name = standard_name
+            if standard_hex is not None:
+                existing.colour_hex = standard_hex
+            existing.updated_at_utc = datetime.now(timezone.utc)
         return existing
     standard = BrandColourSwatchRule(
         brand_colour_swatch_rule_id=uuid4(),
@@ -2781,7 +2783,7 @@ def list_colour_hex_rules(session: Session) -> list[dict]:
                 "missingSwatchSkuCount": 0,
                 "colourName": standard.colour_name,
                 "normalizedColourName": normalize_colour_rule_name(standard.colour_name),
-                "status": "complete",
+                "status": "complete" if standard.colour_hex else "missing",
                 "standardColourName": standard.colour_name,
                 "standardColourHex": standard.colour_hex,
                 "nameOptions": [{
@@ -2789,7 +2791,7 @@ def list_colour_hex_rules(session: Session) -> list[dict]:
                     "normalizedColourName": normalize_colour_rule_name(standard.colour_name),
                     "skuCount": 0,
                 }],
-                "hexOptions": [{"colourHex": standard.colour_hex, "skuCount": 0}],
+                "hexOptions": [{"colourHex": standard.colour_hex, "skuCount": 0}] if standard.colour_hex else [],
                 "hasNameConflict": False,
                 "hasSwatchConflict": False,
                 "fillableSkuCount": 0,
@@ -2801,19 +2803,28 @@ def list_colour_hex_rules(session: Session) -> list[dict]:
             rule["colourName"] = standard.colour_name
             rule["normalizedColourName"] = normalize_colour_rule_name(standard.colour_name)
             rule["standardColourName"] = standard.colour_name
-            rule["standardColourHex"] = standard.colour_hex
-            rule["status"] = "complete"
+            if standard.colour_hex:
+                rule["standardColourHex"] = standard.colour_hex
+                rule["status"] = "complete"
             rule["nameOptions"] = [{
                 "colourName": standard.colour_name,
                 "normalizedColourName": normalize_colour_rule_name(standard.colour_name),
                 "skuCount": int(rule.get("skuCount") or 0),
             }]
-            rule["hexOptions"] = [{
-                "colourHex": standard.colour_hex,
-                "skuCount": int(rule.get("skuCount") or 0),
-            }]
+            if standard.colour_hex:
+                rule["hexOptions"] = [{
+                    "colourHex": standard.colour_hex,
+                    "skuCount": int(rule.get("skuCount") or 0),
+                }]
             rule["hasNameConflict"] = False
-            rule["hasSwatchConflict"] = False
+            if standard.colour_hex:
+                rule["hasSwatchConflict"] = False
+            else:
+                rule["status"] = (
+                    "swatch_conflict" if rule["hasSwatchConflict"] else
+                    "missing" if rule["missingSwatchSkuCount"] or not rule["hexOptions"] else
+                    "complete"
+                )
             rule["fillableSkuCount"] = 0
             rule["previewChanges"] = []
     status_rank = dict(name_conflict=0, swatch_conflict=1, missing=2, fillable=3, complete=4)
@@ -3010,7 +3021,7 @@ def lookup_colour_rule(
             return {
                 "brand": normalized_brand,
                 "colourCode": normalized_code,
-                "status": "complete",
+                "status": "complete" if persistent.colour_hex else "missing",
                 "colourName": persistent.colour_name,
                 "colourHex": persistent.colour_hex,
                 "source": "persistent_rule",
@@ -3217,9 +3228,9 @@ def set_standard_colour_hex_for_rule(
     brand: str,
     colour_code: str,
     colour_name: str,
-    colour_hex: str,
+    colour_hex: str | None = None,
 ) -> dict:
-    """Resolve a brand+code conflict by applying one chosen name and swatch."""
+    """Confirm a shared name; an omitted swatch preserves every existing HEX."""
     key = _colour_rule_key(brand, colour_code)
     if key is None:
         raise ValueError("brand and colourCode are required")
@@ -3242,9 +3253,13 @@ def set_standard_colour_hex_for_rule(
     updated_codes: list[str] = []
     now = datetime.now(timezone.utc)
     for sku in candidates:
+        new_hex = standard.colour_hex if colour_hex is not None else sku.colour_hex
+        if sku.exterior_color_name == standard_colour_name and sku.colour_hex == new_hex:
+            continue
         sku.exterior_color_name = standard_colour_name
-        sku.colour_hex = standard.colour_hex
+        sku.colour_hex = new_hex
         sku.updated_at_utc = now
+        sku.row_version = int(getattr(sku, "row_version", 0) or 0) + 1
         updated_codes.append(sku.material_code)
     return {
         "brand": normalized_brand,

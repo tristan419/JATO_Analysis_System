@@ -1403,6 +1403,87 @@ def test_persistent_colour_standard_is_authoritative_without_active_skus() -> No
     }
 
 
+def test_name_only_standard_preserves_each_swatch_and_repeat_save_changes_nothing() -> None:
+    skus = [SimpleNamespace(
+        material_code=code, brand="JAECOO", exterior_color_code="ZE",
+        exterior_color_name="Old name", colour_hex=hex_value,
+        row_version=4, updated_at_utc=None,
+    ) for code, hex_value in [("A", None), ("B", "#112233|#F0ECE0")]]
+    standard = BrandColourSwatchRule(
+        brand_colour_swatch_rule_id=uuid4(), brand="JAECOO", colour_code="ZE",
+        colour_name="Old name", colour_hex=None, is_active=True,
+    )
+    session = _QueuedExecuteSession([skus, [standard], skus, [standard]])
+    result = repo.set_standard_colour_hex_for_rule(
+        session, "JAECOO", "ZE", "Confirmed name",
+    )
+    assert result["updated"] == 2
+    assert standard.colour_hex is None
+    assert [sku.colour_hex for sku in skus] == [None, "#112233|#F0ECE0"]
+    assert [sku.row_version for sku in skus] == [5, 5]
+    assert repo.resolve_colour_display_values(skus[1], {("JAECOO", "ZE"): standard}) == (
+        "Confirmed name", "#112233|#F0ECE0",
+    )
+    result = repo.set_standard_colour_hex_for_rule(session, "JAECOO", "ZE", "Confirmed name")
+    assert result["updated"] == 0
+    assert [sku.row_version for sku in skus] == [5, 5]
+
+
+def test_name_only_standard_keeps_existing_persistent_hex() -> None:
+    standard = BrandColourSwatchRule(
+        brand_colour_swatch_rule_id=uuid4(), brand="OMODA", colour_code="SY",
+        colour_name="Old name", colour_hex="#8BA99A", is_active=True,
+    )
+    result = repo._upsert_persistent_colour_standard(
+        _FakeSession([standard]), "OMODA", "SY", "New name", None,
+    )
+    assert result.colour_name == "New name"
+    assert result.colour_hex == "#8BA99A"
+
+
+@pytest.mark.parametrize("colour_hex", ["", "#12345", "#112233|", "#112233|#GGHHII"])
+def test_shared_standard_rejects_invalid_explicit_hex_before_writing(colour_hex: str) -> None:
+    session = _FakeSession([])
+    with pytest.raises(ValueError):
+        repo.set_standard_colour_hex_for_rule(session, "OMODA", "SY", "Misty Green", colour_hex)
+    assert session.added == []
+
+
+def test_name_only_rule_does_not_hide_missing_hex_or_hex_conflicts() -> None:
+    standard = BrandColourSwatchRule(
+        brand_colour_swatch_rule_id=uuid4(), brand="OMODA", colour_code="SY",
+        colour_name="Confirmed", colour_hex=None, is_active=True,
+    )
+    skus = [SimpleNamespace(
+        material_code=code, brand="OMODA", exterior_color_code="SY",
+        exterior_color_name="Confirmed", colour_hex=hex_value,
+    ) for code, hex_value in [("A", None), ("B", "#112233"), ("C", "#223344")]]
+    rule = repo.list_colour_hex_rules(_QueuedExecuteSession([skus, [standard]]))[0]
+    assert rule["hasNameConflict"] is False
+    assert rule["hasSwatchConflict"] is True
+    assert rule["missingSwatchSkuCount"] == 1
+    assert rule["status"] == "swatch_conflict"
+    assert len(rule["hexOptions"]) == 2
+    assert repo.lookup_colour_rule(_FakeSession([standard]), "OMODA", "SY")["status"] == "missing"
+
+
+def test_shared_colour_route_omitted_hex_uses_name_only_path(monkeypatch) -> None:
+    session = _CreateMaterialSession()
+    received = {}
+
+    def save(_session, **kwargs):
+        received.update(kwargs)
+        return {"updated": 0}
+
+    monkeypatch.setattr(repo, "set_standard_colour_hex_for_rule", save)
+    result = order_genius_routes.set_colour_hex_rule_standard(
+        {"brand": "OMODA", "colourCode": "SY", "colourName": "Misty Green"}, session,
+    )
+    assert received["colour_hex"] is None
+    assert result["updated"] == 0
+    assert session.committed
+
+
 def test_shared_colour_display_resolves_same_standard_for_bom_and_matrix() -> None:
     standard = BrandColourSwatchRule(
         brand_colour_swatch_rule_id=uuid4(),

@@ -3612,6 +3612,7 @@ type BomColourSwatchEditor = {
   isDual: boolean;
   hex1: string;
   hex2: string;
+  hexTouched: boolean;
   anchorLeft: number;
   anchorTop: number;
 };
@@ -3716,6 +3717,12 @@ function normalizeColourPickerValue(value: string, fallback = MISSING_COLOUR_SWA
 
 function isColourPickerValue(value: string): boolean {
   return normalizeColourHex(value) !== null;
+}
+
+function isSharedSwatchDraftValid(editor: BomColourSwatchEditor): boolean {
+  if (!editor.colourName.trim()) return false;
+  if (!editor.hex1.trim() && !editor.hex2.trim()) return true;
+  return isColourPickerValue(editor.hex1) && (!editor.isDual || isColourPickerValue(editor.hex2));
 }
 
 function splitColourHexValue(value: unknown): {
@@ -5745,6 +5752,7 @@ export function BomAdminPanel({
       isDual: swatch.isDual,
       hex1: swatch.hasStoredHex ? swatch.hex1 : "",
       hex2: swatch.hasStoredHex ? swatch.hex2 : "",
+      hexTouched: swatch.hasStoredHex,
       anchorLeft: Math.max(8, (window.innerWidth - 280) / 2),
       anchorTop: Math.max(8, Math.min(180, window.innerHeight - 340)),
     });
@@ -5792,12 +5800,11 @@ export function BomAdminPanel({
 
   const handleSaveColourSwatchEditor = async () => {
     if (!colourSwatchEditor) return;
-    if (!colourSwatchEditor.colourName.trim() || !isColourPickerValue(colourSwatchEditor.hex1)
-      || (colourSwatchEditor.isDual && !isColourPickerValue(colourSwatchEditor.hex2))) return;
-    if (!window.confirm(`Update shared ${colourSwatchEditor.brand} + ${colourSwatchEditor.colourCode} to ${colourSwatchEditor.colourName} for ${colourSwatchEditor.skuCount ?? "all"} active SKUs? Prices, material codes and saved PI snapshots stay unchanged.\n确认同步此品牌＋色码的有效物料名称和色卡？不改变价格、物料号或历史 PI 快照。`)) return;
-    const hex1 = normalizeColourPickerValue(colourSwatchEditor.hex1);
-    const hex2 = normalizeColourPickerValue(colourSwatchEditor.hex2, hex1);
-    const colourHex = colourSwatchEditor.isDual ? `${hex1}|${hex2}` : hex1;
+    if (!isSharedSwatchDraftValid(colourSwatchEditor)) return;
+    const colourHex = colourSwatchEditor.hexTouched && colourSwatchEditor.hex1.trim()
+      ? buildSwatchPayload(colourSwatchEditor.hex1, colourSwatchEditor.hex2, colourSwatchEditor.isDual)
+      : undefined;
+    if (!window.confirm(`Update shared ${colourSwatchEditor.brand} + ${colourSwatchEditor.colourCode} to ${colourSwatchEditor.colourName} for ${colourSwatchEditor.skuCount ?? "all"} active SKUs? ${colourHex ? `Set swatch to ${colourHex}.` : "Keep existing swatches."} Prices, material codes and saved PI snapshots stay unchanged.\n确认同步此品牌＋色码的有效物料名称？${colourHex ? "同时更新色卡。" : "保留原有色卡。"}不改变价格、物料号或历史 PI 快照。`)) return;
     setSavingColourSwatchEditor(true);
     setColourHexRuleStatus("");
     try {
@@ -5810,7 +5817,7 @@ export function BomAdminPanel({
       setColourSwatchEditor(null);
       await loadColourHexRules();
       await load();
-      setColourHexRuleStatus(`Set ${result.colourCode} ${result.colourName} to ${result.colourHex}; updated ${result.updated} SKUs.`);
+      setColourHexRuleStatus(`Saved ${result.colourCode} ${result.colourName}; ${colourHex ? `swatch ${result.colourHex}` : "existing swatches kept / 保留原色卡"}; updated ${result.updated} SKUs.`);
     } catch (e) {
       setColourHexRuleStatus(getErrorMessage(e));
     } finally {
@@ -5894,7 +5901,7 @@ export function BomAdminPanel({
     const canSaveSharedStandard = !codeChanged
       && (nameChanged || hexChanged)
       && Boolean(nextName)
-      && Boolean(nextColourHex)
+      && (!colourCodeEditor.colourHexTouched || Boolean(nextColourHex))
       && nextColourHexParts.every((part) => isColourPickerValue(part));
     setSavingColourCodeEditor(true);
     setColourCodeEditorError("");
@@ -5904,7 +5911,7 @@ export function BomAdminPanel({
           brand: colourCodeEditor.brand,
           colourCode: nextCode,
           colourName: nextName,
-          colourHex: nextColourHex || "",
+          colourHex: colourCodeEditor.colourHexTouched ? nextColourHex || undefined : undefined,
         });
         setBomAdminError("");
         setBomAdminNotice(`Updated shared ${nextCode} rule across ${result.updated} SKUs.`);
@@ -6427,6 +6434,7 @@ export function BomAdminPanel({
               isDual: editAsDual,
               hex1: swatch.isMissing ? "" : normalizeColourPickerValue(hex1),
               hex2: swatch.isMissing ? "" : normalizeColourPickerValue(hex2 || hex1, normalizeColourPickerValue(hex1)),
+              hexTouched: false,
               anchorLeft: Math.max(8, Math.min(rect.left, viewportWidth - editorWidth - 8)),
               anchorTop: Math.max(8, Math.min(rect.bottom + 6, viewportHeight - editorHeight - 8)),
             });
@@ -7273,20 +7281,21 @@ export function BomAdminPanel({
             Colour name / 颜色名称
             <input aria-label="Shared colour name" value={colourSwatchEditor.colourName} onChange={event => setColourSwatchEditor(prev => prev ? { ...prev, colourName: event.target.value } : prev)} />
           </label>
-          <label style={{ fontSize: 10 }}><input type="checkbox" checked={colourSwatchEditor.isDual} onChange={event => setColourSwatchEditor(prev => prev ? { ...prev, isDual: event.target.checked } : prev)} /> Dual swatch / 双色色卡（不改变加价档位）</label>
+          <div style={{ fontSize: 10, marginBottom: 6 }}>HEX is optional. Name-only saves keep existing swatches. / 可先改名称，保留原色卡。</div>
+          <label style={{ fontSize: 10 }}><input type="checkbox" checked={colourSwatchEditor.isDual} onChange={event => setColourSwatchEditor(prev => prev ? { ...prev, isDual: event.target.checked, hexTouched: true } : prev)} /> Dual swatch / 双色色卡（不改变加价档位）</label>
           <div style={{ display: "grid", gridTemplateColumns: "58px 32px 1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
             <span style={{ fontSize: 10, color: "#64748b" }}>Primary</span>
             <input
               type="color"
               value={normalizeColourPickerValue(colourSwatchEditor.hex1)}
-              onChange={(event) => setColourSwatchEditor(prev => prev ? { ...prev, hex1: event.target.value.toUpperCase() } : prev)}
+              onChange={(event) => setColourSwatchEditor(prev => prev ? { ...prev, hex1: event.target.value.toUpperCase(), hexTouched: true } : prev)}
               style={{ width: 30, height: 26, padding: 0 }}
             />
             <input
               type="text"
               aria-label="Primary HEX"
               value={colourSwatchEditor.hex1}
-              onChange={(event) => setColourSwatchEditor(prev => prev ? { ...prev, hex1: event.target.value.toUpperCase() } : prev)}
+              onChange={(event) => setColourSwatchEditor(prev => prev ? { ...prev, hex1: event.target.value.toUpperCase(), hexTouched: true } : prev)}
               style={{ fontSize: 11, minWidth: 0 }}
             />
             {colourSwatchEditor.isDual ? (
@@ -7295,14 +7304,14 @@ export function BomAdminPanel({
                 <input
                   type="color"
                   value={normalizeColourPickerValue(colourSwatchEditor.hex2, normalizeColourPickerValue(colourSwatchEditor.hex1))}
-                  onChange={(event) => setColourSwatchEditor(prev => prev ? { ...prev, hex2: event.target.value.toUpperCase() } : prev)}
+                  onChange={(event) => setColourSwatchEditor(prev => prev ? { ...prev, hex2: event.target.value.toUpperCase(), hexTouched: true } : prev)}
                   style={{ width: 30, height: 26, padding: 0 }}
                 />
                 <input
                   type="text"
                   aria-label="Second HEX"
                   value={colourSwatchEditor.hex2}
-                  onChange={(event) => setColourSwatchEditor(prev => prev ? { ...prev, hex2: event.target.value.toUpperCase() } : prev)}
+                  onChange={(event) => setColourSwatchEditor(prev => prev ? { ...prev, hex2: event.target.value.toUpperCase(), hexTouched: true } : prev)}
                   style={{ fontSize: 11, minWidth: 0 }}
                 />
               </Fragment>
@@ -7325,9 +7334,7 @@ export function BomAdminPanel({
               onClick={() => void handleSaveColourSwatchEditor()}
               disabled={
                 savingColourSwatchEditor
-                || !colourSwatchEditor.colourName.trim()
-                || !isColourPickerValue(colourSwatchEditor.hex1)
-                || (colourSwatchEditor.isDual && !isColourPickerValue(colourSwatchEditor.hex2))
+                || !isSharedSwatchDraftValid(colourSwatchEditor)
               }
             >
               {savingColourSwatchEditor ? "Saving..." : "Save"}
