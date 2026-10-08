@@ -868,32 +868,32 @@ def patch_colour_code(
     requested_hex = (
         body.get("colourHex", body.get("colour_hex"))
         if colour_hex_supplied
-        else (None if code_changed else sku.colour_hex)
+        else sku.colour_hex
     )
     try:
-        resolved_colour = repo.resolve_colour_attributes(
-            session,
-            repo.resolve_material_brand(
-                sku.brand,
-                getattr(sku, "model_name", None),
-                getattr(sku, "bom_template", None),
-            ),
-            new_code,
-            colour_name=requested_name,
-            colour_hex=requested_hex,
-            colour_hex_supplied=colour_hex_supplied,
-        )
+        brand = repo.resolve_material_brand(sku.brand, getattr(sku, "model_name", None), getattr(sku, "bom_template", None))
+        if not colour_name_supplied and code_changed:
+            rule = repo.lookup_colour_rule(session, brand, new_code)
+            if rule["source"] in {"persistent_rule", "brand_code_rule"} and not rule["hasNameConflict"] and not rule["hasSwatchConflict"]:
+                requested_name = rule["colourName"]
+        resolved_hex = repo.normalize_colour_hex_value(requested_hex) if colour_hex_supplied else requested_hex
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    resolved_name = clean_text(resolved_colour["colourName"])
+    resolved_name = clean_text(requested_name)
     if code_changed and repo.is_placeholder_colour_name(resolved_name, new_code):
         raise HTTPException(
             status_code=400,
             detail="Unknown or conflicting colour code requires a non-placeholder colourName",
         )
+    target_standard = repo.list_persistent_colour_standard_map(session).get((brand, new_code))
+    if code_changed and not colour_hex_supplied and target_standard is not None and (
+        repo.normalize_colour_rule_name(resolved_name) != repo.normalize_colour_rule_name(target_standard.colour_name)
+        or (target_standard.colour_hex and target_standard.colour_hex != resolved_hex)
+    ):
+        raise HTTPException(status_code=409, detail="Target colour standard differs; review its name and swatch before correcting / 目标共享标准不同，请确认名称及色卡后重新预览")
     sku.exterior_color_code = new_code
     sku.exterior_color_name = resolved_name or new_code
-    sku.colour_hex = resolved_colour["colourHex"]
+    sku.colour_hex = resolved_hex
     sku.colour_code_confirmed = True
     target_material_code = old_material_code
     try:

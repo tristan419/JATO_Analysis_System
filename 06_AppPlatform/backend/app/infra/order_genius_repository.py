@@ -2409,7 +2409,10 @@ def list_all_material_skus_for_admin(
     return deduped
 
 
-def build_colour_hex_rules_from_skus(skus: list[object]) -> list[dict]:
+def build_colour_hex_rules_from_skus(
+    skus: list[object],
+    standards: dict[tuple[str, str], BrandColourSwatchRule] | None = None,
+) -> list[dict]:
     """Derive reusable colour rules from active SKUs by normalized brand + code."""
     groups: dict[tuple[str, str], dict] = {}
     for sku in skus:
@@ -2498,9 +2501,26 @@ def build_colour_hex_rules_from_skus(skus: list[object]) -> list[dict]:
             name_options[0]["normalizedColourName"] if len(name_options) == 1 else None
         )
         standard_colour_hex = hex_options[0]["colourHex"] if len(hex_options) == 1 else None
+        standard = (standards or {}).get((group["brand"], group["colourCode"]))
+        if standard is not None:
+            standard_colour_name = standard.colour_name
+            normalized_colour_name = normalize_colour_rule_name(standard.colour_name)
+            has_name_conflict = has_name_conflict or any(
+                option["normalizedColourName"] != normalized_colour_name for option in name_options
+            )
+            if not any(option["normalizedColourName"] == normalized_colour_name for option in name_options):
+                name_options.append({"colourName": standard.colour_name,
+                                     "normalizedColourName": normalized_colour_name, "skuCount": 0})
+            if standard.colour_hex:
+                standard_colour_hex = normalize_colour_hex_value(standard.colour_hex)
+                has_swatch_conflict = has_swatch_conflict or any(
+                    option["colourHex"] != standard_colour_hex for option in hex_options
+                )
+                if not any(option["colourHex"] == standard_colour_hex for option in hex_options):
+                    hex_options.append({"colourHex": standard_colour_hex, "skuCount": 0})
 
         changes: list[dict] = []
-        if standard_colour_name and standard_colour_hex:
+        if standard_colour_name and not has_name_conflict and not has_swatch_conflict:
             for sku in source_skus:
                 old_name = str(
                     getattr(sku, "exterior_color_name", "") or ""
@@ -2515,7 +2535,8 @@ def build_colour_hex_rules_from_skus(skus: list[object]) -> list[dict]:
                     )
                 except ValueError:
                     old_hex = None
-                if new_name != old_name or old_hex != standard_colour_hex:
+                new_hex = old_hex or standard_colour_hex
+                if new_name != old_name or old_hex != new_hex:
                     changes.append({
                         "materialCode": str(
                             getattr(sku, "material_code", "") or ""
@@ -2525,16 +2546,16 @@ def build_colour_hex_rules_from_skus(skus: list[object]) -> list[dict]:
                         "oldColourName": old_name or None,
                         "newColourName": new_name,
                         "oldColourHex": old_hex,
-                        "newColourHex": standard_colour_hex,
+                        "newColourHex": new_hex,
                     })
         if has_name_conflict:
             status = "name_conflict"
         elif has_swatch_conflict:
             status = "swatch_conflict"
-        elif not standard_colour_name or not standard_colour_hex:
-            status = "missing"
         elif changes:
             status = "fillable"
+        elif not standard_colour_name or not standard_colour_hex:
+            status = "missing"
         else:
             status = "complete"
         rules.append(
@@ -2768,8 +2789,8 @@ def list_colour_hex_rules(session: Session) -> list[dict]:
     """Return SKU-derived rules with durable standards taking precedence."""
     stmt = select(MaterialSkuMaster).where(MaterialSkuMaster.is_active == True)
     skus = list(session.execute(stmt).scalars().all())
-    rules = build_colour_hex_rules_from_skus(skus)
     standards = list_persistent_colour_standard_map(session)
+    rules = build_colour_hex_rules_from_skus(skus, standards)
     by_key = {(rule["brand"], rule["colourCode"]): rule for rule in rules}
     for key, standard in standards.items():
         rule = by_key.get(key)
@@ -2799,34 +2820,6 @@ def list_colour_hex_rules(session: Session) -> list[dict]:
             }
             rules.append(rule)
             by_key[key] = rule
-        else:
-            rule["colourName"] = standard.colour_name
-            rule["normalizedColourName"] = normalize_colour_rule_name(standard.colour_name)
-            rule["standardColourName"] = standard.colour_name
-            if standard.colour_hex:
-                rule["standardColourHex"] = standard.colour_hex
-                rule["status"] = "complete"
-            rule["nameOptions"] = [{
-                "colourName": standard.colour_name,
-                "normalizedColourName": normalize_colour_rule_name(standard.colour_name),
-                "skuCount": int(rule.get("skuCount") or 0),
-            }]
-            if standard.colour_hex:
-                rule["hexOptions"] = [{
-                    "colourHex": standard.colour_hex,
-                    "skuCount": int(rule.get("skuCount") or 0),
-                }]
-            rule["hasNameConflict"] = False
-            if standard.colour_hex:
-                rule["hasSwatchConflict"] = False
-            else:
-                rule["status"] = (
-                    "swatch_conflict" if rule["hasSwatchConflict"] else
-                    "missing" if rule["missingSwatchSkuCount"] or not rule["hexOptions"] else
-                    "complete"
-                )
-            rule["fillableSkuCount"] = 0
-            rule["previewChanges"] = []
     status_rank = dict(name_conflict=0, swatch_conflict=1, missing=2, fillable=3, complete=4)
     return sorted(
         rules,
@@ -2884,20 +2877,8 @@ def _build_colour_standard_preview(
     skus: list[MaterialSkuMaster],
     standards: dict[tuple[str, str], BrandColourSwatchRule],
 ) -> dict:
-    """Plan durable brand+code standards without changing a saved standard."""
-    rules = build_colour_hex_rules_from_skus(skus)
-    skus_by_key: dict[tuple[str, str], list[MaterialSkuMaster]] = {}
-    for sku in skus:
-        key = _colour_rule_key(
-            resolve_material_brand(
-                getattr(sku, "brand", None),
-                getattr(sku, "model_name", None),
-                getattr(sku, "bom_template", None),
-            ),
-            getattr(sku, "exterior_color_code", None),
-        )
-        if key is not None:
-            skus_by_key.setdefault(key, []).append(sku)
+    """Plan only missing fields from unique same-code values; never guess or overwrite."""
+    rules = build_colour_hex_rules_from_skus(skus, standards)
 
     planned_rules: list[dict] = []
     items: list[dict] = []
@@ -2905,54 +2886,27 @@ def _build_colour_standard_preview(
     unresolved_conflict_count = 0
     for rule in rules:
         key = (rule["brand"], rule["colourCode"])
-        if key in standards:
-            continue
         if rule["hasNameConflict"] or rule["hasSwatchConflict"]:
             unresolved_conflict_count += 1
             continue
-        name_options = rule["nameOptions"]
-        if not name_options:
+        if not rule["standardColourName"]:
             unresolved_rule_count += 1
             continue
-        selected_name = name_options[0]["colourName"]
-        if len(rule["hexOptions"]) == 1:
-            selected_hex = rule["hexOptions"][0]["colourHex"]
-            source = "existing_sku"
-        else:
-            selected_hex = generate_colour_hex_from_name(selected_name)
-            source = "generated_from_name"
-        if selected_hex is None:
-            unresolved_rule_count += 1
+        if key in standards and not rule["previewChanges"]:
             continue
         rule_plan = {
             "brand": key[0],
             "colourCode": key[1],
-            "colourName": selected_name,
-            "colourHex": selected_hex,
-            "source": source,
+            "colourName": rule["standardColourName"],
+            "colourHex": rule["standardColourHex"],
+            "source": "persistent_rule" if key in standards else "existing_sku",
             "skuCount": int(rule["skuCount"]),
             "hasNameConflict": bool(rule["hasNameConflict"]),
             "hasSwatchConflict": bool(rule["hasSwatchConflict"]),
-            "nameOptions": name_options,
+            "nameOptions": rule["nameOptions"],
         }
         planned_rules.append(rule_plan)
-        for sku in skus_by_key.get(key, []):
-            old_name = str(getattr(sku, "exterior_color_name", "") or "").strip()
-            try:
-                old_hex = normalize_colour_hex_value(getattr(sku, "colour_hex", None))
-            except ValueError:
-                old_hex = None
-            if old_name == selected_name and old_hex == selected_hex:
-                continue
-            items.append({
-                "materialCode": str(getattr(sku, "material_code", "") or "").strip(),
-                "brand": key[0],
-                "colourCode": key[1],
-                "oldColourName": old_name or None,
-                "newColourName": selected_name,
-                "oldColourHex": old_hex,
-                "newColourHex": selected_hex,
-            })
+        items.extend(rule["previewChanges"])
     planned_rules.sort(key=lambda item: (item["brand"], item["colourCode"]))
     items.sort(key=lambda item: item["materialCode"])
     return {
@@ -3017,6 +2971,19 @@ def lookup_colour_rule(
         persistent = list_persistent_colour_standard_map(session).get(
             (normalized_brand, normalized_code)
         )
+        candidates = _list_colour_rule_candidate_skus(session, normalized_brand, normalized_code)
+        rules = build_colour_hex_rules_from_skus(
+            candidates, {(normalized_brand, normalized_code): persistent} if persistent is not None else None,
+        )
+        if rules and (rules[0]["hasNameConflict"] or rules[0]["hasSwatchConflict"]):
+            rule = rules[0]
+            return {
+                "brand": normalized_brand, "colourCode": normalized_code,
+                "status": rule["status"], "colourName": rule["standardColourName"],
+                "colourHex": rule["standardColourHex"], "source": "brand_code_rule",
+                "hasNameConflict": rule["hasNameConflict"],
+                "hasSwatchConflict": rule["hasSwatchConflict"], "nameCandidates": [],
+            }
         if persistent is not None:
             return {
                 "brand": normalized_brand,
@@ -3029,16 +2996,9 @@ def lookup_colour_rule(
                 "hasSwatchConflict": False,
                 "nameCandidates": [],
             }
-        rules = build_colour_hex_rules_from_skus(
-            _list_colour_rule_candidate_skus(
-                session,
-                normalized_brand,
-                normalized_code,
-            )
-        )
         if rules:
             rule = rules[0]
-            reusable = rule["status"] in {"fillable", "complete"}
+            reusable = bool(rule["standardColourName"])
             if reusable:
                 return {
                     "brand": normalized_brand,
@@ -3140,7 +3100,7 @@ def resolve_colour_attributes(
         "generated_from_name",
         "name_candidate",
         "persistent_rule",
-    }
+    } and not rule["hasNameConflict"] and not rule["hasSwatchConflict"]
     resolved_name = explicit_name
     if rule["source"] in {"name_candidate", "generated_from_name"} and reusable:
         resolved_name = rule["colourName"] or explicit_name
@@ -3171,10 +3131,8 @@ def apply_colour_rule_fills(
             .with_for_update()
         ).scalars().all()
     )
-    plan = _build_colour_standard_preview(
-        skus,
-        list_persistent_colour_standard_map(session),
-    )
+    standards = list_persistent_colour_standard_map(session)
+    plan = _build_colour_standard_preview(skus, standards)
     preview_items = plan["items"]
     requested = {
         str(code or "").strip().upper()
@@ -3204,6 +3162,7 @@ def apply_colour_rule_fills(
             continue
         sku.exterior_color_name = item["newColourName"]
         sku.colour_hex = item["newColourHex"]
+        sku.row_version = int(getattr(sku, "row_version", 1) or 1) + 1
         sku.updated_at_utc = now
         applied.append(item)
     applied.sort(key=lambda item: item["materialCode"])
@@ -3211,7 +3170,7 @@ def apply_colour_rule_fills(
     return {
         "updated": len(applied),
         "unchanged": max(0, planned_sku_count - len(applied)),
-        "rulesCreated": len(plan["rules"]),
+        "rulesCreated": sum((rule["brand"], rule["colourCode"]) not in standards for rule in plan["rules"]),
         "generatedRules": sum(
             1 for rule in plan["rules"] if rule["source"] == "generated_from_name"
         ),
