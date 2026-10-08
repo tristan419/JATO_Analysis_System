@@ -1467,6 +1467,21 @@ def test_name_only_rule_does_not_hide_missing_hex_or_hex_conflicts() -> None:
     assert repo.lookup_colour_rule(_FakeSession([standard]), "OMODA", "SY")["status"] == "missing"
 
 
+@pytest.mark.parametrize("is_active", [True, False])
+def test_shared_colour_display_keeps_historical_record_values(is_active: bool) -> None:
+    sku = SimpleNamespace(
+        brand="JAECOO", exterior_color_code="CL", is_active=is_active,
+        exterior_color_name="Original black", colour_hex="#111111",
+    )
+    standard = BrandColourSwatchRule(
+        brand="JAECOO", colour_code="CL", colour_name="Shared black",
+        colour_hex="#222222", is_active=True,
+    )
+    assert repo.resolve_colour_display_values(sku, {("JAECOO", "CL"): standard}) == (
+        ("Shared black", "#222222") if is_active else ("Original black", "#111111")
+    )
+
+
 def test_shared_colour_route_omitted_hex_uses_name_only_path(monkeypatch) -> None:
     session = _CreateMaterialSession()
     received = {}

@@ -2595,7 +2595,7 @@ def resolve_colour_display_values(
         getattr(sku, "exterior_color_code", None),
     )
     standard = standards.get(key) if standards and key else None
-    if standard is not None:
+    if standard is not None and getattr(sku, "is_active", True):
         return standard.colour_name, standard.colour_hex or getattr(sku, "colour_hex", None)
     return (
         str(getattr(sku, "exterior_color_name", "") or "") or None,
