@@ -4,7 +4,7 @@ const base = process.env.JATO_REGRESSION_BASE_URL || "http://127.0.0.1:4199";
 const material = {
   materialCode: "T6480J1BXLX0017", bomTemplate: "T6480J1**LX0017", brand: "OMODA",
   modelName: "OMODA9 SHS", version: "Exclusive-AWD", powertrain: "PHEV", colour: "Khaki white",
-  colourCode: "BX", colourHex: null, colourTier: "single", interiorColorName: "Black-Red",
+  colourCode: "BX", colourHex: null, storedColourHex: null, colourTier: "single", interiorColorName: "Black-Red",
   lifecycleStatus: "active", isActive: true, rowVersion: 1, fobByCountry: { NL: { finalFobEur: 25400 } },
 };
 const skus = [material, { ...material, materialCode: "T6480J1BXLX0018", bomTemplate: "T6480J1**LX0018", interiorColorName: "Black-Black" }];
@@ -20,7 +20,7 @@ const matrix = () => ({ countryCode: "NL", countryName: "Netherlands", paymentTe
   totalRows: 2, rows: skus.map(sku => ({ ...sku, fobEur: 25400, editable: true, ttl: 0,
     months: Object.fromEntries(Array.from({ length: 12 }, (_, i) => [String(i + 1), { quantity: 1, rowVersion: 1, isEditable: true, fobEur: 25400 }])) })) });
 const writes = [], errors = [], checks = [];
-let ruleOverrides = {}, fillPreview = null;
+let ruleOverrides = {}, fillPreview = null, lookupResponse = null;
 let bomReads = 0, matrixReads = 0, ruleReads = 0, failSave = false, failMatrix = false;
 const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
   ? page.screenshot({ path: process.env.JATO_REGRESSION_ARTIFACT_DIR + "/" + name }) : Promise.resolve();
@@ -45,17 +45,17 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
         const payload = req.postDataJSON(); writes.push({ path, payload });
         if (failSave) { failSave = false; return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Mock save rejected" }) }); }
         assert.equal(payload.colourCode, "BX");
-        for (const sku of skus) Object.assign(sku, { colour: payload.colourName, ...(payload.colourHex ? { colourHex: payload.colourHex } : {}) });
+        for (const sku of skus) Object.assign(sku, { colour: payload.colourName, ...(payload.colourHex ? { colourHex: payload.colourHex, storedColourHex: payload.colourHex } : {}) });
         body = { ...payload, updated: 2, materialCodes: skus.map(sku => sku.materialCode) };
       }
-      else if (path.endsWith("/colour-hex-rules/lookup")) body = { brand: "OMODA", colourCode: "BX", status: "suggested", colourName: "Khaki white", colourHex: "#F2F4F8",
+      else if (path.endsWith("/colour-hex-rules/lookup")) body = lookupResponse ?? { brand: "OMODA", colourCode: "BX", status: "suggested", colourName: "Khaki white", colourHex: "#F2F4F8",
         source: "name_candidate", hasNameConflict: false, hasSwatchConflict: false,
         nameCandidates: [{ brand: "OMODA", colourCode: "BW", colourName: "Khaki white", colourHex: "#F2F4F8", hasNameConflict: false, hasSwatchConflict: false }] };
       else if (path.endsWith("/colour-hex-rules/preview")) body = fillPreview;
       else if (path.endsWith("/colour-hex-rules/apply")) {
         const payload = req.postDataJSON(); writes.push({ path, payload });
         assert.deepEqual(payload.materialCodes, [skus[1].materialCode]);
-        Object.assign(skus[1], { colour: "Reviewed white", colourHex: "#123456" });
+        Object.assign(skus[1], { colour: "Reviewed white", colourHex: "#123456", storedColourHex: "#123456" });
         ruleOverrides = {};
         body = { updated: 1, unchanged: 1, rulesCreated: 0, generatedRules: 0, conflicts: 0, missingRules: 0, materialCodes: payload.materialCodes, items: fillPreview.items, fingerprint: fillPreview.fingerprint };
       }
@@ -63,7 +63,8 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
         const payload = req.postDataJSON(); writes.push({ path, payload });
         assert.equal(payload.colourCode, "ZZ");
         assert(!("colourHex" in payload), "unadopted correction suggestion is never sent");
-        body = { materialCode: "T6480J1ZZLX0017", colourName: payload.colourName, colourCode: "ZZ", colourHex: material.colourHex, colourCodeConfirmed: true };
+        Object.assign(material, { materialCode: "T6480J1ZZLX0017", colour: payload.colourName, colourCode: "ZZ", colourHex: material.storedColourHex });
+        body = { materialCode: material.materialCode, colourName: payload.colourName, colourCode: "ZZ", colourHex: material.storedColourHex, colourCodeConfirmed: true };
       }
       else if (path.endsWith("/colour-hex-rules")) { ruleReads++; body = { items: [{ ...rule(), ...ruleOverrides }], summary: { totalRules: 1, fillable: 0, missing: material.colourHex ? 0 : 1, nameConflict: 0, swatchConflict: 0, complete: material.colourHex ? 1 : 0, fillableSkus: 0, invalidIdentitySkuCount: 0, invalidIdentitySampleMaterialCodes: [] } }; }
       else if (path.endsWith("/countries") || path.endsWith("/account-country-options")) body = { items: [{ countryCode: "NL", countryName: "Netherlands", paymentTermCode: "TT", paymentMethod: "TT", lcDays: null }] };
@@ -146,6 +147,7 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
 
     await page.setViewportSize({ width: 390, height: 640 });
     await page.evaluate(() => {
+      document.querySelectorAll(".candidate-environment-banner").forEach(el => el.remove());
       const banner = document.createElement("aside");
       banner.className = "candidate-environment-banner";
       banner.style.height = "120px";
@@ -194,8 +196,8 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
 
     await page.setViewportSize({ width: 1920, height: 1080 });
     await page.locator(".candidate-environment-banner").evaluate(el => el.remove());
-    Object.assign(material, { colour: "Khaki white", colourHex: "#123456" });
-    Object.assign(skus[1], { colour: "Khaki white", colourHex: "#654321" });
+    Object.assign(material, { colour: "Khaki white", colourHex: "#123456", storedColourHex: "#123456" });
+    Object.assign(skus[1], { colour: "Khaki white", colourHex: "#654321", storedColourHex: "#654321" });
     ruleOverrides = { hasSwatchConflict: true, status: "swatch_conflict", standardColourHex: null };
     // Reload uses mock business reads only; no real API writes.
     await page.reload();
@@ -225,6 +227,7 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     await correction.getByText(/Keep each material's existing swatch/).waitFor();
     await correction.getByRole("button", { name: "Confirm save / 确认保存", exact: true }).click();
     await page.getByText(/Tables refreshed/).waitFor();
+    Object.assign(material, { materialCode: "T6480J1BXLX0017", colourCode: "BX" });
     checks.push("Correction without adoption confirms Keep and submits no HEX");
 
     Object.assign(skus[1], { colour: "BX", colourHex: null });
@@ -243,6 +246,69 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     assert.equal(skus[0].colourHex, "#123456");
     assert.equal(skus[1].colourHex, "#123456");
     checks.push("Existing Preview shows per-material missing name+HEX, source and counts; Apply exact targets; donor unchanged");
+    await preview.getByRole("button", { name: "Close", exact: true }).click();
+
+    Object.assign(material, { colour: "Khaki white", colourHex: "#112233", storedColourHex: "#112233" });
+    Object.assign(skus[1], { colour: "Khaki white", colourHex: null, storedColourHex: null });
+    ruleOverrides = { status: "fillable", fillableSkuCount: 1, missingSwatchSkuCount: 1 };
+    await page.reload();
+    const showBom = async () => {
+      const deck = page.getByRole("button", { name: /Filters & Actions/ }).first();
+      if (await deck.getAttribute("aria-expanded") !== "true") await deck.click();
+      await page.getByRole("tab", { name: /BOM ADMIN/i }).click();
+      await page.getByText("OMODA OMODA9 SHS", { exact: true }).waitFor();
+      if (await swatch.count() === 0) await page.getByText("OMODA OMODA9 SHS", { exact: true }).click();
+    };
+    await showBom();
+    // BOM tools restore their open state after reload.
+    if (await page.locator(".bom-admin-toolbar.is-tools-open").count() === 0) {
+      await page.getByRole("button", { name: "Edit tools", exact: true }).click();
+    }
+    await page.getByRole("button", { name: /Can fill/ }).click();
+    await page.getByRole("dialog", { name: "Colour rule details" }).getByRole("button", { name: "Edit colour", exact: true }).click();
+    await editor.getByLabel("Shared colour name", { exact: true }).fill("List-only rename");
+    await editor.getByRole("button", { name: "Save", exact: true }).click();
+    await confirmation.getByText(/Keep each material's existing swatch/).waitFor();
+    await confirmation.getByRole("button", { name: "Confirm save / 确认保存", exact: true }).click();
+    await page.getByText(/Tables refreshed/).waitFor();
+    assert(!("colourHex" in writes.at(-1).payload));
+    assert.equal(skus[1].storedColourHex, null);
+    checks.push("Ordinary rule-list name-only save omits HEX; other missing rows remain missing");
+
+    Object.assign(material, { colour: "Khaki white", colourHex: null, storedColourHex: null });
+    Object.assign(skus[1], { colour: "Khaki white", colourHex: "#112233", storedColourHex: "#112233" });
+    ruleOverrides = { status: "fillable", fillableSkuCount: 1, standardColourHex: "#112233" };
+    lookupResponse = { brand: "OMODA", colourCode: "BX", status: "complete", colourName: "Khaki white", colourHex: "#112233", source: "persistent_rule", hasNameConflict: false, hasSwatchConflict: false, nameCandidates: [] };
+    await page.reload(); await showBom(); await swatch.click();
+    await editor.getByLabel("Primary HEX", { exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('[aria-label="Primary HEX"]').value === "#112233");
+    await editor.getByRole("button", { name: "Save", exact: true }).click();
+    await confirmation.getByRole("button", { name: "Confirm save / 确认保存", exact: true }).click();
+    await page.getByText(/Tables refreshed/).waitFor();
+    assert.equal(writes.at(-1).payload.colourHex, "#112233");
+    checks.push("Unique same-code HEX loads and saves without touching picker");
+    lookupResponse = null;
+
+    for (const storedHex of [null, "#445566"]) {
+      Object.assign(material, { materialCode: "T6480J1BXLX0017", colourCode: "BX", colour: "Khaki white", colourHex: "#112233", storedColourHex: storedHex });
+      ruleOverrides = {};
+      await page.setViewportSize({ width: storedHex ? 1920 : 390, height: storedHex ? 1080 : 640 });
+      await page.reload(); await showBom(); await swatch.click();
+      await editor.getByRole("button", { name: "Correct code", exact: true }).click();
+      await editor.getByLabel("Colour code", { exact: true }).fill("ZZ");
+      await editor.getByLabel("Shared colour name", { exact: true }).fill("Khaki white");
+      await editor.getByRole("button", { name: "Use this swatch", exact: true }).waitFor();
+      await editor.getByRole("button", { name: "Save", exact: true }).click();
+      const after = correction.locator('.bom-colour-edit-comparison > div').nth(1);
+      assert.equal(await after.locator("code").textContent(), storedHex ?? "Missing HEX / 缺色卡");
+      await correction.getByText(/Current shared display differs/).waitFor();
+      await screenshot(page, storedHex ? "correction-stored-hex-desktop.png" : "correction-missing-hex-phone.png");
+      await correction.getByRole("button", { name: "Confirm save / 确认保存", exact: true }).click();
+      await page.getByText(/Tables refreshed/).waitFor();
+      assert(!("colourHex" in writes.at(-1).payload));
+      assert.equal(material.colourHex, storedHex);
+    }
+    checks.push("Correction Keep preview matches reread stored HEX, including null; desktop and narrow screen");
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ status: "ok", checks, pageErrors: errors.length, mockWrites: writes.length, realBusinessWrites: 0 }));
   } finally { await browser.close(); }
