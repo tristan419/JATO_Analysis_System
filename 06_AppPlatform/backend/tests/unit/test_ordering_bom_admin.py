@@ -801,7 +801,8 @@ def test_build_matrix_excludes_cleared_zero_fob(monkeypatch) -> None:
     assert result["totalRows"] == 0
 
 
-def test_list_bom_with_fob_backfills_interior_and_effective_colour_tier(monkeypatch) -> None:
+@pytest.mark.parametrize("stored_hex", [None, "#445566"])
+def test_list_bom_with_fob_backfills_interior_and_effective_colour_tier(monkeypatch, stored_hex) -> None:
     blank = _legacy_jaecoo_sku()
     blank.material_code = "T7000Z5CPMY0026"
     blank.exterior_color_name = "Matte black (Black Edition)"
@@ -820,7 +821,7 @@ def test_list_bom_with_fob_backfills_interior_and_effective_colour_tier(monkeypa
     blank.source_sheet_name = None
     blank.source_row_number = None
     blank.raw_payload_json = None
-    blank.colour_hex = None
+    blank.colour_hex = stored_hex
     blank.colour_code_confirmed = True
 
     donor = _legacy_jaecoo_sku()
@@ -841,6 +842,9 @@ def test_list_bom_with_fob_backfills_interior_and_effective_colour_tier(monkeypa
     donor.colour_code_confirmed = True
 
     monkeypatch.setattr(repo, "list_active_fob_country_codes", lambda _session: ["NL"])
+    monkeypatch.setattr(repo, "list_persistent_colour_standard_map", lambda _session: {
+        ("JAECOO", "CP"): BrandColourSwatchRule(brand="JAECOO", colour_code="CP", colour_name="Matte black", colour_hex="#112233"),
+    })
     monkeypatch.setattr(
         repo,
         "list_all_material_skus_for_admin",
@@ -853,6 +857,8 @@ def test_list_bom_with_fob_backfills_interior_and_effective_colour_tier(monkeypa
     assert by_code["T7000Z5CPMY0026"]["interiorColorName"] == "Black-Black"
     assert by_code["T7000Z5CPMY0026"]["interiorColourCode"] == "R19"
     assert by_code["T7000Z5CPMY0026"]["colourTier"] == "single"
+    assert by_code["T7000Z5CPMY0026"]["colourHex"] == "#112233"
+    assert by_code["T7000Z5CPMY0026"]["storedColourHex"] == stored_hex
 
 
 def test_build_options_normalizes_legacy_jaecoo_filter_values(monkeypatch) -> None:
@@ -1401,6 +1407,25 @@ def test_persistent_colour_standard_is_authoritative_without_active_skus() -> No
         "hasSwatchConflict": False,
         "nameCandidates": [],
     }
+
+
+@pytest.mark.parametrize("hex_values,conflict,expected_hex", [
+    ([None, "#112233"], False, "#112233"),
+    ([None, None], False, None),
+    (["#112233", "#223344"], True, None),
+])
+def test_name_only_persistent_lookup_reuses_only_unique_same_code_hex(hex_values, conflict, expected_hex) -> None:
+    standard = BrandColourSwatchRule(brand="OMODA", colour_code="BW", colour_name="Reviewed white", colour_hex=None, is_active=True)
+    skus = [SimpleNamespace(material_code=str(index), brand="OMODA", exterior_color_code="BW",
+                            exterior_color_name="Reviewed white", colour_hex=hex_value)
+            for index, hex_value in enumerate(hex_values)]
+    lookup = repo.lookup_colour_rule(_QueuedExecuteSession([[standard], skus]), "OMODA", "BW")
+    assert lookup["colourHex"] == expected_hex
+    assert lookup["hasSwatchConflict"] is conflict
+    assert lookup["source"] == ("brand_code_rule" if conflict else "persistent_rule")
+    assert standard.colour_hex is None  # Query never writes the derived swatch.
+    rules = repo.build_colour_hex_rules_from_skus(skus, {("OMODA", "BW"): standard})
+    assert lookup["colourHex"] == rules[0]["standardColourHex"]
 
 
 def test_name_only_standard_preserves_each_swatch_and_repeat_save_changes_nothing() -> None:

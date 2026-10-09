@@ -1959,6 +1959,7 @@ def list_bom_with_fob(
             "colourCode": s.exterior_color_code or "",
             "colourType": s.exterior_color_type or "single",
             "colourHex": display_colour_hex,
+            "storedColourHex": s.colour_hex,
             "colourCodeConfirmed": s.colour_code_confirmed,
             "colourTier": resolve_effective_colour_tier(s),
             "colourPricing": resolve_colour_surcharge_for_sku(session, s, resolve_effective_colour_tier(s)),
@@ -2985,12 +2986,13 @@ def lookup_colour_rule(
                 "hasSwatchConflict": rule["hasSwatchConflict"], "nameCandidates": [],
             }
         if persistent is not None:
+            resolved_hex = rules[0]["standardColourHex"] if rules else persistent.colour_hex
             return {
                 "brand": normalized_brand,
                 "colourCode": normalized_code,
-                "status": "complete" if persistent.colour_hex else "missing",
+                "status": "complete" if resolved_hex else "missing",
                 "colourName": persistent.colour_name,
-                "colourHex": persistent.colour_hex,
+                "colourHex": resolved_hex,
                 "source": "persistent_rule",
                 "hasNameConflict": False,
                 "hasSwatchConflict": False,
