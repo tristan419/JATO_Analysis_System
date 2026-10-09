@@ -97,7 +97,7 @@ describe("BOM Admin A load continuity", () => {
     const response = { ...bomResponse("sample"), items };
     const getBom = vi.spyOn(api, "getBomAdmin").mockResolvedValue(response);
     const update = vi.spyOn(api, "updateSkuMetadata");
-    const { container } = render(<BomAdminPanel />);
+    const { container } = render(<BomAdminPanel isAdmin={true} />);
     await act(async () => { await Promise.resolve(); });
     const groupNames = () => Array.from(container.querySelectorAll(".bom-admin-model-group > [role=button]"))
       .map((element) => element.querySelector("span[title]")?.textContent);
@@ -121,7 +121,7 @@ describe("BOM Admin A load continuity", () => {
     response.items[0].powertrain = saved;
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(response);
     const update = vi.spyOn(api, "updateSkuMetadata");
-    const { container } = render(<BomAdminPanel />);
+    const { container } = render(<BomAdminPanel isAdmin={true} />);
     await act(async () => { await Promise.resolve(); });
     const group = screen.getByRole("button", { name: /OMODA OMODA5 BEV/ });
     expect(group.textContent).toContain(`· ${label} ·`);
@@ -142,7 +142,7 @@ describe("BOM Admin A load continuity", () => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(response);
     const create = vi.spyOn(api, "createMaterialSku").mockResolvedValue({ materialCode: "T71506JBWMH0011" });
     const update = vi.spyOn(api, "updateSkuMetadata");
-    render(<BomAdminPanel />);
+    render(<BomAdminPanel isAdmin={true} />);
     await act(async () => { await Promise.resolve(); });
     const group = screen.getByRole("button", { name: /OMODA OMODA5 BEV/ });
     if (group.getAttribute("aria-expanded") !== "true") await act(async () => { fireEvent.click(group); });
@@ -164,7 +164,7 @@ describe("BOM Admin A load continuity", () => {
     response.items[0].powertrain = "";
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(response);
     const create = vi.spyOn(api, "createMaterialSku");
-    render(<BomAdminPanel />);
+    render(<BomAdminPanel isAdmin={true} />);
     await act(async () => { await Promise.resolve(); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA OMODA5 HEV/ })); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Edit" })); });
@@ -177,7 +177,7 @@ describe("BOM Admin A load continuity", () => {
   it("requires an explicit powertrain when adding a new material", async () => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Existing"));
     const create = vi.spyOn(api, "createMaterialSku");
-    const { container } = render(<BomAdminPanel />);
+    const { container } = render(<BomAdminPanel isAdmin={true} />);
     await act(async () => { await Promise.resolve(); });
     fireEvent.click(screen.getByRole("button", { name: "+ Material" }));
     for (const [placeholder, value] of [
@@ -200,7 +200,7 @@ describe("BOM Admin A load continuity", () => {
       materialCode: `CODE${index}`, powertrain: "HEV",
     }));
     vi.spyOn(api, "getBomAdmin").mockResolvedValue({ ...bomResponse("sample"), items });
-    const { container } = render(<BomAdminPanel />);
+    const { container } = render(<BomAdminPanel isAdmin={true} />);
     await act(async () => { await Promise.resolve(); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA OMODA5 HEV/ })); });
     expect(screen.getAllByText(/^(Alpha|Zulu) ·/).map((element) => element.textContent?.split(" ·")[0]))
@@ -217,7 +217,7 @@ describe("BOM Admin A load continuity", () => {
       return request.deferred.promise;
     });
 
-    render(<BomAdminPanel />);
+    render(<BomAdminPanel isAdmin={true} />);
     expect(requests).toHaveLength(1);
     await act(async () => {
       requests[0].deferred.resolve(bomResponse("Initial"));
@@ -266,7 +266,7 @@ describe("BOM Admin A load continuity", () => {
       return request.deferred.promise;
     });
 
-    render(<BomAdminPanel />);
+    render(<BomAdminPanel isAdmin={true} />);
     await act(async () => {
       requests[0].deferred.resolve(bomResponse("Initial"));
       await requests[0].deferred.promise;
@@ -304,7 +304,7 @@ describe("BOM Admin A load continuity", () => {
     }));
     vi.spyOn(api, "getBomAdmin").mockResolvedValue({ ...response, items });
     vi.spyOn(api, "getOrderGeniusSpecialColourSurcharges").mockResolvedValue({ items: [] });
-    await act(async () => { render(<BomAdminPanel />); });
+    await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Pricing sample/ })); });
     expect(screen.getByTitle(/dual · rule \+475€/)).toBeTruthy();
     expect(screen.queryByTitle(/dual · rule \+200€/)).toBeNull();
@@ -322,7 +322,7 @@ describe("BOM Admin A load continuity", () => {
     });
     const remarkSave = vi.spyOn(api, "updateSkuRemark");
     const changed = vi.fn(() => matrixReadback.promise);
-    await act(async () => { render(<BomAdminPanel onFobChanged={changed} />); });
+    await act(async () => { render(<BomAdminPanel isAdmin={true} onFobChanged={changed} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Product sample/ })); });
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByPlaceholderText("Version"), { target: { value: "7 seats" } });
@@ -347,7 +347,7 @@ describe("BOM Admin A load continuity", () => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Period sample"));
     vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods: [], usesPeriods: false });
     const save = vi.spyOn(api, "saveBomTemplateFobPeriod").mockRejectedValue(new Error("Country price conflict"));
-    await act(async () => { render(<BomAdminPanel />); });
+    await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Period sample/ })); });
     await act(async () => { fireEvent.click(screen.getByText("13,600")); });
     const dialog = screen.getByRole("dialog", { name: "Country template FOB periods" });
@@ -373,7 +373,7 @@ describe("BOM Admin A load continuity", () => {
     ];
     vi.spyOn(api, "getBomAdmin").mockResolvedValue({ ...response, items: response.items.map((item) => ({ ...item, fobPeriodsByCountry: { SE: periods } })) });
     vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods, usesPeriods: true });
-    await act(async () => { render(<BomAdminPanel />); });
+    await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Period summary/ })); });
     expect(screen.getByText("P2")).toBeTruthy();
     const price = screen.getByText("15,000");
@@ -394,7 +394,7 @@ describe("BOM Admin A load continuity", () => {
       .mockResolvedValueOnce({ ...impact, deleted: false })
       .mockResolvedValue({ ...impact, deleted: true });
     const changed = vi.fn();
-    await act(async () => { render(<BomAdminPanel onFobChanged={changed} />); });
+    await act(async () => { render(<BomAdminPanel isAdmin={true} onFobChanged={changed} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Restore sample/ })); });
     await act(async () => { fireEvent.click(screen.getByText("13,600")); });
     await act(async () => { fireEvent.click(within(screen.getByRole("dialog")).getByText("Delete")); });
@@ -414,7 +414,7 @@ describe("BOM Admin A load continuity", () => {
       ...response, items: [item], countries: params?.country ? ["NL", params.country] : ["NL", "CH", "SE"],
       activeFobCountries: ["NL", "CH", "SE"],
     }));
-    await act(async () => { render(<BomAdminPanel />); });
+    await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Country columns/ })); });
     const input = screen.getByPlaceholderText(/Search model/);
     await act(async () => {

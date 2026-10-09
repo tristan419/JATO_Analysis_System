@@ -91,19 +91,45 @@ def _header_country_filter(country: str):
     )
 
 
-def pi_month_summary(session: Session, year: int, country: str | None = None) -> dict:
+def _header_access_filter(countries: set[str] | None, brands: set[str] | None):
+    # A header is visible only if a saved line has an authorized market allocation.
+    lines = select(PiOrderLine.pi_id).outerjoin(
+        PiOrderLineAllocation, PiOrderLineAllocation.pi_line_id == PiOrderLine.pi_line_id,
+    ).where(PiOrderLine.pi_id == PiOrderHeader.pi_id)
+    if brands is not None:
+        lines = lines.where(func.upper(PiOrderLine.brand).in_(brands))
+    if countries is not None:
+        lines = lines.where(or_(PiOrderLineAllocation.market_country_code.in_(countries),
+                                and_(PiOrderLineAllocation.pi_line_id.is_(None),
+                                     PiOrderHeader.country_code.in_(countries))))
+    units = select(PiVehicleUnit.pi_id).where(PiVehicleUnit.pi_id == PiOrderHeader.pi_id)
+    if brands is not None:
+        units = units.where(func.upper(PiVehicleUnit.brand).in_(brands))
+    if countries is not None:
+        units = units.where(PiVehicleUnit.country_code.in_(countries))
+    return or_(lines.exists(), units.exists())
+
+
+def pi_month_summary(session: Session, year: int, country: str | None = None,
+                     allowed_countries: set[str] | None = None, allowed_brands: set[str] | None = None) -> dict:
     # Aggregate once before pagination; count market vehicles, not all vehicles in a cross-market PI.
     headers = select(PiOrderHeader.pi_id, PiOrderHeader.order_month).where(
         PiOrderHeader.order_month.like(f"{year:04d}-%"),
     )
     if country:
         headers = headers.where(_header_country_filter(country))
+    if allowed_countries is not None or allowed_brands is not None:
+        headers = headers.where(_header_access_filter(allowed_countries, allowed_brands))
     headers = headers.cte("browse_pis")
     vehicles = select(PiVehicleUnit.pi_id, func.count().label("units")).join(
         headers, PiVehicleUnit.pi_id == headers.c.pi_id,
     )
     if country:
         vehicles = vehicles.where(PiVehicleUnit.country_code == country)
+    if allowed_countries is not None:
+        vehicles = vehicles.where(PiVehicleUnit.country_code.in_(allowed_countries))
+    if allowed_brands is not None:
+        vehicles = vehicles.where(func.upper(PiVehicleUnit.brand).in_(allowed_brands))
     vehicles = vehicles.group_by(PiVehicleUnit.pi_id).subquery()
     stmt = (
         select(headers.c.order_month, func.count().label("pis"),
@@ -117,6 +143,27 @@ def pi_month_summary(session: Session, year: int, country: str | None = None) ->
     ]}
 
 
+def visible_header_markets(session: Session, pi_codes: list[str], countries: set[str] | None,
+                           brands: set[str] | None) -> dict[str, set[str]]:
+    market = func.coalesce(PiOrderLineAllocation.market_country_code, PiOrderHeader.country_code)
+    stmt = select(PiOrderHeader.pi_code, market).join(PiOrderLine, PiOrderLine.pi_id == PiOrderHeader.pi_id).outerjoin(
+        PiOrderLineAllocation, PiOrderLineAllocation.pi_line_id == PiOrderLine.pi_line_id,
+    ).where(PiOrderHeader.pi_code.in_(pi_codes))
+    if countries is not None:
+        stmt = stmt.where(market.in_(countries))
+    if brands is not None:
+        stmt = stmt.where(func.upper(PiOrderLine.brand).in_(brands))
+    units = select(PiVehicleUnit.pi_code, PiVehicleUnit.country_code).where(PiVehicleUnit.pi_code.in_(pi_codes))
+    if countries is not None:
+        units = units.where(PiVehicleUnit.country_code.in_(countries))
+    if brands is not None:
+        units = units.where(func.upper(PiVehicleUnit.brand).in_(brands))
+    result: dict[str, set[str]] = {}
+    for code, country in session.execute(stmt.union(units)):
+        result.setdefault(code, set()).add(country)
+    return result
+
+
 def list_headers(
     session: Session,
     country: str | None = None,
@@ -125,8 +172,12 @@ def list_headers(
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    allowed_countries: set[str] | None = None,
+    allowed_brands: set[str] | None = None,
 ) -> tuple[list[PiOrderHeader], int]:
     stmt = select(PiOrderHeader)
+    if allowed_countries is not None or allowed_brands is not None:
+        stmt = stmt.where(_header_access_filter(allowed_countries, allowed_brands))
     if country:
         stmt = stmt.where(_header_country_filter(country))
     if month:
@@ -302,8 +353,14 @@ def list_vehicles(
     unallocated_only: bool = False,
     page: int = 1,
     page_size: int = 100,
+    allowed_countries: set[str] | None = None,
+    allowed_brands: set[str] | None = None,
 ) -> tuple[list[PiVehicleUnit], int]:
     stmt = select(PiVehicleUnit)
+    if allowed_countries is not None:
+        stmt = stmt.where(PiVehicleUnit.country_code.in_(allowed_countries))
+    if allowed_brands is not None:
+        stmt = stmt.where(func.upper(PiVehicleUnit.brand).in_(allowed_brands))
     if order_month:
         stmt = stmt.join(PiOrderHeader, PiVehicleUnit.pi_code == PiOrderHeader.pi_code)
         stmt = stmt.where(PiOrderHeader.order_month == order_month)
@@ -392,7 +449,8 @@ def list_vehicles(
     return list(rows), total
 
 
-def vehicle_summary(session: Session, pi_code: str, countries: set[str] | None = None) -> dict:
+def vehicle_summary(session: Session, pi_code: str, countries: set[str] | None = None,
+                    brands: set[str] | None = None) -> dict:
     rows = session.execute(
         select(
             func.count().label("total"),
@@ -405,6 +463,7 @@ def vehicle_summary(session: Session, pi_code: str, countries: set[str] | None =
             func.sum(case((PiVehicleUnit.logistics_status == "arrived_at_port", 1), else_=0)).label("arrived"),
             func.sum(case((PiVehicleUnit.logistics_status == "ready_for_pickup", 1), else_=0)).label("ready_for_pickup"),
         ).where(PiVehicleUnit.pi_code == pi_code,
+                *([func.upper(PiVehicleUnit.brand).in_(brands)] if brands is not None else []),
                 *([PiVehicleUnit.country_code.in_(countries)] if countries is not None else []))
     ).first()
     if not rows:

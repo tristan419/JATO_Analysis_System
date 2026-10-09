@@ -174,6 +174,7 @@ export interface VehicleAllocationSummary {
 }
 
 export interface PiOrderDetail {
+  canDelete?: boolean;
   header: PiOrderHeader;
   lines: PiOrderLine[];
   summary: VehicleAllocationSummary;

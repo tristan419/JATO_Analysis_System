@@ -8,9 +8,11 @@ import type { QuantityCellResponse } from "../../types/orderGenius";
 import { api } from "../../api/client";
 import { OrderGeniusPage } from "../../pages/OrderGeniusPage";
 
-vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({
-  user: { role: "admin", primaryCountry: "CH", secondaryCountries: [] }, refreshUser: vi.fn(),
-}) }));
+const authState = vi.hoisted(() => ({ user: { role: "admin", primaryCountry: "CH", secondaryCountries: [] as string[], brands: [] as string[] } }));
+vi.mock("../../contexts/AuthContext", async (original) => ({
+  ...await original<typeof import("../../contexts/AuthContext")>(),
+  useAuth: () => ({ user: authState.user, refreshUser: vi.fn() }),
+}));
 vi.mock("../../components/OrderGeniusGrid", async (original) => ({
   ...await original<typeof import("../../components/OrderGeniusGrid")>(),
   OrderGeniusGrid: (props: Omit<OrderGeniusGridProps, "onCellValueChanged"> & { onCellValueChanged?: (event: Pick<CellValueChangedEvent<OrderGeniusGridRow>, "data" | "colDef" | "newValue" | "oldValue">) => void }) => {
@@ -54,6 +56,8 @@ function plan(quantity: number): VehicleAllocationPlan {
 }
 const savedQuantity: QuantityCellResponse = { orderQuantityCellId: "q", countryCode: "CH", orderYear: 2026, orderMonth: 10, materialCode: "T6481QNCLLX0003", quantity: 15, fobEur: 29000, rowVersion: 2 };
 beforeEach(() => {
+  authState.user.role = "admin";
+  authState.user.brands = [];
   vi.spyOn(api, "getOrderGeniusCountries").mockResolvedValue({ items: [{ countryCode: "CH", countryName: "Switzerland", paymentTermCode: "TT", paymentMethod: "TT", lcDays: null }] });
   vi.spyOn(api, "getOrderGeniusFobCountries").mockResolvedValue({ countries: ["CH"] });
   vi.spyOn(api, "getOrderGeniusOptions").mockResolvedValue({ countryCode: "CH", paymentTermCode: "TT", brands: [], models: [], powertrains: [], versions: [], colours: [], materialCodes: [] });
@@ -79,6 +83,16 @@ async function openOctober() {
 }
 
 describe("quantity save → PI readiness", () => {
+  it("keeps a no-brand request actionable without a missing-FOB overlay or BOM entry", async () => {
+    authState.user.role = "order_filler";
+    vi.mocked(api.getOrderGeniusFobCountries).mockResolvedValue({ countries: [] });
+    render(<OrderGeniusPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Request brand access / 申请品牌" }));
+    expect(await screen.findByRole("checkbox", { name: "OMODA" })).toBeTruthy();
+    expect(screen.queryByText(/selected countries do not have BOM FOB/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open BOM Admin" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /BOM Admin/ })).toBeNull();
+  });
   it("exposes the existing CBU route in the BOM tools", async () => {
     await openOctober();
     fireEvent.click(screen.getByRole("tab", { name: /BOM Admin/i }));

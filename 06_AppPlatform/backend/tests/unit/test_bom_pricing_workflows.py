@@ -94,13 +94,13 @@ def test_product_save_is_atomic_and_returns_saved_powertrain(db):
     body = {"materialCodes": ["A", "B"], "version": "7 seats", "powertrain": "HEV",
             "remark": "new note", "rowVersions": {"A": 1, "B": 99}}
     with pytest.raises(HTTPException) as error:
-        routes.patch_sku_metadata("A", body, db, SimpleNamespace(name="test"))
+        routes.patch_sku_metadata("A", body, db, SimpleNamespace(name="test", role="admin"))
     assert error.value.status_code == 409
     db.expire_all()
     assert first.remark is None and first.row_version == 1
     assert first.version == "Premium" and first.powertrain == "PHEV"
     body["rowVersions"]["B"] = 1
-    result = routes.patch_sku_metadata("A", body, db, SimpleNamespace(name="test"))
+    result = routes.patch_sku_metadata("A", body, db, SimpleNamespace(name="test", role="admin"))
     db.expire_all()
     assert result["productFields"]["powertrain"] == "HEV"
     assert {row["powertrain"] for row in service.build_matrix(db, "CH", 2026)["rows"]} == {"HEV"}
@@ -109,7 +109,7 @@ def test_product_save_is_atomic_and_returns_saved_powertrain(db):
     assert first.row_version == second.row_version == 2
     assert len(db.scalars(select(models.MaterialSkuRemarkHistory)).all()) == 2
     # Re-saving unchanged remarks neither fabricates a version nor adds history.
-    routes.patch_sku_metadata("A", body, db, SimpleNamespace(name="test"))
+    routes.patch_sku_metadata("A", body, db, SimpleNamespace(name="test", role="admin"))
     db.expire_all()
     assert first.row_version == second.row_version == 2
     assert len(db.scalars(select(models.MaterialSkuRemarkHistory)).all()) == 2
@@ -177,7 +177,7 @@ def test_audit_apply_reload_is_idempotent_and_matches_matrix(db):
     audit = repo.audit_colour_surcharge_reprice(db)
     assert audit["summary"]["missingTier"] == 1
     assert audit["summary"]["autoReprice"] == 1
-    applied = routes.apply_colour_surcharge_reprice({"previewFingerprint": audit["fingerprint"]}, db, SimpleNamespace(name="test"))
+    applied = routes.apply_colour_surcharge_reprice({"previewFingerprint": audit["fingerprint"]}, db, SimpleNamespace(name="test", role="admin"))
     assert applied["totals"]["updated"] == 1
     db.expire_all()
     saved = repo.get_fob_for_country_sku(db, "CH", "D")
@@ -745,7 +745,7 @@ def test_lifecycle_route_maps_legacy_months_and_updates_template_group(db):
             "rowVersion": single.row_version,
         },
         session=db,
-        user=SimpleNamespace(name="test"),
+        user=SimpleNamespace(name="test", role="admin"),
     )
 
     assert result["effectiveFrom"] == "2026-03-01"
@@ -769,7 +769,7 @@ def test_lifecycle_route_preserves_omitted_boundary_and_clears_explicit_null(db)
             "rowVersion": single.row_version,
         },
         session=db,
-        user=SimpleNamespace(name="test"),
+        user=SimpleNamespace(name="test", role="admin"),
     )
     assert preserved["effectiveFrom"] == "2026-04-01"
     assert preserved["effectiveTo"] == "2026-09-30"
@@ -782,7 +782,7 @@ def test_lifecycle_route_preserves_omitted_boundary_and_clears_explicit_null(db)
             "rowVersion": preserved["rowVersions"]["S"],
         },
         session=db,
-        user=SimpleNamespace(name="test"),
+        user=SimpleNamespace(name="test", role="admin"),
     )
     assert cleared["effectiveFrom"] == "2026-04-01"
     assert cleared["effectiveTo"] is None
@@ -812,7 +812,7 @@ def test_lifecycle_route_returns_actionable_period_conflict(db):
             "previewOnly": True,
         },
         session=db,
-        user=SimpleNamespace(name="test"),
+        user=SimpleNamespace(name="test", role="admin"),
     )
     assert preview["canApply"] is False
 
@@ -826,7 +826,7 @@ def test_lifecycle_route_returns_actionable_period_conflict(db):
                 "rowVersion": single.row_version,
             },
             session=db,
-            user=SimpleNamespace(name="test"),
+            user=SimpleNamespace(name="test", role="admin"),
         )
 
     assert exc.value.status_code == 409
@@ -889,7 +889,7 @@ def test_template_country_fob_period_update_keeps_original_scope(db, monkeypatch
                 "baseFobEur": 1100,
             },
             session=db,
-            user=SimpleNamespace(name="tester", role="editor"),
+            user=SimpleNamespace(name="tester", role="admin"),
         )
 
     assert exc.value.status_code == 400
@@ -952,7 +952,7 @@ def test_missing_rule_blocks_create_but_explicit_zero_is_valid(db):
 
 def test_colour_tier_patch_requires_explicit_tier(db):
     with pytest.raises(routes.HTTPException) as error:
-        routes.patch_sku_colour_tier("D", {}, db, SimpleNamespace(name="test"))
+        routes.patch_sku_colour_tier("D", {}, db, SimpleNamespace(name="test", role="admin"))
     assert error.value.status_code == 400
     assert error.value.detail == "colourTier is required"
 
@@ -998,7 +998,7 @@ def test_apply_rejects_changed_rule_and_route_rolls_back(db):
     rule = repo.get_brand_colour_surcharge(db, "JAECOO", "dual")
     rule.surcharge_eur = 400
     with pytest.raises(routes.HTTPException) as error:
-        routes.apply_colour_surcharge_reprice({"previewFingerprint": audit["fingerprint"]}, db, SimpleNamespace(name="test"))
+        routes.apply_colour_surcharge_reprice({"previewFingerprint": audit["fingerprint"]}, db, SimpleNamespace(name="test", role="admin"))
     assert error.value.status_code == 409
     assert repo.get_fob_for_country_sku(db, "CH", "D").final_fob_eur == 1000
     assert repo.get_brand_colour_surcharge(db, "JAECOO", "dual").surcharge_eur == 300

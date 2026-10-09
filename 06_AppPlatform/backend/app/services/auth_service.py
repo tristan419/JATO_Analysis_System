@@ -107,9 +107,15 @@ class SessionStore:
         payload = jwt_decode(token)
         if not payload:
             return None
+        from app.db.session import get_session_factory
+        with get_session_factory()() as db:
+            account = db.query(User).filter(User.username == payload.get("username", "")).first()
+            if not account or not account.is_active:
+                return None
+            role = account.role
         return SessionToken(
             username=payload.get("username", ""),
-            role=payload.get("role", "viewer"),
+            role=role,
         )
 
     def revoke(self, token: str) -> None:
@@ -169,6 +175,7 @@ def list_users(db: Session) -> list[dict]:
             "oauth_provider": u.oauth_provider,
             "primary_country_code": u.primary_country_code,
             "secondary_country_codes": u.secondary_country_codes or [],
+            "brands": u.brands or [],
             "preferred_landing_page": u.preferred_landing_page,
             "created_at_utc": u.created_at_utc.isoformat() if u.created_at_utc else None,
         }

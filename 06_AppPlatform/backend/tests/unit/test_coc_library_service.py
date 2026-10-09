@@ -308,7 +308,8 @@ def test_pi_counts_and_market_authorization(tmp_path, monkeypatch):
         if country != "CH":
             raise HTTPException(403, "denied")
     monkeypatch.setattr(route, "_validate_country", validate)
-    result = route.lookup_pi_cocs("PI", None, SimpleNamespace())
+    monkeypatch.setattr(route, "ordering_brands", lambda *args: None)
+    result = route.lookup_pi_cocs("PI", None, SimpleNamespace(role="admin"))
     assert (result["total"], result["available"], result["awaitingVin"], result["missing"]) == (3, 1, 1, 1)
     assert calls == ["CH", "SE"]
     with pytest.raises(HTTPException):

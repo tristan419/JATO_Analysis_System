@@ -14,6 +14,7 @@ import { isCandidatePreviewOrigin } from "../utils/candidateRuntime";
 import { getOAuthRedirectTarget } from "../utils/oauthRedirect";
 
 const AUTH_PROFILE_REFRESH_DELAY_MS = 30_000;
+export const ORDERING_BRANDS = ["OMODA", "JAECOO", "EXLANTIX", "LEPAS", "CHERY", "ICAR"] as const;
 const AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS = 8_000;
 
 type AuthIdleWindow = Window & typeof globalThis & {
@@ -51,6 +52,7 @@ export interface User {
   displayName: string | null;
   primaryCountry: string | null;
   secondaryCountries: string[];
+  brands: string[];
   preferredLandingPage: string | null;
   profileComplete: boolean;
 }
@@ -70,10 +72,11 @@ export interface AuthRefreshOptions {
 }
 
 export interface UserProfileUpdate {
-  primaryCountry: string | null;
-  secondaryCountries: string[];
+  primaryCountry?: string | null;
+  secondaryCountries?: string[];
   preferredLandingPage?: string | null;
   displayName?: string | null;
+  brands?: string[];
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -83,6 +86,7 @@ const STORAGE_USER = "jato_user_name";
 const STORAGE_ROLE = "jato_user_role";
 const STORAGE_PRIMARY_COUNTRY = "jato_primary_country";
 const STORAGE_SECONDARY_COUNTRIES = "jato_secondary_countries";
+const STORAGE_BRANDS = "jato_brands";
 const STORAGE_PREFERRED_LANDING = "jato_preferred_landing_page";
 
 function loginUrlAfterLogout(): string {
@@ -111,6 +115,7 @@ function normalizeUserPayload(data: Record<string, unknown>): User {
     displayName: data.displayName ? String(data.displayName) : null,
     primaryCountry,
     secondaryCountries: secondary,
+    brands: Array.isArray(data.brands) ? data.brands.filter((brand): brand is string => typeof brand === "string") : [],
     preferredLandingPage: data.preferredLandingPage
       ? String(data.preferredLandingPage)
       : null,
@@ -119,6 +124,7 @@ function normalizeUserPayload(data: Record<string, unknown>): User {
 }
 
 function storeUser(user: User): void {
+  localStorage.setItem(STORAGE_BRANDS, JSON.stringify(user.brands));
   localStorage.setItem(STORAGE_USER, user.username);
   localStorage.setItem(STORAGE_ROLE, user.role);
   if (user.primaryCountry) {
@@ -138,6 +144,7 @@ function storeUser(user: User): void {
 }
 
 function clearStoredAuth(): void {
+  localStorage.removeItem(STORAGE_BRANDS);
   localStorage.removeItem(STORAGE_TOKEN);
   localStorage.removeItem(STORAGE_USER);
   localStorage.removeItem(STORAGE_ROLE);
@@ -164,6 +171,11 @@ function loadUser(): User | null {
     secondaryCountries = [];
   }
   const primaryCountry = localStorage.getItem(STORAGE_PRIMARY_COUNTRY);
+  let brands: string[] = [];
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(STORAGE_BRANDS) || "[]");
+    if (Array.isArray(stored)) brands = stored.filter((brand): brand is string => typeof brand === "string");
+  } catch { /* Missing/invalid cached assignment is not an authorization. */ }
   return {
     username,
     role: effectiveRole,
@@ -173,6 +185,7 @@ function loadUser(): User | null {
     displayName: null,
     primaryCountry,
     secondaryCountries,
+    brands,
     preferredLandingPage: localStorage.getItem(STORAGE_PREFERRED_LANDING),
     profileComplete: Boolean(primaryCountry),
   };
@@ -269,6 +282,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         displayName: null,
         primaryCountry: null,
         secondaryCountries: [],
+        brands: [],
         preferredLandingPage: null,
         profileComplete: false,
       });

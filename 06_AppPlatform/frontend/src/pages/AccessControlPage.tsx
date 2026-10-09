@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import { useAuth } from "../contexts/AuthContext";
+import { ORDERING_BRANDS, useAuth } from "../contexts/AuthContext";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
+import { isAdminRole } from "../utils/pageNavigation";
 import {
   formatJatoCountryOption,
   type JatoCountryOption,
@@ -11,7 +12,7 @@ type Tab = "users" | "requests" | "matrix" | "audit";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "users", label: "Users" },
-  { key: "requests", label: "Role Requests" },
+  { key: "requests", label: "Access Requests" },
   { key: "matrix", label: "Permissions" },
   { key: "audit", label: "Audit Log" },
 ];
@@ -33,6 +34,7 @@ interface AccessUser {
   primaryCountry?: string | null;
   secondary_country_codes?: string[];
   secondaryCountries?: string[];
+  brands?: string[];
   preferred_landing_page?: string | null;
   preferredLandingPage?: string | null;
   created_at_utc?: string | null;
@@ -43,6 +45,7 @@ interface RoleUpgradeRequestItem {
   username: string;
   currentRole: string;
   requestedRole: string;
+  requestedBrands: string[] | null;
   reason: string;
   status: string;
   createdAtUtc: string;
@@ -50,12 +53,16 @@ interface RoleUpgradeRequestItem {
 
 const PERMISSION_MATRIX: { feature: string; order_filler: boolean; viewer: boolean; editor: boolean; admin: boolean }[] = [
   { feature: "Dashboard / Market Scan 查看", order_filler: true, viewer: true, editor: true, admin: true },
-  { feature: "Order Genius 查看 (本人国家)", order_filler: true, viewer: true, editor: true, admin: true },
+  { feature: "Order Genius / PI 查看 (授权国家＋品牌)", order_filler: true, viewer: false, editor: true, admin: true },
   { feature: "Order 数量编辑 / 导入导出", order_filler: true, viewer: false, editor: true, admin: true },
   { feature: "Material 上传", order_filler: false, viewer: false, editor: true, admin: true },
   { feature: "Publish Material Baseline", order_filler: false, viewer: false, editor: false, admin: true },
   { feature: "Payment Term 勘误", order_filler: false, viewer: false, editor: false, admin: true },
-  { feature: "BOM 底表编辑", order_filler: false, viewer: false, editor: false, admin: true },
+  { feature: "共享 BOM 编辑 (获配品牌)", order_filler: false, viewer: false, editor: true, admin: true },
+  { feature: "国家 FOB 编辑 (授权国家＋品牌)", order_filler: false, viewer: false, editor: true, admin: true },
+  { feature: "删除整张 PI (全部明细均获授权)", order_filler: false, viewer: false, editor: true, admin: true },
+  { feature: "个人国家修改", order_filler: false, viewer: true, editor: true, admin: true },
+  { feature: "分配账号品牌", order_filler: false, viewer: false, editor: false, admin: true },
   { feature: "用户管理 / 权限审批", order_filler: false, viewer: false, editor: false, admin: true },
   { feature: "JATO 月更发布", order_filler: false, viewer: false, editor: true, admin: true },
   { feature: "Hermes 治理面板", order_filler: false, viewer: false, editor: false, admin: true },
@@ -144,8 +151,9 @@ export function AccessControlPage() {
   const [searchQuery, setSearchQuery] = useState("");
   // Edit modal
   const [editingUser, setEditingUser] = useState<AccessUser | null>(null);
+  const [approvalBrands, setApprovalBrands] = useState<Record<string, string[]>>({});
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ role: "", primaryCountry: "", secondaryCodes: [] as string[], newPassword: "", isActive: true });
+  const [editForm, setEditForm] = useState({ role: "", primaryCountry: "", secondaryCodes: [] as string[], brands: [] as string[], newPassword: "", isActive: true });
 
   // Multi-select popover for secondary countries
   const secondaryPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -175,6 +183,7 @@ export function AccessControlPage() {
           username: String(raw.username ?? ""),
           currentRole: String(raw.currentRole ?? ""),
           requestedRole: String(raw.requestedRole ?? ""),
+          requestedBrands: Array.isArray(raw.requestedBrands) ? raw.requestedBrands.filter((brand): brand is string => typeof brand === "string") : null,
           reason: String(raw.reason ?? ""),
           status: String(raw.status ?? ""),
           createdAtUtc: String(raw.createdAtUtc ?? ""),
@@ -243,6 +252,7 @@ export function AccessControlPage() {
       role: u.role,
       primaryCountry: u.primaryCountry ?? u.primary_country_code ?? "",
       secondaryCodes: [...(u.secondaryCountries ?? u.secondary_country_codes ?? [])],
+      brands: [...(u.brands ?? [])],
       newPassword: "",
       isActive: u.isActive ?? u.is_active ?? true,
     });
@@ -258,10 +268,12 @@ export function AccessControlPage() {
       const currentSecondary = editingUser.secondaryCountries ?? editingUser.secondary_country_codes ?? [];
       const newSecondarySorted = [...editForm.secondaryCodes].sort();
       const curSecondarySorted = [...currentSecondary].sort();
-      if (editForm.primaryCountry !== currentPrimary || newSecondarySorted.join(",") !== curSecondarySorted.join(",")) {
+      if (editForm.primaryCountry !== currentPrimary || newSecondarySorted.join(",") !== curSecondarySorted.join(",")
+          || [...editForm.brands].sort().join(",") !== [...(editingUser.brands ?? [])].sort().join(",")) {
         await api.patch(`/auth/users/${editingUser.id}/profile`, {
           primaryCountry: editForm.primaryCountry || null,
           secondaryCountries: editForm.secondaryCodes,
+          brands: editForm.brands,
           preferredLandingPage: editingUser.preferredLandingPage ?? editingUser.preferred_landing_page ?? "/dashboard",
         });
       }
@@ -317,7 +329,9 @@ export function AccessControlPage() {
     setReviewingRequestId(requestId);
     setError("");
     try {
-      await api.reviewRoleUpgradeRequest(requestId, { status });
+      await api.reviewRoleUpgradeRequest(requestId, { status,
+        ...(status === "approved" && approvalBrands[requestId] ? { brands: approvalBrands[requestId] } : {}),
+      });
       await Promise.all([loadRequests(), loadUsers()]);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Role request review failed");
@@ -388,6 +402,7 @@ export function AccessControlPage() {
                   <th>Role</th>
                   <th>Primary Country</th>
                   <th>Secondary Countries</th>
+                  <th>Brands</th>
                   <th>Status</th>
                   <th>Created</th>
                   <th>Actions</th>
@@ -453,6 +468,7 @@ export function AccessControlPage() {
                         </div>
                       )}
                     </td>
+                    <td><button className="btn btn-sm btn-ghost" onClick={() => openEdit(u)}>{isAdminRole(u.role) ? "All brands" : u.role === "viewer" ? "Not required" : u.brands?.join(", ") || "Unassigned"}</button></td>
                     <td style={{ color: active ? "#16a34a" : "#dc2626", fontWeight: 500 }}>{active ? "Active" : "Inactive"}</td>
                     <td style={{ fontSize: 11, color: "#64748b" }}>{u.created_at_utc?.slice(0, 10) || "—"}</td>
                     <td>
@@ -485,6 +501,7 @@ export function AccessControlPage() {
                   <span style={{ fontWeight: 600 }}>Role</span>
                   <select value={editForm.role} onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
                     style={{ display: "block", width: "100%", marginTop: 4, padding: "6px 8px", borderRadius: 4, border: "1px solid #d1d5db", fontSize: 13 }}>
+                    {editingUser.role === "developer" && <option value="developer">developer</option>}
                     {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </label>
@@ -511,6 +528,18 @@ export function AccessControlPage() {
                     embedded
                   />
                 </div>
+
+                <fieldset style={{ marginBottom: 12 }}>
+                  <legend>Brands / 品牌</legend>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                    {ORDERING_BRANDS.map((brand) => <label key={brand}>
+                      <input type="checkbox" checked={editForm.brands.includes(brand)} onChange={() => setEditForm({ ...editForm,
+                        brands: editForm.brands.includes(brand) ? editForm.brands.filter((value) => value !== brand) : [...editForm.brands, brand],
+                      })} /> {brand}
+                    </label>)}
+                  </div>
+                  <small>Viewer does not require brands; Admin+ always sees all. / Viewer无需品牌；Admin及以上始终全部可见。</small>
+                </fieldset>
 
                 {/* New Password */}
                 <label style={{ display: "block", marginBottom: 12, fontSize: 13 }}>
@@ -566,7 +595,7 @@ export function AccessControlPage() {
             <div>
               <h3 style={{ margin: "0 0 4px" }}>Role Upgrade Requests</h3>
               <p style={{ color: "#64748b", fontSize: 13, margin: 0 }}>
-                Viewer users can request editor access. Admin approval updates the user role immediately.
+                Viewer users can request editor access. Brand requests assign approved brands without changing the role. / 品牌申请批准后仅分配品牌，不提升角色。
               </p>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -616,7 +645,20 @@ export function AccessControlPage() {
                     <tr key={request.requestId}>
                       <td>{request.username}</td>
                       <td>{request.currentRole}</td>
-                      <td>{request.requestedRole}</td>
+                      <td>{request.requestedBrands ? (
+                        <div>
+                          <div>Requested / 申请: {request.requestedBrands.join(", ")}</div>
+                          {pending ? <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            {ORDERING_BRANDS.map((brand) => {
+                              const selected = approvalBrands[request.requestId] ?? request.requestedBrands ?? [];
+                              return <label key={brand}><input type="checkbox" disabled={busy}
+                                checked={selected.includes(brand)} onChange={() => setApprovalBrands({ ...approvalBrands,
+                                  [request.requestId]: selected.includes(brand) ? selected.filter((value) => value !== brand) : [...selected, brand],
+                                })} /> {brand}</label>;
+                            })}
+                          </div> : null}
+                        </div>
+                      ) : request.requestedRole}</td>
                       <td style={{ maxWidth: 360, whiteSpace: "normal" }}>{request.reason || "-"}</td>
                       <td>{request.status}</td>
                       <td style={{ fontSize: 11, color: "#64748b" }}>{request.createdAtUtc.slice(0, 10) || "—"}</td>
@@ -650,6 +692,7 @@ export function AccessControlPage() {
       {tab === "matrix" && (
         <div className="card crud-card" style={{ padding: 16 }}>
           <h3 style={{ margin: "0 0 12px" }}>Permissions Matrix</h3>
+          <p>Admin+ always sees all countries and brands. Shared BOM edits affect the brand across countries. Viewer keeps existing read-only routes and needs no brands. / Admin及以上全国家、全品牌可见；共享BOM修改跨国家生效；Viewer保持原有只读页面，无需品牌。</p>
           <table className="data-table" style={{ fontSize: 13 }}>
             <thead><tr><th>Feature</th><th style={{ textAlign: "center" }}>Order Filler</th><th style={{ textAlign: "center" }}>Viewer</th><th style={{ textAlign: "center" }}>Editor</th><th style={{ textAlign: "center" }}>Admin</th></tr></thead>
             <tbody>

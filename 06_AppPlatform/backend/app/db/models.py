@@ -1742,6 +1742,9 @@ class User(Base):
         Boolean, nullable=False, default=True
     )
     primary_country_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    brands: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"),
+    )
     secondary_country_codes: Mapped[list[str]] = mapped_column(
         JSONB,
         nullable=False,
@@ -1783,6 +1786,7 @@ class RoleUpgradeRequest(Base):
     username: Mapped[str] = mapped_column(Text, nullable=False)
     current_role: Mapped[str] = mapped_column(Text, nullable=False)
     requested_role: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_brands: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)

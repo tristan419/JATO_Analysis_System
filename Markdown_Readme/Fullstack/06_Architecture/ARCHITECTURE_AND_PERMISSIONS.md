@@ -1,64 +1,25 @@
 # JATO Analysis System — Architecture & Permissions
 
-> Last updated: 2026-05-31
+> Last updated: 2026-10-09. Ordering 现行契约见 [Permission Management](../../features/PERMISSION_MANAGEMENT.md)。部署／验收状态见当前批次 Progress；后文其他产品架构保留基线事实，不代表全系统已完成品牌隔离。
 
-## 1. Role Hierarchy
+## 1. Role Hierarchy and Ordering Scope
 
-Four-tier role system. Higher levels inherit all lower-level permissions.
+复用 viewer／order_filler／editor／admin 及现有 developer（Admin 等级），不新增角色平台。后端 Viewer 与 Filler 等级相同，订单写接口必须明确列出 Filler／Editor／Admin，不能仅凭等级放行 Viewer。
 
-| Role | Frontend Level | Backend Level | Description |
-|------|---------------|---------------|-------------|
-| `viewer` | 0 | 1 | Read-only access. Cannot see Order Genius. |
-| `order_filler` | 1 | 1 | Between viewer and editor. Sees Order Genius but only assigned countries. Can edit quantities. |
-| `editor` | 2 | 2 | Full access to all countries. Can upload BOM, manage SKUs, configure payment terms. |
-| `admin` | 3 | 3 | Full access + user management, country assignments, access control. |
+- Admin 及以上全国家、全品牌可见，不受个人偏好限制。
+- Filler：Admin 分配主国家＋附加国家、品牌；不可自改。
+- Editor：可自改本人国家，品牌仅 Admin 分配；共享 BOM 维护按获配品牌，国家数量／价格／车辆按国家×品牌。
+- Viewer：可自改国家、无需品牌，不扩大现有页面或只读能力。
+- 新 Filler／Editor 品牌默认空；现有全部 Filler 一次性补 OMODA＋JAECOO，现有 Editor 不补。迁移不改国家、角色或历史业务记录。
+- 无品牌提示只在选品／分车页面需要时出现；复用权限申请表和审批工作流，批准分配品牌，不提升角色。
 
-### Role assignment flow
+### Existing flow, not a new permission platform
 
-```
-Admin sets user role + secondaryCountries via /admin/access-control
-  → User logs in via OAuth (Google/Feishu) or token
-  → GET /v1/auth/me returns { role, secondaryCountries, primaryCountry }
-  → Frontend AuthContext stores role + country list
-  → RequireRole gates page access by role
-  → OrderGeniusPage filters country list by secondaryCountries for non-admin users
-```
+Admin 在 Access Control 分配，/auth/me 返回当前角色／国家／品牌；AuthContext 和既有路由／页面控制入口。后端认证读取当前有效账号；现有 SQL 查询先按授权过滤再计数／分页，事务写前检查全部目标。旧 token 与请求筛选不能扩权。
 
-### Backend endpoint guards
+混合 PI 的 line／allocation／车辆与数量／导出使用订单保存品牌及实际国家；Editor 整 PI 删除须所有目标有权。共享 HEX 同步历史 PI 展示，订单物料号／BOM／描述／成交价不重写。CBU 与独立 COC 库管理不在本轮，PI 发起 COC 下载仍限制授权 VIN。
 
-| Endpoint Group | Min Role | Notes |
-|---------------|----------|-------|
-| Matrix view (`GET /options`, `GET /matrix`) | `viewer` | order_filler can access (same level) |
-| Quantity edit (`PATCH /quantity-cell`) | `order_filler` | Explicitly listed: editor, admin, order_filler |
-| Material upload (`/material-master-uploads/*`) | `editor` | |
-| SKU management (`/material-skus/*/lifecycle`, `/fob`, `/colour-*`) | `editor` | |
-| BOM Admin (`GET /bom-admin`) | `editor` | |
-| SKU delete (`DELETE /material-skus/*`) | `admin` | |
-| Payment terms CRUD | `editor` | |
-| Publish baseline | `admin` | |
-
-### Country-level access control
-
-- `admin` / `editor`: See ALL countries in Order Genius
-- `order_filler`: Only sees countries listed in `user.secondaryCountries` (set by admin)
-- `viewer`: Cannot access Order Genius at all
-
-**Implementation**: `OrderGeniusPage.tsx` line 64-70:
-```tsx
-if (!isAdmin && userCountries.length > 0) {
-  filtered = countries.filter((c) => userCountries.includes(c.countryCode));
-}
-```
-
-### Permission files
-
-| Layer | File | Key Code |
-|-------|------|----------|
-| Frontend hierarchy | `frontend/src/utils/pageNavigation.ts` | `ROLE_LEVEL`, `filterMenuByRole()` |
-| Frontend route guard | `frontend/src/components/RequireRole.tsx` | `ORDER_FILLER_ROUTES` |
-| Frontend auth context | `frontend/src/contexts/AuthContext.tsx` | `useAuth()`, `User` interface |
-| Backend hierarchy | `backend/app/core/security.py` | `ROLE_LEVEL`, `require_min_role()`, `require_roles()` |
-| Backend country guard | `backend/app/core/security.py` | `validate_country_access()` |
+权限文件：backend/app/core/security.py、services/auth_service.py、api/routes/auth.py、ordering route/service/repository；frontend AuthContext、pageNavigation、AccessControl、Profile 和选品／分车页面。完整角色矩阵与回归以 Permission Management 为准。
 
 ---
 

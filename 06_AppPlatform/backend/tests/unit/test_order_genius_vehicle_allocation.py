@@ -62,10 +62,12 @@ def vehicle_db():
         assert database_url.rsplit("/", 1)[-1].startswith("jato_test_"), "Use a disposable test database"
     engine = create_engine(
         database_url,
-        execution_options={"schema_translate_map": {"ordering": None}},
+        execution_options={"schema_translate_map": {"ordering": None, "auth": None}},
     )
     metadata = MetaData()
     for model in (
+        models.User,
+        models.RoleUpgradeRequest,
         models.MaterialBaselineVersion,
         models.MaterialSkuMaster,
         models.CountrySkuFobResolved,
@@ -1291,7 +1293,7 @@ def _vin_fill_pi(session, materials=("BOM-A",), quantity=3):
     model = vehicle_repo.get_header_by_code(session, header["piCode"])
     for number, material in enumerate(materials, start=1):
         line = vehicle_service._build_line(session, model, number, {
-            "materialCode": material, "quantity": quantity, "fobEur": 12345, "powertrain": "HEV",
+            "materialCode": material, "quantity": quantity, "fobEur": 12345, "powertrain": "HEV", "brand": "OMODA",
         }, "tester")
         vehicle_repo.add_line(session, line)
         vehicle_service._ensure_vehicle_units_for_line(session, model, line, "tester")
@@ -1306,13 +1308,18 @@ def mixed_market_pi(vehicle_db, monkeypatch):
     header.market_country_codes = ["CH", "SE"]
     for car in cars[2:]:
         car.country_code = "SE"
+    for car in cars:
+        car.brand = "OMODA"
+    for line in vehicle_repo.list_lines_by_pi(vehicle_db, header.pi_id):
+        line.brand = "OMODA"
+    for name, role, countries in [("ch-filler", "order_filler", []),
+                                   ("multi-filler", "order_filler", ["SE"]),
+                                   ("editor", "editor", ["SE"]),
+                                   ("admin-with-ch-primary", "admin", [])]:
+        vehicle_db.add(models.User(username=name, password_hash="test", role=role,
+                                   is_active=True, primary_country_code="CH",
+                                   secondary_country_codes=countries, brands=["OMODA", "JAECOO"]))
     vehicle_db.commit()
-    def check_country(_session, user, country):
-        accounts = Mock()
-        accounts.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
-            primary_country_code="CH", secondary_country_codes=["SE"] if user.name == "multi-filler" else [])
-        validate_country_access(accounts, user.name, user.role, country or "")
-    monkeypatch.setattr(vehicle_route, "_validate_country", check_country)
     return pi, cars
 
 
@@ -1348,7 +1355,7 @@ def test_latest_library_hex_changes_historical_pi_display_only(vehicle_db, histo
         car.freight_eur, car.insurance_eur = 100, 20
     vehicle_db.commit()
     before = vehicle_service.get_pi_detail(vehicle_db, pi)
-    colour_route.set_colour_hex_rule_standard({"brand": "OMODA", "colourCode": "BX", "colourName": "Reviewed white", "colourHex": "#112233"}, vehicle_db)
+    colour_route.set_colour_hex_rule_standard({"brand": "OMODA", "colourCode": "BX", "colourName": "Reviewed white", "colourHex": "#112233"}, vehicle_db, UserContext(role="admin", name="tester"))
     after = vehicle_service.get_pi_detail(vehicle_db, pi)
     assert current.colour_hex == "#112233"
     assert old.colour_hex is None and old.exterior_color_name == "Saved white"
@@ -1357,7 +1364,7 @@ def test_latest_library_hex_changes_historical_pi_display_only(vehicle_db, histo
     for section in ("vehicles", "lines"):
         assert [{k: v for k, v in row.items() if k != "colourHex"} for row in after[section]] == [{k: v for k, v in row.items() if k != "colourHex"} for row in before[section]]
     assert all(car.material_code == "TESTBX001" for car in cars)
-    colour_route.set_colour_hex_rule_standard({"brand": "OMODA", "colourCode": "BX", "colourName": "Reviewed white", "colourHex": "#445566"}, vehicle_db)
+    colour_route.set_colour_hex_rule_standard({"brand": "OMODA", "colourCode": "BX", "colourName": "Reviewed white", "colourHex": "#445566"}, vehicle_db, UserContext(role="admin", name="tester"))
     assert vehicle_service.get_pi_detail(vehicle_db, pi)["vehicles"][0]["colourHex"] == "#445566"
 
 
@@ -1371,12 +1378,12 @@ def test_shared_save_confirms_only_requested_material_and_rolls_back_together(ve
     monkeypatch.setattr(order_repo, "set_standard_colour_hex_for_rule", failing_save)
     payload = {"brand": "OMODA", "colourCode": "BX", "colourName": "Reviewed white", "colourHex": "#112233", "confirmMaterialCode": first.material_code}
     with pytest.raises(HTTPException):
-        colour_route.set_colour_hex_rule_standard(payload, vehicle_db)
+        colour_route.set_colour_hex_rule_standard(payload, vehicle_db, UserContext(role="admin", name="tester"))
     assert first.colour_hex is None and not first.colour_code_confirmed
     assert second.colour_hex is None and not second.colour_code_confirmed
     assert order_repo.list_persistent_colour_standard_map(vehicle_db) == {}
     monkeypatch.setattr(order_repo, "set_standard_colour_hex_for_rule", save)
-    colour_route.set_colour_hex_rule_standard(payload, vehicle_db)
+    colour_route.set_colour_hex_rule_standard(payload, vehicle_db, UserContext(role="admin", name="tester"))
     assert first.colour_code_confirmed and not second.colour_code_confirmed
     assert first.colour_hex == second.colour_hex == "#112233"
 
@@ -1388,7 +1395,7 @@ def test_referenced_material_identity_cannot_move_or_change_bom(vehicle_db, oper
     before = vehicle_service.get_pi_detail(vehicle_db, pi)
     with pytest.raises((HTTPException, ValueError), match="Referenced by a PI"):
         if operation in {"colour", "clear"}:
-            colour_route.patch_colour_code(sku.material_code, {"colourCode": "ZZ" if operation == "colour" else "", "colourName": "Other white"}, vehicle_db)
+            colour_route.patch_colour_code(sku.material_code, {"colourCode": "ZZ" if operation == "colour" else "", "colourName": "Other white"}, vehicle_db, UserContext(role="admin", name="tester"))
         elif operation == "material":
             order_repo.update_sku_material_code(vehicle_db, sku.material_code, "NEWZZ001")
         else:
@@ -1516,9 +1523,12 @@ def test_single_foreign_country_write_is_rejected(vehicle_db, mixed_market_pi):
     assert cars[-1].remark is None
 
 
-def test_empty_authorized_pi_is_still_readable(vehicle_db, mixed_market_pi):
+def test_empty_pi_has_no_brand_identity_and_is_admin_only(vehicle_db, mixed_market_pi):
     header = vehicle_service.create_pi_header(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 10}, "tester")
-    detail = vehicle_route.get_pi_order(header["piCode"], vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    with pytest.raises(HTTPException) as denied:
+        vehicle_route.get_pi_order(header["piCode"], vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert denied.value.status_code == 403
+    detail = vehicle_route.get_pi_order(header["piCode"], vehicle_db, UserContext(role="admin", name="admin"))
     assert detail["vehicles"] == []
     assert detail["summary"]["totalUnits"] == 0
 
@@ -1759,13 +1769,16 @@ def test_pi_month_route_validates_country_before_query(monkeypatch):
             raise HTTPException(403, "Country access denied")
     monkeypatch.setattr(vehicle_route, "validate_country_access", validate)
     monkeypatch.setattr(vehicle_repo, "pi_month_summary", lambda session, **kw: kw)
+    monkeypatch.setattr(vehicle_route, "ordering_countries", lambda session, user: {"CH"})
+    monkeypatch.setattr(vehicle_route, "ordering_brands", lambda session, user: {"OMODA"})
     user = SimpleNamespace(name="filler", role="order_filler")
-    assert vehicle_route.list_pi_months(year=2026, country="ch", session=object(), user=user) == {"year": 2026, "country": "CH"}
-    for country in ("SE", None):
+    assert vehicle_route.list_pi_months(year=2026, country="ch", session=object(), user=user) == {"year": 2026, "country": "CH", "allowed_countries": {"CH"}, "allowed_brands": {"OMODA"}}
+    for country in ("SE",):
         with pytest.raises(HTTPException) as exc:
             vehicle_route.list_pi_months(year=2026, country=country, session=object(), user=user)
         assert exc.value.status_code == 403
-    assert calls == ["CH", "SE", ""]
+    assert vehicle_route.list_pi_months(year=2026, country=None, session=object(), user=user)["allowed_countries"] == {"CH"}
+    assert calls == ["CH", "SE"]
 
 
 def test_clear_vins_preserves_slots_and_skips_already_cleared(vehicle_db):

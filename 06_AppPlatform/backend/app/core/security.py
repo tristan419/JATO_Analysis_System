@@ -15,6 +15,37 @@ ROLE_LEVEL = {
     "developer": 3,
 }
 
+ORDERING_BRANDS = ("OMODA", "JAECOO", "EXLANTIX", "LEPAS", "CHERY", "ICAR")
+
+
+def is_admin(role: str) -> bool:
+    return ROLE_LEVEL.get(role, 0) >= ROLE_LEVEL["admin"]
+
+
+def ordering_brands(session, user: "UserContext") -> set[str] | None:
+    """None is unrestricted; an empty assignment always means no brands."""
+    if is_admin(user.role) or user.role == "viewer":
+        return None
+    from app.db.models import User
+    account = session.query(User).filter(User.username == user.name).first()
+    return {str(brand).strip().upper() for brand in (account.brands or [])
+            if str(brand).strip().upper() in ORDERING_BRANDS} if account else set()
+
+
+def validate_brand_access(session, user: "UserContext", brand: str | None) -> None:
+    allowed = ordering_brands(session, user)
+    if allowed is not None and str(brand or "").strip().upper() not in allowed:
+        raise HTTPException(403, "Brand not assigned; contact admin / 未获配该品牌，请联系管理员")
+
+
+def ordering_countries(session, user: "UserContext") -> set[str] | None:
+    if is_admin(user.role):
+        return None
+    from app.db.models import User
+    account = session.query(User).filter(User.username == user.name).first()
+    return {str(code).strip().upper() for code in
+            ([account.primary_country_code] + (account.secondary_country_codes or [])) if code} if account else set()
+
 
 @dataclass(frozen=True)
 class UserContext:
@@ -40,7 +71,7 @@ def _token_user(
     if session and session.role in ROLE_LEVEL:
         return UserContext(role=session.role, name=session.username)
 
-    if x_auth_token in TOKEN_ROLE_MAP:
+    if not AUTH_REQUIRED and x_auth_token in TOKEN_ROLE_MAP:
         role = TOKEN_ROLE_MAP[x_auth_token]
         if role not in ROLE_LEVEL:
             raise HTTPException(status_code=403, detail="Invalid role")
@@ -106,7 +137,7 @@ def require_roles(*allowed_roles: str) -> Callable:
     def dependency(
         user: UserContext = Depends(get_current_user),
     ) -> UserContext:
-        if user.role not in allowed_roles:
+        if user.role not in allowed_roles and not ("admin" in allowed_roles and is_admin(user.role)):
             raise HTTPException(status_code=403, detail="Forbidden")
         return user
 
@@ -114,11 +145,11 @@ def require_roles(*allowed_roles: str) -> Callable:
 
 
 def validate_country_access(session, username: str, role: str, country: str) -> None:
-    """Raise 403 if an order_filler user tries to access a country they aren't assigned to."""
-    if role != "order_filler":
+    """Ordering country scope; Editor/Viewer may change their own account countries."""
+    if is_admin(role):
         return
     if not country:
-        raise HTTPException(status_code=403, detail="Country required for order_filler accounts")
+        raise HTTPException(status_code=403, detail="Country not assigned / 尚未分配国家")
     from app.db.models import User
     db_user = session.query(User).filter(User.username == username).first()
     if not db_user:

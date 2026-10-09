@@ -17,7 +17,9 @@ from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session
 
 from app.core.config import COC_MATCH_JOB_ROOT
-from app.core.security import UserContext, require_min_role, require_roles, validate_country_access
+from app.core.security import (UserContext, require_min_role, require_roles, validate_country_access,
+                               validate_brand_access, ordering_brands, ordering_countries, is_admin)
+from app.infra import order_genius_repository as ordering_repo
 from app.db.session import get_db_session
 from app.infra import order_genius_vehicle_repository as vehicle_repo
 from app.services.order_genius_vehicle_import_parser import (
@@ -63,6 +65,7 @@ def _coc_pi_vehicles(session: Session, user: UserContext, pi_code: str) -> list:
         raise HTTPException(404, "PI not found / PI不存在")
     vehicles = vehicle_repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
     permitted = []
+    brands = ordering_brands(session, user)
     countries = {}
     for vehicle in vehicles:
         country = vehicle.country_code
@@ -74,7 +77,7 @@ def _coc_pi_vehicles(session: Session, user: UserContext, pi_code: str) -> list:
                 if exc.status_code != 403:
                     raise
                 countries[country] = False
-        if not countries[country]:
+        if not countries[country] or (brands is not None and str(vehicle.brand or "").upper() not in brands):
             continue
         permitted.append(vehicle)
     if not permitted:
@@ -149,7 +152,7 @@ def _validate_country(session: Session, user: UserContext, country: str | None) 
 
 
 def _validate_optional_country(session: Session, user: UserContext, country: str | None) -> None:
-    if country or user.role == "order_filler":
+    if country:
         _validate_country(session, user, country)
 
 
@@ -186,17 +189,36 @@ def _validate_pi_detail_access(session: Session, user: UserContext, detail: dict
 
 
 def _validate_vehicle_access(session: Session, user: UserContext, vehicle: dict) -> None:
-    _validate_optional_country(session, user, _country(vehicle.get("countryCode")))
+    _validate_country(session, user, _country(vehicle.get("countryCode")))
+    validate_brand_access(session, user, vehicle.get("brand"))
 
 
 def _accessible_pi_detail(session: Session, user: UserContext, pi_code: str) -> dict:
     detail = get_pi_detail(session, pi_code)
-    _validate_pi_detail_access(session, user, detail)
-    if user.role != "order_filler":
-        return detail
-    countries = {vehicle["countryCode"] for vehicle in detail["vehicles"]}
-    countries.update(detail["header"]["marketCountryCodes"])
-    return get_pi_detail(session, pi_code, countries=_accessible_market_countries(session, user, countries))
+    can_delete = is_admin(user.role)
+    if user.role == "editor":
+        try:
+            _validate_whole_pi_access(session, user, detail)
+            can_delete = True
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
+    result = get_pi_detail(session, pi_code, countries=ordering_countries(session, user),
+                           brands=ordering_brands(session, user))
+    if not is_admin(user.role) and not result["lines"]:
+        raise HTTPException(403, "No authorized lines in this PI / 本 PI 没有有权访问的明细")
+    result["canDelete"] = can_delete
+    return result
+
+
+def _validate_whole_pi_access(session: Session, user: UserContext, detail: dict) -> None:
+    _validate_target_countries(session, user, detail["vehicles"])
+    for line in detail["lines"]:
+        _validate_line_countries(session, user, detail, line["piLineCode"])
+    if not detail["lines"]:
+        _validate_country(session, user, detail["header"]["countryCode"])
+        if not is_admin(user.role):
+            raise HTTPException(403, "PI has no authorized brand / PI 缺少可核对的品牌")
 
 
 def _accessible_market_countries(session: Session, user: UserContext, countries: set[str]) -> set[str]:
@@ -215,13 +237,17 @@ def _validate_target_countries(session: Session, user: UserContext, vehicles: li
     # Validate the complete target set before any write; never silently trim a batch.
     for country in {vehicle["countryCode"] for vehicle in vehicles}:
         _validate_country(session, user, country)
+    for brand in {vehicle.get("brand") for vehicle in vehicles}:
+        validate_brand_access(session, user, brand)
 
 
 def _validate_line_countries(session: Session, user: UserContext, detail: dict, line_code: str) -> None:
     targets = [vehicle for vehicle in detail["vehicles"] if vehicle["piLineCode"] == line_code]
+    _validate_target_countries(session, user, targets)
     countries = {vehicle["countryCode"] for vehicle in targets}
     for line in detail["lines"]:
         if line["piLineCode"] == line_code:
+            validate_brand_access(session, user, line.get("brand"))
             countries.update(allocation["marketCountryCode"] for allocation in line["allocations"])
     for country in countries or {detail["header"]["countryCode"]}:
         _validate_country(session, user, country)
@@ -251,8 +277,15 @@ def _row_country(session: Session, row: dict) -> str | None:
 
 def _validate_import_access(session: Session, user: UserContext, rows: list[dict]) -> None:
     for row in rows:
+        vehicle = (vehicle_repo.get_vehicle_by_car_code(session, str(row.get("car_code") or "").upper())
+                   if row.get("car_code") else vehicle_repo.get_vehicle_by_vin(session, str(row.get("vin") or "")))
+        if vehicle:
+            _validate_vehicle_access(session, user, {"countryCode": vehicle.country_code, "brand": vehicle.brand})
+        else:
+            sku = ordering_repo.get_sku_by_material_code_any_status(session, str(row.get("material_code") or ""))
+            validate_brand_access(session, user, sku.brand if sku else None)
         country = _row_country(session, row)
-        if country or user.role == "order_filler":
+        if country or not is_admin(user.role):
             try:
                 _validate_country(session, user, country)
             except HTTPException as exc:
@@ -284,7 +317,8 @@ def _store_import_preview(session: Session, user: UserContext, rows: list[dict],
     if pi_code:
         countries = _vin_import_countries(session, user, pi_code)
         preview = preview_vehicle_import(session, rows, pi_code=pi_code,
-                                         allow_replacing=allow_replacing, allowed_countries=countries, remove_vins=remove_vins)
+                                         allow_replacing=allow_replacing, allowed_countries=countries,
+                                         allowed_brands=ordering_brands(session, user), remove_vins=remove_vins)
         payload.update({"owner": user.name, "vinPreview": preview})
     else:
         _validate_import_access(session, user, rows)
@@ -363,7 +397,9 @@ def list_pi_months(
 ) -> dict:
     selected_country = _country(country)
     _validate_optional_country(session, user, selected_country)
-    return vehicle_repo.pi_month_summary(session, year=year, country=selected_country)
+    return vehicle_repo.pi_month_summary(session, year=year, country=selected_country,
+                                        allowed_countries=ordering_countries(session, user),
+                                        allowed_brands=ordering_brands(session, user))
 
 
 @router.get("/pi")
@@ -387,12 +423,15 @@ def list_pi_orders(
         keyword=_clean(keyword),
         page=page,
         page_size=page_size,
+        allowed_countries=ordering_countries(session, user),
+        allowed_brands=ordering_brands(session, user),
     )
-    if user.role == "order_filler":
-        countries = {country for header in result["items"] for country in header["marketCountryCodes"]}
-        allowed = _accessible_market_countries(session, user, countries)
+    if not is_admin(user.role):
+        markets = vehicle_repo.visible_header_markets(session, [header["piCode"] for header in result["items"]],
+                                                      ordering_countries(session, user), ordering_brands(session, user))
         for header in result["items"]:
-            header["marketCountryCodes"] = [country for country in header["marketCountryCodes"] if country in allowed]
+            header["marketCountryCodes"] = [country for country in header["marketCountryCodes"]
+                                            if country in markets.get(header["piCode"], set())]
     return result
 
 
@@ -404,6 +443,8 @@ def create_pi_order(
 ) -> dict:
     selected_country = _country(body.get("countryCode") or body.get("country"))
     _validate_country(session, user, selected_country)
+    if ordering_brands(session, user) == set():
+        raise HTTPException(403, "No brands assigned / 尚未分配品牌")
     result = create_pi_header(session, body, user.name)
     session.commit()
     return result
@@ -426,7 +467,9 @@ def patch_pi_order(
     user: UserContext = Depends(require_roles("order_filler", "editor", "admin")),
 ) -> dict:
     detail = get_pi_detail(session, pi_code.upper())
-    _validate_pi_detail_access(session, user, detail)
+    _validate_whole_pi_access(session, user, detail)
+    for country in body.get("marketCountryCodes", []):
+        _validate_country(session, user, _country(country))
     result = update_pi_header(session, pi_code.upper(), body, user.name)
     session.commit()
     return result
@@ -436,9 +479,10 @@ def patch_pi_order(
 def delete_pi_order(
     pi_code: str,
     session: Session = Depends(get_db_session),
-    _: UserContext = Depends(require_min_role("admin")),
+    user: UserContext = Depends(require_roles("editor", "admin")),
 ) -> dict:
-    """Hard-delete a PI and all its lines, allocations, vehicles. Admin only."""
+    """Delete only when the entire PI, including hidden lines, is authorized."""
+    _validate_whole_pi_access(session, user, get_pi_detail(session, pi_code.upper()))
     try:
         result = delete_pi(session, pi_code.upper())
         session.commit()
@@ -456,6 +500,11 @@ def create_pi_order_line(
 ) -> dict:
     detail = get_pi_detail(session, pi_code.upper())
     _validate_pi_detail_access(session, user, detail)
+    _validate_country(session, user, detail["header"]["countryCode"])
+    sku = ordering_repo.get_sku_by_material_code_any_status(session, str(body.get("materialCode") or ""))
+    validate_brand_access(session, user, sku.brand if sku else body.get("brand"))
+    if "brand" in body:
+        validate_brand_access(session, user, body["brand"])
     result = create_pi_line(session, pi_code.upper(), body, user.name)
     session.commit()
     return result
@@ -473,6 +522,11 @@ def patch_pi_order_line(
         raise HTTPException(status_code=404, detail="PI line not found")
     detail = get_pi_detail(session, existing.pi_code)
     _validate_line_countries(session, user, detail, existing.pi_line_code)
+    if "brand" in body:
+        validate_brand_access(session, user, body["brand"])
+    if "materialCode" in body:
+        sku = ordering_repo.get_sku_by_material_code_any_status(session, str(body["materialCode"] or ""))
+        validate_brand_access(session, user, sku.brand if sku else None)
     if "quantity" in body:
         _validate_country(session, user, detail["header"]["countryCode"])
     line = update_pi_line(session, pi_line_code.upper(), body, user.name)
@@ -484,7 +538,7 @@ def patch_pi_order_line(
 def delete_pi_order_line(
     pi_line_code: str,
     session: Session = Depends(get_db_session),
-    user: UserContext = Depends(require_min_role("order_filler")),
+    user: UserContext = Depends(require_roles("order_filler", "editor", "admin")),
 ) -> dict:
     """Hard-delete a PI line and its allocations, vehicles."""
     existing = vehicle_repo.get_line_by_code(session, pi_line_code.upper())
@@ -559,6 +613,7 @@ def list_vehicles(
         page_size=page_size,
     )
     _validate_optional_country(session, user, filters["country"])
+    filters.update(allowed_countries=ordering_countries(session, user), allowed_brands=ordering_brands(session, user))
     return list_vehicle_units(session, **filters)
 
 
@@ -654,7 +709,8 @@ def get_order_matrix_plan(
 ) -> dict:
     selected_country = _country(country)
     _validate_country(session, user, selected_country)
-    return get_order_matrix_allocation_plan(session, selected_country or "", year, month)
+    return get_order_matrix_allocation_plan(session, selected_country or "", year, month,
+                                           allowed_brands=ordering_brands(session, user))
 
 
 @router.post("/generate-from-order-matrix")
@@ -665,6 +721,8 @@ def generate_pi_from_order_matrix(
 ) -> dict:
     selected_country = _country(body.get("countryCode"))
     _validate_country(session, user, selected_country)
+    if body.get("allowDuplicate") and not is_admin(user.role):
+        raise HTTPException(403, "Duplicate generation requires admin / 重复生成仅限管理员")
     market_countries = body.get("marketCountryCodes")
     if isinstance(market_countries, list):
         for market_country in market_countries:
@@ -680,7 +738,7 @@ def generate_pi_from_order_matrix(
             for allocation in allocations:
                 if isinstance(allocation, dict):
                     _validate_country(session, user, _country(allocation.get("countryCode") or allocation.get("marketCountryCode")))
-    result = generate_from_order_matrix(session, body, user.name)
+    result = generate_from_order_matrix(session, body, user.name, allowed_brands=ordering_brands(session, user))
     session.commit()
     return result
 
@@ -779,7 +837,8 @@ def apply_import(
         if payload.get("owner") != user.name:
             raise HTTPException(403, "Preview belongs to another user. Upload again / 此预览属于其他账号，请重新上传")
         countries = _vin_import_countries(session, user, vin_preview["piCode"])
-        result = apply_vehicle_import(session, rows, user.name, vin_preview=vin_preview, allowed_countries=countries)
+        result = apply_vehicle_import(session, rows, user.name, vin_preview=vin_preview,
+                                      allowed_countries=countries, allowed_brands=ordering_brands(session, user))
     else:
         _validate_import_access(session, user, rows)
         result = apply_vehicle_import(session, rows, user.name)
@@ -831,9 +890,16 @@ def export_vehicle_allocation(
         raise HTTPException(400, "Invalid export columns / 导出列无效")
     if car_codes is not None and (not isinstance(car_codes, list) or len(car_codes) > 50000 or any(not isinstance(code, str) for code in car_codes)):
         raise HTTPException(400, "Invalid vehicle selection / 车辆范围无效")
+    if car_codes is not None:
+        for code in car_codes:
+            vehicle = vehicle_repo.get_vehicle_by_car_code(session, code)
+            if vehicle is None:
+                raise HTTPException(400, "Selected vehicle not found / 勾选车辆不存在")
+            _validate_vehicle_access(session, user, {"countryCode": vehicle.country_code, "brand": vehicle.brand})
     if filters["country"]:
         _validate_country(session, user, filters["country"])
-    if user.role == "order_filler" and filters["pi_code"]:
+    filters.update(allowed_countries=ordering_countries(session, user), allowed_brands=ordering_brands(session, user))
+    if not is_admin(user.role) and filters["pi_code"]:
         detail = _accessible_pi_detail(session, user, filters["pi_code"])
         allowed_codes = {vehicle["carCode"] for vehicle in detail["vehicles"]}
         if car_codes is not None and not set(car_codes).issubset(allowed_codes):

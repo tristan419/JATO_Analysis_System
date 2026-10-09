@@ -260,7 +260,8 @@ def _validate_historical_backfill_request(
     return historical_codes
 
 
-def generate_from_order_matrix(session: Session, payload: dict[str, Any], username: str) -> dict:
+def generate_from_order_matrix(session: Session, payload: dict[str, Any], username: str,
+                               allowed_brands: set[str] | None = None) -> dict:
     country = str(payload.get("countryCode") or "").upper()
     year = int(payload.get("orderYear") or 0)
     month = int(payload.get("orderMonth") or 0)
@@ -269,10 +270,15 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
     line_items = payload.get("lineItems")
     explicit_line_items = line_items is not None
     if line_items is None:
-        plan = get_order_matrix_allocation_plan(session, country, year, month)
+        plan = get_order_matrix_allocation_plan(session, country, year, month, allowed_brands=allowed_brands)
         line_items = plan["selectedLineItems"] if _truthy(payload.get("allowDuplicate")) else plan["remainingLineItems"]
     if not isinstance(line_items, list):
         raise HTTPException(status_code=400, detail="lineItems must be a list")
+    if allowed_brands is not None:
+        for item in line_items:
+            sku = og_repo.get_sku_by_material_code_any_status(session, str(item.get("materialCode") or "")) if isinstance(item, dict) else None
+            if not sku or str(sku.brand or "").strip().upper() not in allowed_brands:
+                raise HTTPException(403, "PI contains unassigned brands; nothing created / PI 包含未授权品牌，未创建")
     if explicit_line_items and not _truthy(payload.get("allowDuplicate")):
         _validate_line_items_against_remaining(session, country, year, month, line_items)
     if not line_items:
@@ -407,13 +413,18 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
     return {"piCode": header_model.pi_code, "lineCount": line_count, "vehicleCount": vehicle_count}
 
 
-def get_order_matrix_allocation_plan(session: Session, country: str, year: int, month: int) -> dict:
+def get_order_matrix_allocation_plan(session: Session, country: str, year: int, month: int,
+                                     allowed_brands: set[str] | None = None) -> dict:
     country_code = country.upper()
     if not country_code or year < 2000 or month < 1 or month > 12:
         raise HTTPException(status_code=400, detail="country, year, month are required")
 
     order_month = f"{year}-{month:02d}"
     selected_items = _line_items_from_order_quantities(session, country_code, year, month)
+    if allowed_brands is not None:
+        skus = og_repo.get_skus_by_material_codes_any_status(session, [item["materialCode"] for item in selected_items])
+        allowed_codes = {sku.material_code for sku in skus.values() if str(sku.brand or "").strip().upper() in allowed_brands}
+        selected_items = [item for item in selected_items if item.get("materialCode") in allowed_codes]
     selected_by_material = {
         str(item["materialCode"]): item
         for item in selected_items
@@ -421,6 +432,12 @@ def get_order_matrix_allocation_plan(session: Session, country: str, year: int, 
     }
 
     existing_allocations = repo.list_allocations_for_country_month(session, country_code, year, month)
+    if allowed_brands is not None:
+        saved_lines = {allocation.pi_line_id: repo.get_line_by_code(session, allocation.pi_line_code)
+                       for allocation in existing_allocations}
+        existing_allocations = [allocation for allocation in existing_allocations
+                                if (saved_lines.get(allocation.pi_line_id) is not None
+                                    and str(saved_lines[allocation.pi_line_id].brand or "").strip().upper() in allowed_brands)]
     existing_by_material: dict[str, int] = {}
     existing_vehicle_by_material: dict[str, int] = {}
     existing_line_rows: list[dict[str, Any]] = []
@@ -433,6 +450,8 @@ def get_order_matrix_allocation_plan(session: Session, country: str, year: int, 
         existing_line_rows.append(allocation_to_dict(allocation))
 
     legacy_lines = repo.list_lines_without_allocations_for_country_month(session, country_code, order_month)
+    if allowed_brands is not None:
+        legacy_lines = [line for line in legacy_lines if str(line.brand or "").strip().upper() in allowed_brands]
     colour_hex_map = _pi_colour_hex_map(session) if legacy_lines else {}
     for line in legacy_lines:
         material_code = line.material_code or ""
@@ -506,11 +525,14 @@ def list_pi_headers(session: Session, **filters) -> dict:
     return {"items": [header_to_dict(row) for row in rows], "total": total}
 
 
-def get_pi_detail(session: Session, pi_code: str, countries: set[str] | None = None) -> dict:
+def get_pi_detail(session: Session, pi_code: str, countries: set[str] | None = None,
+                  brands: set[str] | None = None) -> dict:
     header = repo.get_header_by_code(session, pi_code)
     if not header:
         raise HTTPException(status_code=404, detail="PI not found")
     lines = repo.list_lines_by_pi(session, header.pi_id)
+    if brands is not None:
+        lines = [line for line in lines if str(line.brand or "").strip().upper() in brands]
     allocations = repo.list_allocations_by_pi(session, header.pi_id)
     allocations_by_line: dict[Any, list[PiOrderLineAllocation]] = {}
     for allocation in allocations:
@@ -520,6 +542,8 @@ def get_pi_detail(session: Session, pi_code: str, countries: set[str] | None = N
     vehicles = repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
     if countries is not None:
         vehicles = [vehicle for vehicle in vehicles if vehicle.country_code in countries]
+    if brands is not None:
+        vehicles = [vehicle for vehicle in vehicles if str(vehicle.brand or "").strip().upper() in brands]
     colour_hex_map = _pi_colour_hex_map(session)
     vehicle_rows = vehicles_to_dict(session, vehicles, colour_hex_map)
     line_rows: list[dict[str, Any]] = []
@@ -537,12 +561,14 @@ def get_pi_detail(session: Session, pi_code: str, countries: set[str] | None = N
             row["amountEur"] = None if any(price is None for price, _ in prices) else sum(price * quantity for price, quantity in prices)
         line_rows.append(row)
     header_row = header_to_dict(header)
-    if countries is not None:
-        header_row["marketCountryCodes"] = [country for country in header_row["marketCountryCodes"] if country in countries]
+    if countries is not None or brands is not None:
+        visible_markets = {vehicle["countryCode"] for vehicle in vehicle_rows}
+        visible_markets.update(allocation["marketCountryCode"] for line in line_rows for allocation in line["allocations"])
+        header_row["marketCountryCodes"] = [country for country in header_row["marketCountryCodes"] if country in visible_markets]
     return {
         "header": header_row,
         "lines": line_rows,
-        "summary": repo.vehicle_summary(session, pi_code, countries),
+        "summary": repo.vehicle_summary(session, pi_code, countries, brands),
         "vehicles": vehicle_rows,
         "vehicleTotal": len(vehicles),
     }
@@ -676,9 +702,10 @@ def search_vehicle_allocation(session: Session, keyword: str) -> dict:
 def preview_vehicle_import(
     session: Session, rows: list[dict[str, Any]], *, pi_code: str | None = None,
     allow_replacing: bool = False, allowed_countries: set[str] | None = None, remove_vins: bool = False,
+    allowed_brands: set[str] | None = None,
 ) -> dict:
     if pi_code:
-        return _preview_pi_vin_fill(session, rows, pi_code, allow_replacing, allowed_countries, remove_vins)
+        return _preview_pi_vin_fill(session, rows, pi_code, allow_replacing, allowed_countries, remove_vins, allowed_brands)
     warnings: list[str] = []
     errors: list[str] = []
     preview_rows: list[dict[str, Any]] = []
@@ -746,9 +773,10 @@ def preview_vehicle_import(
 def apply_vehicle_import(
     session: Session, rows: list[dict[str, Any]], username: str, *,
     vin_preview: dict | None = None, allowed_countries: set[str] | None = None,
+    allowed_brands: set[str] | None = None,
 ) -> dict:
     if vin_preview is not None:
-        return _apply_pi_vin_fill(session, vin_preview, username, allowed_countries)
+        return _apply_pi_vin_fill(session, vin_preview, username, allowed_countries, allowed_brands)
     preview = preview_vehicle_import(session, rows)
     if preview["errors"]:
         raise HTTPException(status_code=400, detail="Import has blocking errors")
@@ -777,11 +805,13 @@ def apply_vehicle_import(
 def _preview_pi_vin_fill(
     session: Session, rows: list[dict[str, Any]], pi_code: str,
     allow_replacing: bool, allowed_countries: set[str] | None, remove_vins: bool = False,
+    allowed_brands: set[str] | None = None,
 ) -> dict:
     if not repo.get_header_by_code(session, pi_code):
         raise HTTPException(404, "PI no longer exists. Select a PI again / PI 已不存在，请重新选择")
     vehicles = [v for v in repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
-                if allowed_countries is None or v.country_code in allowed_countries]
+                if (allowed_countries is None or v.country_code in allowed_countries)
+                and (allowed_brands is None or str(v.brand or "").strip().upper() in allowed_brands)]
     by_car = {v.car_code: v for v in vehicles}
     by_material: dict[str, list[PiVehicleUnit]] = {}
     for vehicle in vehicles:
@@ -866,7 +896,8 @@ def _preview_pi_vin_fill(
     }
 
 
-def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_countries: set[str] | None) -> dict:
+def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_countries: set[str] | None,
+                       allowed_brands: set[str] | None = None) -> dict:
     if preview.get("status") != "ok":
         raise HTTPException(400, "Fix all preview conflicts before applying / 请先解决全部预览冲突")
     pi_code = preview["piCode"]
@@ -883,6 +914,7 @@ def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_c
                     continue
                 vehicle = by_car.get(row["carCode"])
                 if (not vehicle or (allowed_countries is not None and vehicle.country_code not in allowed_countries)
+                        or (allowed_brands is not None and str(vehicle.brand or "").strip().upper() not in allowed_brands)
                         or (vehicle.material_code or "").upper() != row["materialCode"]
                         or vehicle.vin != row["oldVin"] or vehicle.row_version != row["rowVersion"]):
                     raise HTTPException(409, "Target changed: preview again; nothing applied / 目标已变化，请重新预览，未写入任何车辆")

@@ -106,9 +106,13 @@ export function shouldIgnorePageNavigationTarget(
 
 /* ── Mega Menu data types ─────────────────────────────── */
 
-export type MenuRole = "viewer" | "order_filler" | "editor" | "admin";
+export type MenuRole = "viewer" | "order_filler" | "editor" | "admin" | "developer";
 
-const ROLE_LEVEL: Record<MenuRole, number> = { viewer: 0, order_filler: 1, editor: 2, admin: 3 };
+const ROLE_LEVEL: Record<MenuRole, number> = { viewer: 0, order_filler: 1, editor: 2, admin: 3, developer: 3 };
+
+export function isAdminRole(role: string | undefined): boolean {
+  return role === "admin" || role === "developer";
+}
 
 export interface MegaMenuSubItem {
   label: string;
