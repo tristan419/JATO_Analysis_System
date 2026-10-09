@@ -8,6 +8,35 @@ export type PiStatus =
   | "closed"
   | "cancelled";
 
+export interface PiInvoiceOptions {
+  invoiceDate: string;
+  referenceNo: string;
+  portOfShipment: string;
+  portOfDischarge: string;
+  freightEur?: number;
+  insuranceEur?: number;
+  handlingEur?: number;
+}
+
+export interface PiInvoiceContext {
+  piCode: string;
+  templateKey: string;
+  templateName: string;
+  buyerName: string;
+  buyerAddress: string;
+  buyerEmail: string;
+  sellerName: string;
+  sellerAddress: string;
+  bankDetails: string;
+  priceTerm: string;
+  paymentTerm: string;
+  unitCount: number;
+  lineCount: number;
+  missingFreightUnits: number;
+  missingInsuranceUnits: number;
+  defaults: PiInvoiceOptions;
+}
+
 export type AllocationStatus =
   | "unallocated"
   | "reserved"

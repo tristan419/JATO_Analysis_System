@@ -4,6 +4,7 @@ import { OrderingBrandNotice } from "../components/RoleUpgradeModal";
 import { isAdminRole } from "../utils/pageNavigation";
 import { CommandSelect, type CommandSelectOption } from "../components/CommandSelect";
 import { LoadingActionButton } from "../components/LoadingActionButton";
+import { PiInvoiceExportDialog } from "../components/PiInvoiceExportDialog";
 import {
   VehicleImportDigestPanel,
   VehicleStatusBoard,
@@ -206,6 +207,7 @@ export function OrderGeniusVehicleAllocationPage() {
   const cocStatuses = useMemo(() => new Map(cocResult?.items.map((item) => [item.carCode, item.status])), [cocResult]);
   useEffect(() => { cocRequest.current += 1; setCocLookup(null); setCocError(""); setCocDownloadConfirm(null); setCocFilter("all"); }, [selectedPi]);
   const [deleteConfirmPi, setDeleteConfirmPi] = useState<string | null>(null);
+  const [showInvoiceExport, setShowInvoiceExport] = useState(false);
   // Multi-select state
   const [selectedCarCodes, setSelectedCarCodes] = useState<Set<string>>(new Set());
   useEffect(() => { setCocDownloadConfirm(null); }, [selectedCarCodes]);
@@ -963,6 +965,8 @@ export function OrderGeniusVehicleAllocationPage() {
                 }}>Reset columns & filters / 重置列与筛选</button>
               </fieldset>
               <LoadingActionButton disabled={!selectedPi || scopeBusy} loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出所见</LoadingActionButton>
+              <button type="button" className="btn-secondary" disabled={!selectedPi || scopeBusy}
+                onClick={() => setShowInvoiceExport(true)}>Export PI</button>
               <details className="va-pivot"><summary>PI pivot summary / 整批透视摘要</summary>
                 <p>Whole PI/line, not the current page or view filters / 当前 PI 或明细范围，不是分页或筛选后数量</p>
                 <select aria-label="Pivot by" value={pivotBy} onChange={(event) => {
@@ -975,6 +979,9 @@ export function OrderGeniusVehicleAllocationPage() {
           ) : null}
         </div>
       </DeckFloatingDrawer>
+
+      {showInvoiceExport && selectedPi ? <PiInvoiceExportDialog key={selectedPi.header.piCode}
+        piCode={selectedPi.header.piCode} onClose={() => setShowInvoiceExport(false)} /> : null}
 
       <div className="va-layout">
         <aside className="va-side">

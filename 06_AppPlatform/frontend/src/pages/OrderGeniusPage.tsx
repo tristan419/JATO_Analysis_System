@@ -15,6 +15,7 @@ import { animate } from "animejs";
 import { createPortal } from "react-dom";
 import { BomTemplateLifecycleEditor } from "../components/orderGenius/BomTemplateLifecycleEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { PiInvoiceExportDialog } from "../components/PiInvoiceExportDialog";
 
 import { api, apiUrl, AUTH_FAILURE_EVENT } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -2305,6 +2306,7 @@ export function OrderGeniusPage() {
 
   const [mergeExport, setMergeExport] = useState(false);
   const [showPiExportOptions, setShowPiExportOptions] = useState(false);
+  const [showInvoiceExport, setShowInvoiceExport] = useState(false);
   const [piExportFreightEur, setPiExportFreightEur] = useState("");
   const [piExportInsuranceEur, setPiExportInsuranceEur] = useState("");
   const [piExportDomesticFreightEur, setPiExportDomesticFreightEur] = useState("");
@@ -2797,9 +2799,13 @@ export function OrderGeniusPage() {
                 disabled={combinedMatrix.totalRows === 0}>
           Export XLSX
         </button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowInvoiceExport(true)}
+                disabled={selectedCountries.length === 0}>
+          Export PI
+        </button>
         <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowPiExportOptions((open) => !open)}
                 disabled={combinedMatrix.totalRows === 0}>
-          Export PI
+          Export PI data
         </button>
         {canFillOrders && (
           <button type="button" className="btn btn-sm btn-ghost"
@@ -2817,7 +2823,7 @@ export function OrderGeniusPage() {
       {showPiExportOptions ? (
         <div className="og-pi-export-options">
           <div className="og-pi-export-options-copy">
-            <strong>PI Export Options</strong>
+            <strong>Internal PI data export</strong>
             <span>四个费用字段选填；一次内销单价自动使用 NL 价格，没有则为空。</span>
           </div>
           <label>
@@ -2865,7 +2871,7 @@ export function OrderGeniusPage() {
             />
           </label>
           <button type="button" className="btn btn-sm btn-primary" onClick={handlePiExport}>
-            Download PI
+            Download PI data
           </button>
         </div>
       ) : null}
@@ -3397,6 +3403,10 @@ export function OrderGeniusPage() {
       </div>
       ) : null}
       </DeckFloatingDrawer>
+
+      {showInvoiceExport ? <PiInvoiceExportDialog countries={selectedCountries}
+        month={selectedMonth == null ? undefined : `${selectedYear}-${String(selectedMonth).padStart(2, "0")}`}
+        onClose={() => setShowInvoiceExport(false)} /> : null}
 
       {missingFobCountryCodes.length > 0 ? (
         <div className="order-genius-missing-fob-alert" role="alert">

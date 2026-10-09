@@ -189,6 +189,8 @@ import type {
   BulkVehicleUpdatePayload,
   BulkVehicleUpdateResult,
   PiOrderDetail,
+  PiInvoiceContext,
+  PiInvoiceOptions,
   PiOrderFilters,
   PiOrderHeader,
   PiMonthSummary,
@@ -459,8 +461,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let response: Response;
     try {
       response = await fetch(apiUrl(path), {
+        ...init,
         headers: buildHeaders(init, { includeJsonContentType: true }),
-        ...init
       });
     } catch (error) {
       if (isAbortLikeError(error)) {
@@ -521,8 +523,8 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
   let response: Response;
   try {
     response = await fetch(apiUrl(path), {
+      ...init,
       headers: buildHeaders(init),
-      ...init
     });
   } catch (error) {
     if (isAbortLikeError(error)) {
@@ -5316,6 +5318,16 @@ export const api = {
     request<PiOrderDetail>(
       `/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}`,
     ),
+
+  getPiInvoiceContext: (piCode: string) =>
+    request<PiInvoiceContext>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice`),
+
+  exportPiInvoice: (piCode: string, options: PiInvoiceOptions) =>
+    requestBlob(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+    }),
 
   createVehicleAllocationPi: (body: Record<string, unknown>) =>
     request<PiOrderHeader>("/order-genius/vehicle-allocation/pi", {

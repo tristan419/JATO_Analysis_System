@@ -49,6 +49,7 @@ from app.services.order_genius_vehicle_service import (
     update_vehicle_unit,
 )
 from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
+from app.services.order_genius_vehicle_exporter import generate_pi_invoice_excel, pi_invoice_context
 
 router = APIRouter(
     prefix="/order-genius/vehicle-allocation",
@@ -457,6 +458,36 @@ def get_pi_order(
     user: UserContext = Depends(require_min_role("viewer")),
 ) -> dict:
     return _accessible_pi_detail(session, user, pi_code.upper())
+
+
+def _invoice_detail(session: Session, user: UserContext, pi_code: str) -> dict:
+    detail = get_pi_detail(session, pi_code.upper())
+    _validate_whole_pi_access(session, user, detail)
+    return detail
+
+
+@router.get("/pi/{pi_code}/invoice")
+def preview_pi_invoice(pi_code: str, session: Session = Depends(get_db_session),
+                       user: UserContext = Depends(require_min_role("viewer"))) -> dict:
+    try:
+        return pi_invoice_context(_invoice_detail(session, user, pi_code))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/pi/{pi_code}/invoice")
+def export_pi_invoice(pi_code: str, body: dict,
+                      session: Session = Depends(get_db_session),
+                      user: UserContext = Depends(require_min_role("viewer"))) -> StreamingResponse:
+    try:
+        detail = _invoice_detail(session, user, pi_code)
+        buf = generate_pi_invoice_excel(detail, body)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    # Use the saved canonical identifier, not arbitrary request text, as a filename.
+    filename = f"Proforma_{detail['header']['piCode']}.xlsx"
+    return StreamingResponse(buf, media_type=XLSX_MEDIA_TYPE,
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.patch("/pi/{pi_code}")
