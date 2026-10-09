@@ -98,8 +98,8 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let response: Response;
     try {
       response = await fetch(apiUrl(path), {
-        headers: buildHeaders(init, { includeJsonContentType: true }),
         ...init,
+        headers: buildHeaders(init, { includeJsonContentType: true }),
       });
     } catch (error) {
       if (isAbortLikeError(error)) throw error;
