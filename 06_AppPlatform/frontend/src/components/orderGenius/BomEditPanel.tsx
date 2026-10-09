@@ -34,7 +34,7 @@ type BomEditPanelProps = {
   noteKey: string;
   noteDefaultValue: string;
   saveMessage?: BomEditSaveMessage | null;
-  onCopyMaterial: () => void;
+  onCopyMaterial?: () => void;
   isSavingProduct: boolean;
 };
 
@@ -109,13 +109,13 @@ export function BomEditPanel({
               {saveMessage.text}
             </span>
           ) : null}
-          <button
+          {onCopyMaterial ? <button
             type="button"
             className="btn btn-sm btn-ghost"
             onClick={onCopyMaterial}
           >
             Copy Material
-          </button>
+          </button> : null}
           <button
             type="submit"
             className="btn btn-sm btn-primary"

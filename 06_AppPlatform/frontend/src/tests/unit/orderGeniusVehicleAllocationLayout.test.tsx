@@ -12,7 +12,7 @@ import { matchesVehicleText, VEHICLE_COLUMNS, VEHICLE_TEXT_FIELDS } from "../../
 vi.setConfig({ testTimeout: 15_000 });
 
 const testRole = vi.hoisted(() => ({ value: "admin", secondaryCountries: [] as string[] }));
-vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: testRole.value, primaryCountry: "CH", secondaryCountries: testRole.secondaryCountries } }) }));
+vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: testRole.value, brands: ["OMODA", "JAECOO"], primaryCountry: "CH", secondaryCountries: testRole.secondaryCountries } }) }));
 vi.mock("../../hooks/useAccountCountryOptions", () => ({ useAccountCountryOptions: () => ({ countryOptions: [] }) }));
 vi.mock("../../components/CommandSelect", () => ({
   CommandSelect: (props: { value: string; placeholder: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) => (

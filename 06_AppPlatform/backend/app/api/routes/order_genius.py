@@ -24,7 +24,8 @@ from app.api.order_genius_schemas import (
     SpecialColourSurchargeUpdate,
 )
 from app.core.config import PROJECT_ROOT
-from app.core.security import require_min_role, require_roles, validate_country_access
+from app.core.security import (require_min_role, require_roles, validate_country_access,
+                               validate_brand_access, ordering_brands, ordering_countries, is_admin)
 from app.db.models import CountryPaymentTermMaster, CountryTemplateFobPeriod, PaymentTermAuditLog
 from app.db.session import get_db_session
 from app.infra import order_genius_repository as repo
@@ -47,6 +48,36 @@ from app.services.ordering_normalization import clean_text, normalize_brand, nor
 from app.services.order_quantity_parser import parse_order_quantity_xlsx
 
 router = APIRouter(prefix="/order-genius", tags=["order_genius"])
+
+
+def _validate_material_access(session: Session, user, material_codes: list[str]) -> None:
+    if is_admin(user.role):
+        return
+    skus = repo.get_skus_by_material_codes_any_status(session, material_codes)
+    for code in material_codes:
+        sku = skus.get(str(code).strip().upper())
+        validate_brand_access(session, user, sku.brand if sku else None)
+
+
+def _validate_template_access(session: Session, user, template: str, baseline_id=None) -> None:
+    if is_admin(user.role):
+        return
+    baseline = repo.get_latest_baseline(session) if baseline_id is None else None
+    baseline_id = baseline_id or (baseline.baseline_version_id if baseline else None)
+    skus = repo.list_bom_template_skus(session, template, baseline_id) if baseline_id else []
+    if not skus:
+        raise HTTPException(404, "BOM template not found")
+    for sku in skus:
+        validate_brand_access(session, user, sku.brand)
+
+
+def _validate_material_template_access(session: Session, user, material_code: str) -> None:
+    if is_admin(user.role):
+        return
+    sku = repo.get_sku_by_material_code_any_status(session, material_code)
+    if not sku:
+        raise HTTPException(404, "Material not found")
+    _validate_template_access(session, user, sku.bom_template, sku.baseline_version_id)
 
 
 def _body_bool(value: object) -> bool:
@@ -311,9 +342,11 @@ def list_payment_terms(
 @router.get("/colour-surcharges")
 def list_colour_surcharges(
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> dict:
     rules = repo.list_colour_surcharges(session)
+    allowed = ordering_brands(session, user)
+    rules = [rule for rule in rules if allowed is None or str(rule.brand or "").upper() in allowed]
     return {
         "items": [
             {
@@ -334,6 +367,7 @@ def update_colour_surcharge(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
+    validate_brand_access(session, user, body.brand)
     try:
         rule = repo.upsert_colour_surcharge(
             session,
@@ -346,6 +380,8 @@ def update_colour_surcharge(
             body.brand,
             body.colourType,
             changed_by=user.name,
+            allowed_countries=ordering_countries(session, user),
+            allowed_brands=ordering_brands(session, user),
         )
         session.commit()
         session.refresh(rule)
@@ -371,9 +407,11 @@ def update_colour_surcharge(
 @router.get("/special-colour-surcharges")
 def list_special_colour_surcharges(
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> dict:
     rules = repo.list_special_colour_surcharges(session)
+    allowed = ordering_brands(session, user)
+    rules = [rule for rule in rules if allowed is None or str(rule.brand or "").upper() in allowed]
     return {
         "items": [
             {
@@ -397,6 +435,7 @@ def update_special_colour_surcharge(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
+    validate_brand_access(session, user, body.brand)
     try:
         rule = repo.upsert_special_colour_surcharge(
             session,
@@ -415,6 +454,8 @@ def update_special_colour_surcharge(
             model_name=rule.model_name,
             colour_tier=rule.colour_tier,
             changed_by=user.name,
+            allowed_countries=ordering_countries(session, user),
+            allowed_brands=ordering_brands(session, user),
         )
         session.commit()
         session.refresh(rule)
@@ -444,7 +485,7 @@ def update_special_colour_surcharge(
 def audit_colour_surcharge_reprice(
     material_codes: str | None = Query(default=None, alias="materialCodes"),
     country_code: str | None = Query(default=None, alias="countryCode"),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
     session: Session = Depends(get_db_session),
 ) -> dict:
     codes = (
@@ -454,6 +495,8 @@ def audit_colour_surcharge_reprice(
     )
     return repo.audit_colour_surcharge_reprice(
         session,
+        allowed_brands=ordering_brands(session, user),
+        allowed_countries=ordering_countries(session, user),
         material_codes=codes,
         country_code=country_code,
     )
@@ -476,10 +519,15 @@ def apply_colour_surcharge_reprice(
         if material_codes is not None
         else None
     )
+    _validate_material_access(session, user, codes or [])
+    if body.get("countryCode"):
+        validate_country_access(session, user.name, user.role, str(body["countryCode"]))
     try:
         result = repo.apply_colour_surcharge_reprice_audit(
             session,
             preview_fingerprint,
+            allowed_brands=ordering_brands(session, user),
+            allowed_countries=ordering_countries(session, user),
             material_codes=codes,
             country_code=body.get("countryCode"),
             changed_by=user.name,
@@ -494,29 +542,31 @@ def apply_colour_surcharge_reprice(
 @router.get("/colour-hex-rules")
 def list_colour_hex_rules(
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> dict:
     """Return derived colour swatch rules and conflicts from material SKUs."""
-    items = repo.list_colour_hex_rules(session)
+    brands = ordering_brands(session, user)
+    items = repo.list_colour_hex_rules(session, allowed_brands=brands)
     summary = repo.summarize_colour_hex_rules(items)
-    summary.update(repo.summarize_invalid_colour_rule_identities(session))
+    if is_admin(user.role):
+        summary.update(repo.summarize_invalid_colour_rule_identities(session))
     return {"items": items, "summary": summary}
 
 
 @router.get("/colour-hex-rules/preview")
 def preview_colour_rule_fills(
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Preview new shared brand+code standards and SKU synchronization."""
-    return repo.preview_colour_rule_fills(session)
+    return repo.preview_colour_rule_fills(session, allowed_brands=ordering_brands(session, user))
 
 
 @router.post("/colour-hex-rules/apply")
 def apply_colour_rule_fills(
     body: dict,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     material_codes = body.get("materialCodes")
     preview_fingerprint = clean_text(body.get("previewFingerprint"))
@@ -524,11 +574,13 @@ def apply_colour_rule_fills(
         raise HTTPException(status_code=400, detail="materialCodes must be a list")
     if not preview_fingerprint:
         raise HTTPException(status_code=400, detail="previewFingerprint is required")
+    _validate_material_access(session, user, material_codes)
     try:
         result = repo.apply_colour_rule_fills(
             session,
             material_codes,
             preview_fingerprint,
+            allowed_brands=ordering_brands(session, user),
         )
     except ValueError as exc:
         session.rollback()
@@ -543,14 +595,16 @@ def lookup_colour_rule(
     colour_code: str | None = Query(None, alias="colourCode"),
     colour_name: str | None = Query(None, alias="colourName"),
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
+    validate_brand_access(session, user, brand)
     try:
         return repo.lookup_colour_rule(
             session,
             brand,
             colour_code or "",
             colour_name=colour_name,
+            allowed_brands=ordering_brands(session, user),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -560,9 +614,15 @@ def lookup_colour_rule(
 def set_colour_hex_rule_standard(
     body: dict,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Save the shared colour and optionally confirm this material atomically."""
+    validate_brand_access(session, user, body.get("brand"))
+    _validate_material_access(session, user, [sku.material_code for sku in repo._list_colour_rule_candidate_skus(
+        session, str(body.get("brand") or ""), str(body.get("colourCode", body.get("colour_code")) or ""),
+    )])
+    if body.get("confirmMaterialCode"):
+        _validate_material_access(session, user, [str(body["confirmMaterialCode"])])
     try:
         confirm_code = clean_text(body.get("confirmMaterialCode")).upper()
         confirm_sku = repo.get_sku_by_material_code(session, confirm_code) if confirm_code else None
@@ -594,15 +654,9 @@ def list_countries_with_payment_terms(
 ) -> dict:
     countries = repo.list_ordering_country_options(session)
 
-    # order_filler users can only see their assigned countries
-    if user.role == "order_filler":
-        from app.db.models import User as UserModel
-        db_user = session.query(UserModel).filter(UserModel.username == user.name).first()
-        if db_user:
-            allowed = {db_user.primary_country_code} if db_user.primary_country_code else set()
-            for sc in (db_user.secondary_country_codes or []):
-                allowed.add(sc)
-            countries = [c for c in countries if c["countryCode"] in allowed]
+    allowed = ordering_countries(session, user)
+    if allowed is not None:
+        countries = [country for country in countries if country["countryCode"] in allowed]
 
     return {
         "items": [
@@ -630,10 +684,12 @@ def list_account_country_options(
 @router.get("/fob-countries")
 def list_order_genius_fob_countries(
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> dict:
     """Return countries that currently have active material FOB rows."""
-    return {"countries": repo.list_active_fob_country_codes(session)}
+    allowed = ordering_countries(session, user)
+    return {"countries": [code for code in repo.list_active_fob_country_codes(session)
+                          if allowed is None or code in allowed]}
 
 
 # ── Order Genius Matrix ───────────────────────────────────────────────
@@ -653,6 +709,7 @@ def get_order_genius_options(
     validate_country_access(session, user.name, user.role, country)
     return build_options(
         session,
+        allowed_brands=ordering_brands(session, user),
         country_code=country,
         brand=brand,
         model_name=model,
@@ -680,6 +737,7 @@ def get_order_genius_matrix(
     validate_country_access(session, user.name, user.role, country)
     return build_matrix(
         session,
+        allowed_brands=ordering_brands(session, user),
         country_code=country,
         year=year,
         brand=brand,
@@ -749,6 +807,7 @@ def get_order_genius_matrix_batch(
 
     matrices = build_matrix_batch(
         session,
+        allowed_brands=ordering_brands(session, user),
         country_codes=valid_countries,
         year=year,
         **filters,
@@ -762,6 +821,7 @@ def patch_quantity_cell(
     session: Session = Depends(get_db_session),
     user=Depends(require_roles("editor", "admin", "order_filler")),
 ) -> dict:
+    _validate_material_access(session, user, [str(body.get("materialCode", body.get("material_code", "")))])
     try:
         country_code = body.get("countryCode", body.get("country_code", ""))
         validate_country_access(session, user.name, user.role, country_code)
@@ -796,9 +856,10 @@ def patch_sku_colour_hex(
     material_code: str,
     body: dict,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Update the custom colour hex for a material SKU."""
+    _validate_material_access(session, user, [material_code])
     sku = repo.get_sku_by_material_code(session, material_code)
     if not sku:
         raise HTTPException(status_code=404, detail="Material code not found")
@@ -831,9 +892,10 @@ def patch_sku_colour_hex(
 def confirm_colour_code(
     material_code: str,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Mark a material SKU's colour code as confirmed (not auto-generated)."""
+    _validate_material_access(session, user, [material_code])
     sku = repo.get_sku_by_material_code(session, material_code)
     if not sku:
         raise HTTPException(status_code=404)
@@ -847,9 +909,10 @@ def patch_colour_code(
     material_code: str,
     body: dict,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Update colour code and regenerate material code."""
+    _validate_material_access(session, user, [material_code])
     sku = repo.get_sku_by_material_code(session, material_code)
     if not sku:
         raise HTTPException(status_code=404)
@@ -964,9 +1027,10 @@ def patch_material_code(
     material_code: str,
     body: dict,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Update material code directly and regenerate if pattern contains **."""
+    _validate_material_access(session, user, [material_code])
     new_mc = body.get("materialCode", "").strip()
     if not new_mc:
         raise HTTPException(status_code=400, detail="materialCode is required")
@@ -995,8 +1059,9 @@ def patch_material_code(
 def patch_bom_template_material_code(
     body: dict,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
+    _validate_material_access(session, user, body.get("materialCodes") or [])
     material_codes_raw = body.get("materialCodes")
     material_codes = (
         [code for code in (clean_text(item).upper() for item in material_codes_raw) if code]
@@ -1035,6 +1100,8 @@ def patch_bom_template_fob(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
+    _validate_material_access(session, user, body.get("materialCodes") or [])
+    validate_country_access(session, user.name, user.role, str(body.get("countryCode") or body.get("country_code") or ""))
     material_codes = body.get("materialCodes")
     if not isinstance(material_codes, list) or not material_codes:
         raise HTTPException(status_code=400, detail="materialCodes is required")
@@ -1083,6 +1150,7 @@ def get_bom_template_fob_periods(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("viewer")),
 ) -> dict:
+    _validate_template_access(session, user, bom_template)
     country = clean_text(country_code).upper()
     template = clean_text(bom_template).upper()
     if not country or not template:
@@ -1097,12 +1165,14 @@ def get_bom_template_fob_periods(
 def get_bom_template_lifecycle_review(
     warning_days: int = Query(default=60, alias="warningDays", ge=0, le=365),
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> dict:
     """Return actionable BOM lifecycle drift without mutating any records."""
     return repo.review_bom_template_lifecycles(
         session,
         warning_days=warning_days,
+        allowed_brands=ordering_brands(session, user),
+        allowed_countries=ordering_countries(session, user),
     )
 
 
@@ -1112,6 +1182,7 @@ def put_bom_template_fob_period(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
+    _validate_template_access(session, user, str(body.get("bomTemplate") or ""))
     country = clean_text(body.get("countryCode")).upper()
     template = clean_text(body.get("bomTemplate")).upper()
     if not country or not template:
@@ -1180,6 +1251,7 @@ def delete_bom_template_fob_period(
     if row is None:
         raise HTTPException(status_code=404, detail="FOB period not found")
     validate_country_access(session, user.name, user.role, row.country_code)
+    _validate_template_access(session, user, row.bom_template)
     try:
         preview = repo.preview_country_template_fob_period_deletion(session, period_id, row_version)
         if preview_only:
@@ -1204,6 +1276,7 @@ def patch_sku_colour_tier(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
+    _validate_material_access(session, user, [material_code])
     colour_tier = clean_text(body.get("colourTier", body.get("colour_tier"))).lower()
     if not colour_tier:
         raise HTTPException(status_code=400, detail="colourTier is required")
@@ -1216,6 +1289,7 @@ def patch_sku_colour_tier(
         session,
         material_code,
         changed_by=user.name,
+        allowed_countries=ordering_countries(session, user),
     )
     session.commit()
     return {"materialCode": material_code, "colourTier": colour_tier, "reprice": reprice}
@@ -1229,6 +1303,7 @@ def patch_sku_interior(
     user=Depends(require_min_role("editor")),
 ) -> dict:
     """Update interior fields for a material SKU."""
+    _validate_material_access(session, user, [material_code])
     from sqlalchemy import update as sa_update
     from app.db.models import MaterialSkuMaster
 
@@ -1265,6 +1340,7 @@ def patch_sku_remark(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
+    _validate_material_access(session, user, [material_code])
     try:
         result = update_remark(
             session,
@@ -1288,8 +1364,10 @@ def get_sku_fob(
     material_code: str,
     country: str = Query(),
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> dict:
+    _validate_material_access(session, user, [material_code])
+    validate_country_access(session, user.name, user.role, country)
     try:
         fob = get_fob_for_sku(session, country, material_code)
     except repo.CountryFobConflict as exc:
@@ -1403,6 +1481,7 @@ def patch_sku_lifecycle(
     user=Depends(require_min_role("editor")),
 ) -> dict:
     """Preview or update lifecycle dates for every colour in a BOM template."""
+    _validate_material_template_access(session, user, material_code)
     anchor = repo.get_sku_by_material_code_any_status(session, material_code)
     if anchor is None:
         raise HTTPException(status_code=404, detail="Material code not found")
@@ -1535,6 +1614,7 @@ def patch_sku_fob(
     user=Depends(require_min_role("editor")),
 ) -> dict:
     """Update or create FOB for a material code in a specific country. Send null or blank to clear."""
+    _validate_material_access(session, user, [material_code])
     country = clean_text(body.get("countryCode") or body.get("country_code")).upper()
     if not country:
         raise HTTPException(status_code=400, detail="countryCode is required")
@@ -1630,6 +1710,9 @@ def patch_sku_fobs_bulk(
             detail=f"Material code not found: {', '.join(sorted(set(missing_materials))[:5])}",
         )
 
+    _validate_material_access(session, user, [item["materialCode"] for item in normalized_updates])
+    for country in {item["countryCode"] for item in normalized_updates}:
+        validate_country_access(session, user.name, user.role, country)
     updated = 0
     cleared = 0
     unchanged = 0
@@ -1664,7 +1747,7 @@ def patch_sku_fobs_bulk(
 def delete_country_fobs(
     country: str,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Clear one BOM Admin country column by deactivating all active FOB rows."""
     country_code = clean_text(country).upper()
@@ -1672,7 +1755,8 @@ def delete_country_fobs(
         raise HTTPException(status_code=400, detail="country is required")
     if len(country_code) != 2:
         raise HTTPException(status_code=400, detail="Country code must be 2 letters")
-    cleared = repo.clear_country_fobs(session, country_code)
+    validate_country_access(session, user.name, user.role, country_code)
+    cleared = repo.clear_country_fobs(session, country_code, allowed_brands=ordering_brands(session, user))
     session.commit()
     return {"countryCode": country_code, "cleared": cleared}
 
@@ -1680,17 +1764,18 @@ def delete_country_fobs(
 @router.get("/countries/fob-trash")
 def list_country_fob_trash(
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """List soft-deleted BOM FOB country columns available for restore or purge."""
-    return {"items": repo.list_country_fob_trash(session)}
+    return {"items": repo.list_country_fob_trash(session, allowed_brands=ordering_brands(session, user),
+                                               allowed_countries=ordering_countries(session, user))}
 
 
 @router.post("/countries/{country}/fobs/restore")
 def restore_country_fobs(
     country: str,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Restore one soft-deleted BOM FOB country column from trash."""
     country_code = clean_text(country).upper()
@@ -1698,7 +1783,8 @@ def restore_country_fobs(
         raise HTTPException(status_code=400, detail="country is required")
     if len(country_code) != 2:
         raise HTTPException(status_code=400, detail="Country code must be 2 letters")
-    result = repo.restore_country_fobs_from_trash(session, country_code)
+    validate_country_access(session, user.name, user.role, country_code)
+    result = repo.restore_country_fobs_from_trash(session, country_code, allowed_brands=ordering_brands(session, user))
     session.commit()
     return result
 
@@ -1707,7 +1793,7 @@ def restore_country_fobs(
 def purge_country_fob_trash(
     country: str,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Permanently delete trashed BOM FOB rows for one country."""
     country_code = clean_text(country).upper()
@@ -1715,7 +1801,8 @@ def purge_country_fob_trash(
         raise HTTPException(status_code=400, detail="country is required")
     if len(country_code) != 2:
         raise HTTPException(status_code=400, detail="Country code must be 2 letters")
-    purged = repo.purge_country_fob_trash(session, country_code)
+    validate_country_access(session, user.name, user.role, country_code)
+    purged = repo.purge_country_fob_trash(session, country_code, allowed_brands=ordering_brands(session, user))
     session.commit()
     return {"countryCode": country_code, "purged": purged}
 
@@ -1740,12 +1827,15 @@ def copy_country_fobs(
     if source == target:
         raise HTTPException(status_code=400, detail="Source and target countries must differ")
 
+    validate_country_access(session, user.name, user.role, source)
+    validate_country_access(session, user.name, user.role, target)
     result = repo.copy_country_fobs(
         session,
         source,
         target,
         overwrite_existing=overwrite_existing,
         changed_by=user.name,
+        allowed_brands=ordering_brands(session, user),
     )
     if result["sourceRows"] == 0:
         raise HTTPException(status_code=404, detail=f"No active FOB rows found for {source}")
@@ -1773,11 +1863,13 @@ def adjust_country_fobs(
     if delta == 0:
         raise HTTPException(status_code=400, detail="deltaEur must not be zero")
 
+    validate_country_access(session, user.name, user.role, country)
     result = repo.adjust_country_fobs(
         session,
         country,
         delta,
         changed_by=user.name,
+        allowed_brands=ordering_brands(session, user),
     )
     if result["rows"] == 0:
         raise HTTPException(status_code=404, detail=f"No active FOB rows found for {country}")
@@ -2039,6 +2131,9 @@ def patch_sku_metadata(
     user=Depends(require_min_role("editor")),
 ) -> dict:
     """Update shared product metadata for one or more material SKUs."""
+    _validate_material_access(session, user, [material_code, *(body.get("materialCodes") or [])])
+    if "brand" in body:
+        validate_brand_access(session, user, body["brand"])
     material_codes_raw = body.get("materialCodes")
     material_codes = (
         [code for code in (clean_text(item).upper() for item in material_codes_raw) if code]
@@ -2113,11 +2208,13 @@ def get_bom_admin(
     search: str | None = Query(default=None),
     country: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """Return BOM data with FOB per country, for the BOM admin panel."""
     items, countries, fob_conflicts = repo.list_bom_with_fob(
         session,
+        allowed_brands=ordering_brands(session, user),
+        allowed_countries=ordering_countries(session, user),
         brand=brand,
         search=search,
         country_code=country,
@@ -2125,7 +2222,8 @@ def get_bom_admin(
     )
     return {
         "items": items,
-        "countries": list(dict.fromkeys(["NL", country.upper()])) if country else countries,
+        "countries": ([code for code in dict.fromkeys(["NL", country.upper()]) if code in countries]
+                      if country else countries),
         "activeFobCountries": countries,
         "fobConflicts": fob_conflicts,
     }
@@ -2135,14 +2233,17 @@ def get_bom_admin(
 def export_bom_admin(
     body: dict,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> StreamingResponse:
     """Export the managed BOM/material master as a human-readable XLSX."""
     country_code = clean_text(body.get("countryCode")).upper() or None
     if country_code is not None and len(country_code) != 2:
         raise HTTPException(status_code=400, detail="countryCode must be a two-letter code")
 
-    items, countries = repo.list_bom_with_fob(session, limit=5000)
+    if country_code:
+        validate_country_access(session, user.name, user.role, country_code)
+    items, countries = repo.list_bom_with_fob(session, limit=5000, allowed_brands=ordering_brands(session, user),
+                                             allowed_countries=ordering_countries(session, user))
     try:
         workbook = build_bom_admin_workbook(
             items,
@@ -2167,11 +2268,12 @@ def list_material_skus_admin(
     brand: str | None = Query(default=None),
     search: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     """List all SKUs for the BOM admin panel."""
     rows = repo.list_all_material_skus_for_admin(
         session, country_code=country, brand=brand, search=search,
+        allowed_brands=ordering_brands(session, user),
     )
     return {
         "items": [
@@ -2198,12 +2300,20 @@ def get_lifecycle(
     material_code: str = "",
     product_identity: str = "",
     session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("viewer")),
 ) -> list[dict]:
+    validate_country_access(session, user.name, user.role, country)
     rows = []
     if product_identity:
         rows = repo.list_lifecycle_for_product(session, country, product_identity)
     elif material_code:
+        _validate_material_access(session, user, [material_code])
         rows = repo.get_material_lifecycle(session, country, material_code)
+    allowed = ordering_brands(session, user)
+    if allowed is not None:
+        skus = repo.get_skus_by_material_codes_any_status(session, [row.material_code for row in rows])
+        rows = [row for row in rows if row.material_code in skus and
+                str(skus[row.material_code].brand or "").upper() in allowed]
     return [
         {
             "lifecycleId": str(r.lifecycle_id),
@@ -2433,6 +2543,7 @@ def export_order_genius(
     quantities_only = _body_bool(body.get("quantitiesOnly", False))
     try:
         buf = export_matrix(session, country, year, include_hist,
+                            allowed_brands=ordering_brands(session, user),
                             **filters,
                             quantities_only=quantities_only)
     except ValueError as exc:
@@ -2462,7 +2573,7 @@ def export_order_genius_pi(
     year = body.get("year", 2026)
     filters = _export_filter_params(body)
     try:
-        buf = export_pi_matrix(session, country, year, **filters)
+        buf = export_pi_matrix(session, country, year, allowed_brands=ordering_brands(session, user), **filters)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     from datetime import date as _date
@@ -2539,7 +2650,12 @@ def preview_quantity_import(
         tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Failed to parse file: {e}")
 
-    validate_country_access(session, user.name, user.role, parsed.country_code)
+    try:
+        validate_country_access(session, user.name, user.role, parsed.country_code)
+        _validate_material_access(session, user, [row.material_code for row in parsed.rows])
+    except HTTPException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     if parsed.errors and not parsed.rows:
         tmp_path.unlink(missing_ok=True)
@@ -2644,7 +2760,7 @@ def apply_quantity_import(
         year=data["year"],
         rows=rows,
     )
-
+    _validate_material_access(session, user, [row.material_code for row in rows])
     result = apply_order_quantity_import(session, parsed, user.name)
     session.commit()
 

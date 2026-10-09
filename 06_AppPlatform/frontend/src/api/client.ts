@@ -4586,7 +4586,7 @@ export const api = {
 
   /* ── Role Upgrade ──────────────────────────── */
 
-  requestRoleUpgrade: (payload: { requested_role: string; reason?: string }) =>
+  requestRoleUpgrade: (payload: { requested_role: string; requestedBrands?: string[]; reason?: string }) =>
     request<Record<string, unknown>>("/auth/role-upgrade/request", {
       method: "POST", body: JSON.stringify(payload),
     }),
@@ -4600,7 +4600,7 @@ export const api = {
     );
   },
 
-  reviewRoleUpgradeRequest: (requestId: string, payload: { status: string }) =>
+  reviewRoleUpgradeRequest: (requestId: string, payload: { status: string; brands?: string[] }) =>
     request<Record<string, unknown>>(
       `/auth/role-upgrade/requests/${requestId}`,
       { method: "PATCH", body: JSON.stringify(payload) }

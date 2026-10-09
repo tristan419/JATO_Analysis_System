@@ -1,80 +1,48 @@
-# Permission Management — 实际实施方案
+# Permission Management — 国家＋品牌权限
 
-> 2026-06-01 | 状态: **已实施** | 取代 2026-05-25 的设计方案
+> 2026-10-09 最新用户确认。替代旧“仅 Filler 国家隔离／Editor 全部可见／BOM 仅 Admin”口径。本文是现行权限契约，历史规格不能覆盖它；部署／验收状态以当前批次 Progress 的实际证据为准。
 
-## 实际架构
+## 账号国家与品牌
 
-权限管理通过三个机制实现：
+品牌多选：OMODA、JAECOO、EXLANTIX、LEPAS、CHERY、ICAR。
 
-### 1. 角色层级 (`app/core/security.py`)
+| 角色 | 自改国家 | 自改品牌 | 改他人国家／品牌 | 业务范围 |
+| --- | --- | --- | --- | --- |
+| Viewer | 允许 | 无需品牌 | 不允许 | 不扩大既有入口；已有只读接口按账号国家 |
+| Order Filler | 不允许 | 不允许 | 不允许 | 主国家＋附加国家 × 获配品牌 |
+| Editor | 允许 | 不允许 | 不允许 | 主国家＋附加国家 × 获配品牌 |
+| Admin 及以上（含 developer） | 允许 | 允许 | 允许 | 始终全部国家、全部品牌 |
 
-```python
-ROLE_LEVEL = {
-    "order_filler": 1,   # NEW — 受限订单填报
-    "viewer": 1,
-    "editor": 2,
-    "admin": 3,
-}
-```
+- 新增 Order Filler／Editor 默认无品牌。**现有所有 Order Filler 一次性分配 OMODA＋JAECOO**；包括已有停用账号，国家／角色／有效状态不变。现有 Editor 不自动补品牌。后续 Admin 人工维护，新建 Filler 不继承这次补齐。
+- 无品牌不得当成全部品牌。仅访问 Order Genius／PI 分车时提示并可申请；不在登录、首页或个人资料强制弹窗。申请填写品牌与原因，复用既有权限升级的待审／批准／拒绝流程。Admin 可勾选实际批准品牌，批准添加品牌、不改变角色。
+- Viewer 无需申请品牌。Editor 自改国家随之改变业务国家范围，不能自改品牌或角色。
 
-### 2. 两个依赖函数
+## 操作权限
 
-| 函数 | 用途 | 示例 |
-|------|------|------|
-| `require_min_role("X")` | 层级检查，level >= X 即可 | 大部分 viewer/editor/admin 端点 |
-| `require_roles("A","B","C")` | 显式白名单，忽略层级 | 排除 order_filler: `require_roles("viewer","editor","admin")` |
-| `validate_country_access()` | 国家隔离，仅 order_filler 触发 | matrix/options/export/quantity-cell |
+| 操作 | Order Filler | Editor | Admin 及以上 |
+| --- | --- | --- | --- |
+| 选品／车辆／导出、数量填写／选品创建 PI | 国家＋品牌 | 国家＋品牌 | 全部 |
+| VIN／状态／运保费／备注 | 授权车辆 | 授权车辆 | 全部 |
+| 国家 FOB | 不允许 | 国家＋品牌 | 全部 |
+| 共享 BOM／色码／HEX／生命周期 | 不允许 | 获配品牌内既有编辑 | 全部 |
+| 整张 PI 删除 | 不允许 | 整张所有 line／allocation／实际车辆均获授权 | 全部 |
+| 分配品牌／审批申请 | 不允许 | 不允许 | 允许 |
 
-### 3. 前端
+共享字段按品牌，不是本人国家专属；Editor 保存前展示跨国家、历史 PI 色卡等实际影响。国家价格仍按国家＋品牌；加价规则维护沿既有共享品牌权限，直接重算 FOB 只处理授权国家。不得额外开放 Admin 专属的物料新增／删除、基线发布、付款条件等操作。
 
-| 机制 | 文件 |
-|------|------|
-| Menu 过滤 | `pageNavigation.ts` — `ROLE_LEVEL: {order_filler:0, viewer:1, editor:2, admin:3}` |
-| 路由守卫 | `RequireRole.tsx` — order_filler 只能访问 12 条路径 |
-| 页面内权限 | `isAdmin = role === "admin"` 控制 BOM/PaymentTerm 按钮 |
+## 实现职责与接口契约
 
-## order_filler 角色
+- FastAPI 既有 require_min_role／require_roles＋SQLAlchemy 查询／事务，不新建 ACL 平台。Viewer 与 Filler 后端等级相同，订单写接口使用明确角色白名单；developer 复用 Admin 等级，前后端入口一致。
+- SessionStore 校验数据库当前账号角色与有效状态；国家／品牌也从数据库读取，不信旧 token、浏览器筛选或文件里的声明。停用／降权／撤权后旧页面不可越权保存。
+- 读范围是请求筛选 × 授权交集；写入检查完整目标集合，混合越权整批拒绝、零部分保存。未知／空品牌普通账号不放行；Admin 可核对纠正，不按车型名称猜品牌授权。
+- 混合 PI 的列表、市场名单、月份数量、明细／allocation、摘要、车辆搜索、VIN 匹配、勾选、导出及 PI 发起 COC 查找／下载，均依据保存的品牌＋实际国家单元。公共 PI 编号和订购抬头可保留，不暴露隐藏车辆的国家／数量／价格。
+- 全局勾选是当前授权 PI／scope 全集，不是整个系统。权限重读后清理旧勾选、编辑草稿及过期请求结果。
+- 普通 Filler／Editor 创建 PI 必须检查剩余量；allowDuplicate 不可绕过。特殊重建仅 Admin 及以上明确确认。
+- 数量 XLSX 的 Preview 与 Apply 分别重新检查当前权限；继续使用系统 FOB，不把 Excel 价格写回 FOB 主表。
+- 历史 PI 按保存品牌授权，按品牌＋色码读最新共享 HEX；物料号、BOM、颜色描述与成交价不改。归档物料仍不参与当前物料自动同步。
 
-**用途：** 订单填报专用账号。只能看自己国家的选品表，可以填数量、导入导出，但不能访问 BOM Admin、Payment Terms、COC Match、Data Ops 等。
+## 本轮边界与回归
 
-**国家隔离：**
-- 一主多副（`primary_country_code` + `secondary_country_codes`）
-- 只有 admin 能修改，自己改不了（`update_my_profile` 403）
-- 后端强制校验（`validate_country_access` 查 DB）
-- 前端国家列表过滤（`GET /countries` 只返回已分配国家）
+账号管理、个人资料、选品、BOM Admin、PI 分车及上述导入导出在范围内。CBU 财务、独立 COC 工作台／库管理不改，不宣称全系统隔离；不改共享库来源包上传／启用／删除角色，PI 发起的 COC 操作限制授权 VIN。
 
-## 权限矩阵（实际）
-
-| 功能 | order_filler | viewer | editor | admin |
-|------|:--:|:--:|:--:|:--:|
-| Dashboard / Market Scan 查看 | ✅ | ✅ | ✅ | ✅ |
-| Order Genius 查看（仅本人国家）| ✅ | ✅ | ✅ | ✅ |
-| Order 数量编辑 / 导入导出 | ✅ | — | ✅ | ✅ |
-| Material 上传 | — | — | ✅ | ✅ |
-| Publish Material Baseline | — | — | — | ✅ |
-| Payment Term 勘误 | — | — | — | ✅ |
-| BOM 底表编辑 | — | — | — | ✅ |
-| 用户管理 / 权限审批 | — | — | — | ✅ |
-| 修改本人国家分配 | — | ✅ | ✅ | ✅ |
-| 工程配置管理 | — | ✅ | ✅ | ✅ |
-| MSRP 价格管理 | — | ✅ | ✅ | ✅ |
-
-## 关键文件
-
-| 文件 | 作用 |
-|------|------|
-| `app/core/security.py` | `require_roles`, `validate_country_access`, dev mode token resolution |
-| `app/api/routes/auth.py` | role validation, country-change block, delete user, reset password |
-| `app/api/routes/order_genius.py` | country enforcement, role gating on payment-terms/bom-admin |
-| `frontend/src/components/RequireRole.tsx` | 路由守卫 |
-| `frontend/src/utils/pageNavigation.ts` | Menu 角色过滤 |
-| `frontend/src/pages/AccessControlPage.tsx` | 用户管理 UI（CRUD + 筛选 + 国家多选）|
-| `frontend/src/pages/ProfilePage.tsx` | order_filler 禁止自改国家 |
-
-## 与设计方案的差异
-
-原设计方案（`app/core/permissions.py` + `FUNCTION_PERMISSIONS` dict）未实施。实际采用更轻量的方案：
-- 不需要新文件
-- `require_roles` 只在需要排除 order_filler 的端点上使用（~4 个端点）
-- `validate_country_access` 只在需要国家隔离的端点上调用（~6 个端点）
-- 其余沿用 `require_min_role`
+回归：现有 Filler 一次性补品牌／新用户空品牌／Viewer 豁免；申请审批不升角色；国家自改边界；参数绕过／混合品牌 PI／跨页完整选择；混合批量拒绝零写入／整 PI 删除；旧会话撤权；数量剩余校验与回导重校；共享色卡跨国显示但历史业务字段／Q/P/R／FOB 不被误改。

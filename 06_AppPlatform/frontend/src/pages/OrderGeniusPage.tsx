@@ -18,6 +18,8 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 
 import { api, apiUrl, AUTH_FAILURE_EVENT } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
+import { OrderingBrandNotice } from "../components/RoleUpgradeModal";
+import { isAdminRole } from "../utils/pageNavigation";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
@@ -616,8 +618,10 @@ export function OrderGeniusPage() {
     }
     return codes;
   })();
-  const isAdmin = user?.role === "admin";
-  const canFillOrders = user?.role === "admin" || user?.role === "editor" || user?.role === "order_filler";
+  const isAdmin = isAdminRole(user?.role);
+  const authorizationKey = JSON.stringify([user?.username, user?.role, user?.primaryCountry, user?.secondaryCountries, user?.brands]);
+  const canMaintainBom = isAdmin || (user?.role === "editor" && Boolean(user.brands?.length));
+  const canFillOrders = isAdmin || ((user?.role === "editor" || user?.role === "order_filler") && Boolean(user.brands?.length));
   // ── Filter state ──────────────────────────────────────────────────
   const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
   const [selectedCountries, setSelectedCountries] = useState<string[]>(allCountriesISO);
@@ -630,7 +634,7 @@ export function OrderGeniusPage() {
     const q = countrySearchQuery.trim().toLowerCase();
     let filtered = countries;
     // Non-admin users only see their assigned countries
-    if (!isAdmin && userCountries.length > 0) {
+    if (!isAdmin) {
       filtered = countries.filter((c) => userCountries.includes(c.countryCode));
     }
     return filtered
@@ -834,6 +838,29 @@ export function OrderGeniusPage() {
   const [piPlanError, setPiPlanError] = useState("");
   const [piBatchRefreshKey, setPiBatchRefreshKey] = useState(0);
   const matrixRequestIdRef = useRef(0);
+  const countryInitDone = useRef(false);
+  useEffect(() => {
+    matrixRequestIdRef.current += 1;
+    countryInitDone.current = false;
+    setMatrices({});
+    setOptions(null);
+    setQuantityDrafts({});
+    quantityVersionRef.current = {};
+    setPiSelectedRowIds(new Set());
+    setPiBatchQuantities({});
+    setPiAllocationPlans({});
+    setPiExistingBatches([]);
+    setQtyImportPreview(null);
+    setQtyImportFile(null);
+    setShowQtyImport(false);
+    setUploadPreview(null);
+    setShowBomAdmin(false);
+    setSelectedCountries(isAdmin ? allCountriesISO : userCountries);
+    setBrandFilter("");
+    setModelFilter("");
+    setVersionFilter("");
+    setColourFilter("");
+  }, [authorizationKey]);
   const selectedOrderMonthIsFuture = selectedMonth != null
     && (selectedYear * 12 + selectedMonth) > (new Date().getFullYear() * 12 + new Date().getMonth() + 1);
 
@@ -863,25 +890,27 @@ export function OrderGeniusPage() {
   }, [visibleColumns]);
 
   // ── Load countries ────────────────────────────────────────────────
-  const countryInitDone = useRef(false);
   useEffect(() => {
+    let active = true;
     api.getOrderGeniusCountries()
       .then((res) => {
+        if (!active) return;
         setCountries(res.items);
         if (res.items.length > 0 && !countryInitDone.current) {
           countryInitDone.current = true;
           const validCodes = new Set(res.items.map((c) => c.countryCode));
-          const resolved = allCountriesISO.filter((c) => validCodes.has(c));
+          const resolved = (isAdmin ? allCountriesISO : userCountries).filter((c) => validCodes.has(c));
           if (resolved.length === 0) {
             const fallback = res.items.find((c) => c.countryCode === "SE");
-            setSelectedCountries(fallback ? [fallback.countryCode] : [res.items[0].countryCode]);
+            setSelectedCountries(isAdmin ? [fallback?.countryCode ?? res.items[0].countryCode] : []);
           } else {
             setSelectedCountries(resolved);
           }
         }
       })
-      .catch(() => setError("Failed to load countries"));
-  }, [allCountriesISO]);
+      .catch(() => { if (active) setError("Failed to load countries"); });
+    return () => { active = false; };
+  }, [allCountriesISO, authorizationKey]);
 
   const loadFobCountries = useCallback(async () => {
     try {
@@ -894,11 +923,12 @@ export function OrderGeniusPage() {
 
   useEffect(() => {
     void loadFobCountries();
-  }, [loadFobCountries]);
+  }, [loadFobCountries, authorizationKey]);
 
   // ── Load options (use primary country for filter dropdowns) ────────
   useEffect(() => {
     if (!primaryCountry) return;
+    let active = true;
     api
       .getOrderGeniusOptions({
         country: primaryCountry,
@@ -908,9 +938,10 @@ export function OrderGeniusPage() {
         version: versionFilter || undefined,
         colour: colourFilter || undefined,
       })
-      .then(setOptions)
-      .catch((e: unknown) => setError(getErrorMessage(e)));
-  }, [primaryCountry, brandFilter, modelFilter, powertrainFilter, versionFilter, colourFilter]);
+      .then((next) => { if (active) setOptions(next); })
+      .catch((e: unknown) => { if (active) setError(getErrorMessage(e)); });
+    return () => { active = false; };
+  }, [authorizationKey, primaryCountry, brandFilter, modelFilter, powertrainFilter, versionFilter, colourFilter]);
 
   // ── Load matrices for all selected countries ────────────────────────
   const loadMatrices = useCallback((): Promise<boolean> => {
@@ -963,7 +994,7 @@ export function OrderGeniusPage() {
         }
       });
   }, [
-    selectedCountries, selectedYear, brandFilter, modelFilter,
+    authorizationKey, selectedCountries, selectedYear, brandFilter, modelFilter,
     powertrainFilter, versionFilter, colourFilter, debouncedMaterialSearch, selectionDate, includeHistorical,
   ]);
 
@@ -2397,14 +2428,15 @@ export function OrderGeniusPage() {
     return map;
   }, [countries]);
   const missingFobCountryCodes = useMemo(() => {
-    if (fobCountryCodes === null) return [];
+    if (!canFillOrders || fobCountryCodes === null) return [];
     const fobSet = new Set(fobCountryCodes);
     return selectedCountries.filter((countryCode) => !fobSet.has(countryCode));
-  }, [fobCountryCodes, selectedCountries]);
+  }, [canFillOrders, fobCountryCodes, selectedCountries]);
   const missingFobCountryLabels = missingFobCountryCodes.map((countryCode) =>
     formatOrderGeniusCountryOptionLabel(countryCode, countryNameByCode.get(countryCode)),
   );
   const openBomAdminPanel = () => {
+    if (!canMaintainBom) return;
     const targetCountry = missingFobCountryCodes[0] ?? null;
     setBomAdminCopyTargetCountry(targetCountry);
     setShowDeck(true);
@@ -2452,6 +2484,7 @@ export function OrderGeniusPage() {
 
   return (
     <section className="crud-shell">
+      <OrderingBrandNotice user={user} />
       <header className="crud-hero">
         <h1>Order Genius</h1>
         <p>
@@ -2531,7 +2564,7 @@ export function OrderGeniusPage() {
       ) : null}
 
       <div className="deck-control-tabs order-genius-control-tabs" role="tablist" aria-label="Order Genius control sections">
-        {orderGeniusControlTabs.map((tab) => (
+        {orderGeniusControlTabs.filter((tab) => tab.id !== "bom" || canMaintainBom).map((tab) => (
           <button
             key={tab.id}
             type="button"
@@ -2734,7 +2767,7 @@ export function OrderGeniusPage() {
             {showPtAdmin ? "Hide PT Admin" : "Payment Terms"}
           </button>
         )}
-        {isAdmin && (
+        {canMaintainBom && (
           <button type="button" className="btn btn-sm btn-ghost"
                   onClick={() => {
                     if (showBomAdmin) {
@@ -2747,7 +2780,7 @@ export function OrderGeniusPage() {
             {showBomAdmin ? "Hide BOM Admin" : "BOM Admin"}
           </button>
         )}
-        {!isAdmin ? (
+        {!canMaintainBom ? (
           <div className="order-genius-muted-note">Admin tools are available to admin users only.</div>
         ) : null}
         {canFillOrders && user?.role !== "order_filler" ? (
@@ -2887,9 +2920,9 @@ export function OrderGeniusPage() {
                 你正在为历史物料创建 PI；这不会重新启用该物料。<br />
                 You are creating a PI for a historical material. This will not reactivate the material.
               </span>
-              <button type="button" className="btn btn-sm btn-ghost" onClick={openBomAdminPanel}>
+              {canMaintainBom ? <button type="button" className="btn btn-sm btn-ghost" onClick={openBomAdminPanel}>
                 Open BOM Admin
-              </button>
+              </button> : null}
             </div>
           ) : null}
           {selectedOrderMonthIsFuture ? (
@@ -2899,9 +2932,9 @@ export function OrderGeniusPage() {
                 请先在 BOM Admin 延长模板最终截止日期。<br />
                 Extend the BOM template final order date before creating this future PI.
               </span>
-              <button type="button" className="btn btn-sm btn-ghost" onClick={openBomAdminPanel}>
+              {canMaintainBom ? <button type="button" className="btn btn-sm btn-ghost" onClick={openBomAdminPanel}>
                 Open BOM Admin
-              </button>
+              </button> : null}
             </div>
           ) : null}
           {selectedMonth && piExistingBatches.length > 0 ? (
@@ -3374,9 +3407,9 @@ export function OrderGeniusPage() {
             </p>
           </div>
           <div className="order-genius-missing-fob-actions">
-            <button type="button" className="btn btn-sm btn-primary" onClick={openBomAdminForMissingFob}>
+            {canMaintainBom ? <button type="button" className="btn btn-sm btn-primary" onClick={openBomAdminForMissingFob}>
               Open BOM Admin
-            </button>
+            </button> : <span>Contact admin to configure FOB / 请联系管理员配置 FOB</span>}
             <button type="button" className="btn btn-sm btn-ghost" onClick={removeMissingFobCountries}>
               Remove from view
             </button>
@@ -3412,16 +3445,18 @@ export function OrderGeniusPage() {
               <strong style={{ color: "#334155" }}>Selected country has no BOM FOB yet.</strong>
               <span>{missingFobCountryLabels.join(" · ")}</span>
               <div className="order-genius-missing-fob-actions">
-                <button type="button" className="btn btn-sm btn-primary" onClick={openBomAdminForMissingFob}>
+                {canMaintainBom ? <button type="button" className="btn btn-sm btn-primary" onClick={openBomAdminForMissingFob}>
                   Open BOM Admin
-                </button>
+                </button> : <span>Contact admin to configure FOB / 请联系管理员配置 FOB</span>}
                 <button type="button" className="btn btn-sm btn-ghost" onClick={removeMissingFobCountries}>
                   Remove from view
                 </button>
               </div>
             </div>
           ) : selectedCountries.length > 0 ? (
-            "No data. Upload a Material Master file to get started."
+            !canFillOrders ? "Brand access required / 请先申请品牌权限。"
+              : isAdmin ? "No data. Upload a Material Master file to get started."
+                : "No authorized material data in this view / 当前视图没有授权物料。"
           ) : (
             "Select a country to view the order matrix."
           )}
@@ -3448,6 +3483,8 @@ export function OrderGeniusPage() {
             WebkitOverflowScrolling: "touch",
           }}>
             <BomAdminPanel
+              key={authorizationKey}
+              isAdmin={isAdmin}
               initialCopyTargetCountry={bomAdminCopyTargetCountry}
               onFobCountriesChanged={loadFobCountries}
               onFobChanged={async () => {
@@ -3830,6 +3867,7 @@ interface BomFinanceDrawerScope {
 }
 
 interface BomAdminPanelProps {
+  isAdmin: boolean;
   initialCopyTargetCountry?: string | null;
   onFobCountriesChanged?: () => void;
   onFobChanged?: () => void | Promise<void>;
@@ -3894,6 +3932,7 @@ function formatBomSourceLabel(
 // ── BOM Admin Panel ──────────────────────────────────────────────────
 
 export function BomAdminPanel({
+  isAdmin,
   initialCopyTargetCountry = null,
   onFobCountriesChanged,
   onFobChanged,
@@ -6460,7 +6499,7 @@ export function BomAdminPanel({
 	            {s.colourCode || s.colour}
           </span>
         )}
-        {editing ? (
+        {editing && isAdmin ? (
           pendingDeletes.has(s.materialCode) ? (
             <span title="Click again to confirm delete" style={{ cursor: 'pointer', color: '#fff', fontSize: 9, marginLeft: 1, fontWeight: 700, background: '#dc2626', borderRadius: 2, padding: '1px 3px' }}
               onClick={async (e2: any) => {
@@ -6790,9 +6829,9 @@ export function BomAdminPanel({
                 </div>
                 <div className="bom-admin-tools-front-actions">
                   <button type="button" className="btn btn-sm btn-secondary" onClick={() => toggleToolsCard(true)}>Edit tools</button>
-                  <button className="btn btn-sm btn-ghost" onClick={toggleAddMaterialForm}>
+                  {isAdmin ? <button className="btn btn-sm btn-ghost" onClick={toggleAddMaterialForm}>
                     {addMaterialButtonLabel}
-                  </button>
+                  </button> : null}
                 </div>
               </header>
           }
@@ -7505,7 +7544,7 @@ export function BomAdminPanel({
           </div>
         </div>
       ) : null}
-      {showAddMaterial && (
+      {isAdmin && showAddMaterial && (
         <div
           onKeyDown={(event) => {
             if (event.key === "Enter" && !(event.target instanceof HTMLTextAreaElement)) {
@@ -7772,7 +7811,7 @@ export function BomAdminPanel({
                                   ) : (
                                     tierSkus.map((s: any) => renderColourChip(s, isHist, editing))
                                   )}
-                                  {editing ? (<span title={`Add colour to ${tierName} tier`}
+                                  {editing && isAdmin ? (<span title={`Add colour to ${tierName} tier`}
                                     style={{ cursor: 'pointer', color: '#94a3b8', fontSize: 12, fontWeight: 700, padding: '0 3px' }}
                                     onClick={(e2: any) => {
                                       e2.stopPropagation();
@@ -7872,7 +7911,7 @@ export function BomAdminPanel({
                               </td>
                               <td className="bom-admin-actions-cell" style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, textAlign: "center" }}>
                                 <div className="bom-admin-row-actions" style={{ display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
-                                  {pendingDeletes.has(bomTemplate) ? (
+                                  {!isAdmin ? null : pendingDeletes.has(bomTemplate) ? (
                                     <button className="btn btn-sm bom-admin-row-action-button" title="Click again to confirm delete"
                                       style={{ color: '#fff', background: '#dc2626' }}
                                       onClick={async () => {
@@ -8382,14 +8421,14 @@ export function BomAdminPanel({
                                       noteKey={`${draftKey}|remark|${currentBomTemplateRemark}`}
                                       noteDefaultValue={currentBomTemplateRemark}
                                       saveMessage={productSaveMessage}
-                                      onCopyMaterial={() => handleCopyMaterialFromBom(
+                                      onCopyMaterial={isAdmin ? () => handleCopyMaterialFromBom(
                                         draftKey,
                                         bomTemplate,
                                         ref,
                                         allSkus,
                                         sourceLabel,
                                         bulkFobEditor.selectedCountries,
-                                      )}
+                                      ) : undefined}
                                       isSavingProduct={isSavingProduct}
                                     />
                                   </div>

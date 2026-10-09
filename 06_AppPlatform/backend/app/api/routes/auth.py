@@ -28,6 +28,8 @@ from app.core.security import (
     UserContext,
     get_current_user,
     require_min_role,
+    is_admin,
+    ORDERING_BRANDS,
 )
 from app.db.models import RoleUpgradeRequest, User
 from app.db.session import get_db_session
@@ -68,11 +70,13 @@ class LoginResponse(BaseModel):
     displayName: str | None = None
     primaryCountry: str | None = None
     secondaryCountries: list[str] = Field(default_factory=list)
+    brands: list[str] = Field(default_factory=list)
     preferredLandingPage: str | None = None
     profileComplete: bool = False
 
 
 class UserProfileBody(BaseModel):
+    brands: list[str] | None = None
     primary_country: str | None = Field(default=None, alias="primaryCountry")
     secondary_countries: list[str] = Field(
         default_factory=list,
@@ -124,6 +128,7 @@ def _user_payload(user: User) -> dict:
         "displayName": user.display_name,
         "primaryCountry": user.primary_country_code,
         "secondaryCountries": secondary,
+        "brands": list(user.brands or []),
         "preferredLandingPage": user.preferred_landing_page,
         "profileComplete": bool(user.primary_country_code),
     }
@@ -133,6 +138,7 @@ def _copy_user_payload(payload: dict) -> dict:
     """Return a defensive copy so cached list values cannot be mutated by callers."""
     copied = dict(payload)
     copied["secondaryCountries"] = list(payload.get("secondaryCountries") or [])
+    copied["brands"] = list(payload.get("brands") or [])
     return copied
 
 
@@ -274,6 +280,7 @@ def login(
         displayName=user.display_name,
         primaryCountry=user.primary_country_code,
         secondaryCountries=user.secondary_country_codes or [],
+        brands=user.brands or [],
         preferredLandingPage=user.preferred_landing_page,
         profileComplete=bool(user.primary_country_code),
     )
@@ -346,42 +353,12 @@ def update_my_profile(
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # order_filler users cannot modify their own country assignments — only admin can
-    if db_user.role == "order_filler":
-        new_primary = _normalize_country_code(body.primary_country)
-        new_secondary = _normalize_secondary_countries(body.secondary_countries, new_primary)
-        current_secondary = db_user.secondary_country_codes or []
-        if (new_primary != db_user.primary_country_code or
-                new_secondary != current_secondary):
-            raise HTTPException(status_code=403, detail="Country assignments are managed by your administrator")
-        # Allow display name and preferred landing page changes
-        db_user.preferred_landing_page = (
-            str(body.preferred_landing_page).strip()
-            if body.preferred_landing_page
-            else None
-        )
-        if body.display_name is not None:
-            dn = str(body.display_name).strip()
-            db_user.display_name = dn if dn else None
-        db.commit()
-        db.refresh(db_user)
-        _invalidate_me_payload_cache(db_user.username)
-        return _user_payload(db_user)
+    if body.brands is not None:
+        if not is_admin(user.role):
+            raise HTTPException(403, "Brands are managed by admin / 品牌由管理员分配")
+        db_user.brands = _normalize_brands(body.brands)
 
-    primary = _normalize_country_code(body.primary_country)
-    db_user.primary_country_code = primary
-    db_user.secondary_country_codes = _normalize_secondary_countries(
-        body.secondary_countries,
-        primary,
-    )
-    db_user.preferred_landing_page = (
-        str(body.preferred_landing_page).strip()
-        if body.preferred_landing_page
-        else None
-    )
-    if body.display_name is not None:
-        dn = str(body.display_name).strip()
-        db_user.display_name = dn if dn else None
+    _apply_profile_fields(db_user, body, allow_countries=user.role != "order_filler")
     db.commit()
     db.refresh(db_user)
     _invalidate_me_payload_cache(db_user.username)
@@ -444,24 +421,40 @@ def update_user_profile(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    primary = _normalize_country_code(body.primary_country)
-    user.primary_country_code = primary
-    user.secondary_country_codes = _normalize_secondary_countries(
-        body.secondary_countries,
-        primary,
-    )
-    user.preferred_landing_page = (
-        str(body.preferred_landing_page).strip()
-        if body.preferred_landing_page
-        else None
-    )
-    if body.display_name is not None:
-        dn = str(body.display_name).strip()
-        user.display_name = dn if dn else None
+    if body.brands is not None:
+        user.brands = _normalize_brands(body.brands)
+    _apply_profile_fields(user, body, allow_countries=True)
     db.commit()
     db.refresh(user)
     _invalidate_me_payload_cache(user.username)
     return _user_payload(user)
+
+
+def _normalize_brands(values: list[str]) -> list[str]:
+    brands = {str(value).strip().upper() for value in values}
+    if not brands <= set(ORDERING_BRANDS):
+        raise HTTPException(400, "Unknown brand / 未知品牌")
+    return [brand for brand in ORDERING_BRANDS if brand in brands]
+
+
+def _apply_profile_fields(user: User, body: UserProfileBody, *, allow_countries: bool) -> None:
+    fields = body.model_fields_set
+    primary = (_normalize_country_code(body.primary_country)
+               if "primary_country" in fields else user.primary_country_code)
+    secondary = _normalize_secondary_countries(
+        body.secondary_countries if "secondary_countries" in fields else user.secondary_country_codes,
+        primary,
+    )
+    if not allow_countries and (primary != user.primary_country_code
+                               or secondary != (user.secondary_country_codes or [])):
+        raise HTTPException(403, "Country assignments are managed by your administrator")
+    if {"primary_country", "secondary_countries"} & fields:
+        user.primary_country_code = primary
+        user.secondary_country_codes = secondary
+    if "preferred_landing_page" in fields:
+        user.preferred_landing_page = str(body.preferred_landing_page or "").strip() or None
+    if "display_name" in fields:
+        user.display_name = str(body.display_name or "").strip() or None
 
 
 @router.delete("/users/{user_id}")
@@ -527,12 +520,15 @@ def reset_user_password(
 
 
 class RoleUpgradeRequestBody(BaseModel):
-    requested_role: str
+    requested_role: str = "editor"
+    requested_brands: list[str] | None = Field(default=None, alias="requestedBrands")
     reason: str = ""
+    model_config = {"populate_by_name": True}
 
 
 class ReviewUpgradeBody(BaseModel):
     status: str  # "approved" or "rejected"
+    brands: list[str] | None = None
 
 
 @router.post("/role-upgrade/request")
@@ -541,12 +537,15 @@ def request_role_upgrade(
     db: Session = Depends(get_db_session),
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    if body.requested_role != "editor":
+    brands = _normalize_brands(body.requested_brands) if body.requested_brands is not None else None
+    if brands is not None and (not brands or not body.reason.strip() or user.role not in {"order_filler", "editor"}):
+        raise HTTPException(400, "Select brands and provide a reason / 请选择品牌并填写申请说明")
+    if brands is None and body.requested_role != "editor":
         raise HTTPException(
             status_code=400,
             detail="Users can only request editor access; admin is assigned manually.",
         )
-    if ROLE_LEVEL.get(body.requested_role, 0) <= ROLE_LEVEL.get(user.role, 0):
+    if brands is None and ROLE_LEVEL.get(body.requested_role, 0) <= ROLE_LEVEL.get(user.role, 0):
         raise HTTPException(status_code=400, detail="Cannot downgrade or request same level")
 
     existing = (
@@ -554,6 +553,8 @@ def request_role_upgrade(
         .filter(
             RoleUpgradeRequest.username == user.name,
             RoleUpgradeRequest.status == "pending",
+            (RoleUpgradeRequest.requested_brands.is_not(None) if brands is not None
+             else RoleUpgradeRequest.requested_brands.is_(None)),
         )
         .first()
     )
@@ -567,7 +568,8 @@ def request_role_upgrade(
         user_id=db_user.id,
         username=user.name,
         current_role=user.role,
-        requested_role=body.requested_role,
+        requested_role=user.role if brands is not None else body.requested_role,
+        requested_brands=brands,
         reason=body.reason,
         status="pending",
     )
@@ -577,6 +579,7 @@ def request_role_upgrade(
         "requestId": str(req.request_id),
         "username": req.username,
         "requestedRole": req.requested_role,
+        "requestedBrands": req.requested_brands,
         "status": req.status,
     }
 
@@ -598,6 +601,7 @@ def list_role_upgrade_requests(
                 "username": r.username,
                 "currentRole": r.current_role,
                 "requestedRole": r.requested_role,
+                "requestedBrands": r.requested_brands,
                 "reason": r.reason,
                 "status": r.status,
                 "createdAtUtc": r.created_at_utc.isoformat(),
@@ -625,27 +629,35 @@ def review_role_upgrade(
     if req.status != "pending":
         raise HTTPException(status_code=409, detail="Request already reviewed")
 
-    req.status = body.status
-    req.reviewed_by = admin.name
-    req.reviewed_at_utc = datetime.now(timezone.utc)
-
+    db_user = db.query(User).filter(User.username == req.username).first()
     if body.status == "approved":
-        if req.requested_role != "editor":
+        if req.requested_brands is None and req.requested_role != "editor":
             raise HTTPException(
                 status_code=400,
                 detail="Only editor requests can be approved through this flow",
             )
-        db_user = db.query(User).filter(User.username == req.username).first()
-        if db_user:
+        if not db_user:
+            raise HTTPException(404, "Stored user not found")
+        if req.requested_brands is not None:
+            brands = _normalize_brands(body.brands if body.brands is not None else req.requested_brands)
+            if not brands:
+                raise HTTPException(400, "Approve at least one brand / 至少批准一个品牌")
+            db_user.brands = _normalize_brands([*(db_user.brands or []), *brands])
+            _invalidate_me_payload_cache(db_user.username)
+        else:
             db_user.role = req.requested_role
             _invalidate_me_payload_cache(db_user.username)
 
+    req.status = body.status
+    req.reviewed_by = admin.name
+    req.reviewed_at_utc = datetime.now(timezone.utc)
     db.commit()
     return {
         "requestId": str(req.request_id),
         "status": req.status,
         "username": req.username,
-        "newRole": req.requested_role if body.status == "approved" else req.current_role,
+        "newRole": db_user.role if db_user else req.current_role,
+        "brands": list(db_user.brands or []) if db_user else [],
     }
 
 

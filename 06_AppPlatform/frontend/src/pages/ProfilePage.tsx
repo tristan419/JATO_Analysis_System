@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { useAuth } from "../contexts/AuthContext";
+import { ORDERING_BRANDS, useAuth } from "../contexts/AuthContext";
+import { isAdminRole } from "../utils/pageNavigation";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { formatJatoCountryOption } from "../utils/jatoCountries";
 
@@ -10,6 +11,8 @@ export function ProfilePage() {
   const navigate = useNavigate();
   const { countryOptions } = useAccountCountryOptions();
   const isOrderFiller = user?.role === "order_filler";
+  const isAdmin = isAdminRole(user?.role);
+  const [brands, setBrands] = useState<string[]>(user?.brands ?? []);
   const [displayName, setDisplayName] = useState(user?.displayName ?? "");
   const [primaryCountry, setPrimaryCountry] = useState(user?.primaryCountry ?? "");
   const [secondaryCountries, setSecondaryCountries] = useState<string[]>(
@@ -23,6 +26,7 @@ export function ProfilePage() {
     setDisplayName(user.displayName ?? "");
     setPrimaryCountry(user.primaryCountry ?? "");
     setSecondaryCountries(user.secondaryCountries);
+    setBrands(user.brands);
   }, [user]);
 
   const secondaryOptions = useMemo(
@@ -40,7 +44,7 @@ export function ProfilePage() {
   }
 
   async function saveProfile(): Promise<void> {
-    if (!primaryCountry) {
+    if (!primaryCountry && !isOrderFiller && !isAdmin) {
       setError("请选择一个主国家。");
       return;
     }
@@ -48,8 +52,9 @@ export function ProfilePage() {
     setError("");
     try {
       await updateProfile({
-        primaryCountry,
-        secondaryCountries: secondaryCountries.filter((code) => code !== primaryCountry),
+        ...(!isOrderFiller ? { primaryCountry: primaryCountry || null,
+          secondaryCountries: secondaryCountries.filter((code) => code !== primaryCountry) } : {}),
+        ...(isAdmin ? { brands } : {}),
         preferredLandingPage: "/dashboard",
         displayName: displayName.trim() || null,
       });
@@ -156,6 +161,22 @@ export function ProfilePage() {
           </>
         )}
 
+        {user?.role !== "viewer" ? (
+          <div style={{ marginBottom: 16 }}>
+            <strong>Brands / 品牌</strong>
+            {isAdmin ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+                {ORDERING_BRANDS.map((brand) => <label key={brand}>
+                  <input type="checkbox" checked={brands.includes(brand)} onChange={() => setBrands(
+                    brands.includes(brand) ? brands.filter((value) => value !== brand) : [...brands, brand],
+                  )} /> {brand}
+                </label>)}
+              </div>
+            ) : <div>{brands.join(", ") || "—"}</div>}
+            <small>{isAdmin ? "Admin+ always has access to all countries and brands. / Admin及以上始终全部可见。"
+              : "Brand assignments are managed by Admin. / 品牌由Admin分配。"}</small>
+          </div>
+        ) : null}
         <div style={{ display: "flex", gap: 8 }}>
           <button type="button" className="btn btn-sm btn-primary" onClick={saveProfile} disabled={saving}>
             {saving ? "Saving..." : "Save Profile"}

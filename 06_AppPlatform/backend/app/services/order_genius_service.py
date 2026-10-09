@@ -418,6 +418,7 @@ def _list_matrix_candidate_skus(
     material_code_search: str | None = None,
     selection_date: date | None = None,
     include_historical: bool = False,
+    allowed_brands: set[str] | None = None,
 ) -> list[MaterialSkuMaster]:
     normalized_brand = normalize_brand(brand) if brand else None
     normalized_model = normalize_brand_text(model_name) if model_name else None
@@ -428,6 +429,7 @@ def _list_matrix_candidate_skus(
     active_skus = (
         repo.list_skus_including_historical(
             session,
+            allowed_brands=allowed_brands,
             version=version,
             exterior_color_code=colour,
             material_code_search=material_code_search,
@@ -435,6 +437,7 @@ def _list_matrix_candidate_skus(
         if include_historical or selection_date is None
         else repo.list_active_skus(
             session,
+            allowed_brands=allowed_brands,
             version=version,
             exterior_color_code=colour,
             material_code_search=material_code_search,
@@ -693,6 +696,7 @@ def _build_matrix_for_country(
     material_code_search: str | None = None,
     selection_date: date | None = None,
     include_historical: bool = False,
+    allowed_brands: set[str] | None = None,
 ) -> dict:
     # Get country payment term valid for this order year
     order_month_hint = f"{year}-01"  # use January of the order year
@@ -763,6 +767,10 @@ def _build_matrix_for_country(
         session,
         historical_codes,
     )
+    if allowed_brands is not None:
+        historical_skus = {code: sku for code, sku in historical_skus.items()
+                           if str(sku.brand or "").strip().upper() in allowed_brands}
+        historical_codes = list(historical_skus)
     matrix_interior_by_template = _interior_by_template(
         active_skus + list(historical_skus.values())
     )
@@ -972,6 +980,7 @@ def build_matrix(
     material_code_search: str | None = None,
     selection_date: date | None = None,
     include_historical: bool = False,
+    allowed_brands: set[str] | None = None,
 ) -> dict:
     """Build the Order Genius matrix for a country+year.
 
@@ -979,6 +988,7 @@ def build_matrix(
     """
     active_skus = _list_matrix_candidate_skus(
         session,
+        allowed_brands=allowed_brands,
         brand=brand,
         model_name=model_name,
         powertrain=powertrain,
@@ -990,6 +1000,7 @@ def build_matrix(
     )
     return _build_matrix_for_country(
         session,
+        allowed_brands=allowed_brands,
         country_code=country_code,
         year=year,
         active_skus=active_skus,
@@ -1016,10 +1027,12 @@ def build_matrix_batch(
     material_code_search: str | None = None,
     selection_date: date | None = None,
     include_historical: bool = False,
+    allowed_brands: set[str] | None = None,
 ) -> dict[str, dict]:
     """Build matrices for many countries while reusing the filtered SKU set."""
     active_skus = _list_matrix_candidate_skus(
         session,
+        allowed_brands=allowed_brands,
         brand=brand,
         model_name=model_name,
         powertrain=powertrain,
@@ -1032,6 +1045,7 @@ def build_matrix_batch(
     return {
         country_code: _build_matrix_for_country(
             session,
+            allowed_brands=allowed_brands,
             country_code=country_code,
             year=year,
             active_skus=active_skus,
@@ -1056,6 +1070,7 @@ def build_options(
     powertrain: str | None = None,
     version: str | None = None,
     colour: str | None = None,
+    allowed_brands: set[str] | None = None,
 ) -> dict:
     """Build cascading filter options for the Order Genius page.
 
@@ -1072,7 +1087,7 @@ def build_options(
 
     # Get all active SKUs for this country (filtered by FOB availability).
     # Brand/model/powertrain are filtered after normalization so old JEACOO rows stay visible.
-    all_active = repo.list_active_skus(session, version=version)
+    all_active = repo.list_active_skus(session, version=version, allowed_brands=allowed_brands)
     skus = [s for s in all_active if s.material_code in fob_codes]
     if normalized_brand:
         skus = [s for s in skus if resolve_material_brand(s.brand, s.model_name, s.bom_template) == normalized_brand]
@@ -1275,13 +1290,14 @@ def export_matrix(
     hide_empty_rows: bool = False,
     quantities_only: bool = False,
     selection_date: date | None = None,
+    allowed_brands: set[str] | None = None,
 ) -> io.BytesIO:
     """Generate the Order Genius Excel workbook."""
     matrix = build_matrix(session, country_code, year,
                           brand=brand, model_name=model_name,
                           powertrain=powertrain, version=version, colour=colour,
                           material_code_search=material_code_search,
-                          selection_date=selection_date)
+                          selection_date=selection_date, allowed_brands=allowed_brands)
     if matrix.get("fobConflicts"):
         conflicts = ", ".join(
             f"{item['materialCode']}/{item['countryCode']}"
@@ -1322,13 +1338,14 @@ def export_pi_matrix(
     domestic_freight_eur: float | None = None,
     domestic_insurance_eur: float | None = None,
     selection_date: date | None = None,
+    allowed_brands: set[str] | None = None,
 ) -> io.BytesIO:
     """Generate a PI workbook using the current Order Genius selection."""
     matrix = build_matrix(session, country_code, year,
                           brand=brand, model_name=model_name,
                           powertrain=powertrain, version=version, colour=colour,
                           material_code_search=material_code_search,
-                          selection_date=selection_date)
+                          selection_date=selection_date, allowed_brands=allowed_brands)
     if matrix.get("fobConflicts"):
         conflicts = ", ".join(
             f"{item['materialCode']}/{item['countryCode']}"

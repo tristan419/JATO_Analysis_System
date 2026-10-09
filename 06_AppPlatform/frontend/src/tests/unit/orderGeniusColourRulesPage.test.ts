@@ -148,7 +148,7 @@ describe("Shared colour standard confirmation interactions", () => {
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   async function openConflict() {
-    render(createElement(BomAdminPanel));
+    render(createElement(BomAdminPanel, { isAdmin: true }));
     fireEvent.click(await screen.findByRole("button", { name: "Edit tools" }));
     fireEvent.click(await screen.findByRole("button", { name: /Name conflict/ }));
     await screen.findByRole("dialog", { name: "Colour rule details" });
@@ -225,7 +225,7 @@ describe("Shared colour standard confirmation interactions", () => {
       summary: { totalRules: 2, fillable: 0, missing: 1, nameConflict: 1, swatchConflict: 0,
         complete: 0, fillableSkus: 0, invalidIdentitySkuCount: 0, invalidIdentitySampleMaterialCodes: [] },
     });
-    render(createElement(BomAdminPanel));
+    render(createElement(BomAdminPanel, { isAdmin: true }));
     fireEvent.click(await screen.findByRole("button", { name: "Edit tools" }));
     const missingStandard = await screen.findByRole("button", { name: /Missing standard/ });
     await waitFor(() => expect(within(missingStandard).getByText("1")).toBeTruthy());
@@ -244,7 +244,7 @@ describe("Shared colour standard confirmation interactions", () => {
       unresolvedRuleCount: 0, unresolvedConflictCount: 1, fingerprint: "conflicts-only",
     });
     const apply = vi.spyOn(api, "applyOrderGeniusColourHexRuleFills");
-    render(createElement(BomAdminPanel));
+    render(createElement(BomAdminPanel, { isAdmin: true }));
     fireEvent.click(await screen.findByRole("button", { name: "Edit tools" }));
     const preview = await screen.findByRole("button", { name: "Preview shared swatch standards" });
     await waitFor(() => expect(preview.hasAttribute("disabled")).toBe(false));
@@ -263,7 +263,7 @@ describe("Shared colour standard confirmation interactions", () => {
       total: 1, ruleCount: 1, generatedRuleCount: 0, unresolvedRuleCount: 0, unresolvedConflictCount: 0, fingerprint: "name-only",
     });
     const apply = vi.spyOn(api, "applyOrderGeniusColourHexRuleFills").mockResolvedValue({ updated: 1, unchanged: 1, rulesCreated: 0, generatedRules: 0, conflicts: 0, missingRules: 0, materialCodes: ["B"], items: [], fingerprint: "name-only" });
-    render(createElement(BomAdminPanel));
+    render(createElement(BomAdminPanel, { isAdmin: true }));
     fireEvent.click(await screen.findByRole("button", { name: "Edit tools" }));
     fireEvent.click(await screen.findByRole("button", { name: "Preview shared swatch standards" }));
     const preview = await screen.findByRole("dialog", { name: "Colour rule fill preview" });
@@ -280,7 +280,7 @@ describe("Shared colour standard confirmation interactions", () => {
   async function openMaterial(onFobChanged = vi.fn().mockResolvedValue(undefined), colourHex: string | null = null, rulePatch: Partial<ColourHexRule> = {}, storedColourHex: string | null = colourHex, materialPatch: { colour?: string; colourCodeConfirmed?: boolean } = {}) {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue({ items: [{ ...material, colourHex, storedColourHex, ...materialPatch }], countries: ["NL"] });
     vi.spyOn(api, "getOrderGeniusColourHexRules").mockResolvedValue({ items: [{ ...bxRule, ...rulePatch }], summary: { totalRules: 1, fillable: 0, missing: 1, nameConflict: 0, swatchConflict: 0, complete: 0, fillableSkus: 0, invalidIdentitySkuCount: 0, invalidIdentitySampleMaterialCodes: [] } });
-    render(createElement(BomAdminPanel, { onFobChanged }));
+    render(createElement(BomAdminPanel, { onFobChanged, isAdmin: true }));
     fireEvent.click(await screen.findByText("OMODA OMODA9 SHS"));
     fireEvent.click(await screen.findByRole("button", { name: /Edit swatch rule for OMODA BX/ }));
     return onFobChanged;
@@ -342,7 +342,7 @@ describe("Shared colour standard confirmation interactions", () => {
     vi.mocked(api.getOrderGeniusColourHexRules).mockResolvedValue({ items: [{ ...bxRule,
       status: "fillable", standardColourHex: "#112233", fillableSkuCount: 1,
     }], summary: { totalRules: 1, fillable: 1, missing: 0, nameConflict: 0, swatchConflict: 0, complete: 0, fillableSkus: 1, invalidIdentitySkuCount: 0, invalidIdentitySampleMaterialCodes: [] } });
-    render(createElement(BomAdminPanel));
+    render(createElement(BomAdminPanel, { isAdmin: true }));
     fireEvent.click(await screen.findByRole("button", { name: "Edit tools" }));
     fireEvent.click(await screen.findByRole("button", { name: /Can fill/ }));
     fireEvent.click(within(await screen.findByRole("dialog", { name: "Colour rule details" })).getByRole("button", { name: "Edit colour" }));
@@ -359,7 +359,7 @@ describe("Shared colour standard confirmation interactions", () => {
     vi.mocked(api.getOrderGeniusColourHexRules).mockResolvedValue({ items: [{ ...bxRule,
       status: "swatch_conflict", hasSwatchConflict: true, hexOptions: [{ colourHex: "#112233", skuCount: 1 }, { colourHex: "#445566", skuCount: 1 }],
     }], summary: { totalRules: 1, fillable: 0, missing: 0, nameConflict: 0, swatchConflict: 1, complete: 0, fillableSkus: 0, invalidIdentitySkuCount: 0, invalidIdentitySampleMaterialCodes: [] } });
-    render(createElement(BomAdminPanel));
+    render(createElement(BomAdminPanel, { isAdmin: true }));
     fireEvent.click(await screen.findByRole("button", { name: "Edit tools" }));
     fireEvent.click(await screen.findByRole("button", { name: /Swatch conflict/ }));
     fireEvent.click(within(await screen.findByRole("dialog", { name: "Colour rule details" })).getByRole("button", { name: "Khaki white · #112233" }));

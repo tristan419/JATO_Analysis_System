@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../api/client";
+import { OrderingBrandNotice } from "../components/RoleUpgradeModal";
+import { isAdminRole } from "../utils/pageNavigation";
 import { CommandSelect, type CommandSelectOption } from "../components/CommandSelect";
 import { LoadingActionButton } from "../components/LoadingActionButton";
 import {
@@ -171,9 +173,10 @@ function vehicleCell(vehicle: PiVehicleUnit, key: VehicleColumnKey): ReactNode {
 
 export function OrderGeniusVehicleAllocationPage() {
   const { user } = useAuth();
-  const canEdit = user?.role === "order_filler" || user?.role === "editor" || user?.role === "admin";
+  const isAdmin = isAdminRole(user?.role);
+  const canEdit = isAdmin || ((user?.role === "order_filler" || user?.role === "editor") && Boolean(user.brands?.length));
   const { countryOptions: accountCountryOptions } = useAccountCountryOptions();
-  const defaultCountry = user?.role === "admin" ? "" : user?.primaryCountry ?? "";
+  const defaultCountry = isAdmin ? "" : user?.primaryCountry ?? "";
   const [filters, setFilters] = useState<VehicleAllocationFilters>({
     country: defaultCountry,
     page: 1,
@@ -300,7 +303,7 @@ export function OrderGeniusVehicleAllocationPage() {
     addFallbackCode(selectedPi?.header.countryCode);
     selectedPi?.header.marketCountryCodes.forEach(addFallbackCode);
     const allowed = new Set([user?.primaryCountry, ...(user?.secondaryCountries ?? [])].map((code) => normalizeCountryCode(code ?? "")));
-    return Array.from(byCode.values()).filter((option) => user?.role !== "order_filler" || allowed.has(option.value)).sort((a, b) => a.value.localeCompare(b.value));
+    return Array.from(byCode.values()).filter((option) => isAdmin || allowed.has(option.value)).sort((a, b) => a.value.localeCompare(b.value));
   }, [accountCountryOptions, defaultCountry, filters.country, piBrowseCountry, selectedPi, user]);
   const vinPasteScopeVehicles = useMemo(() => {
     if (!selectedPi) {
@@ -459,6 +462,16 @@ export function OrderGeniusVehicleAllocationPage() {
     setRemoveVins(false);
     setAllowReplacing(false);
   }
+
+  const authorizationKey = JSON.stringify([user?.username, user?.role, user?.primaryCountry, user?.secondaryCountries, user?.brands]);
+  useEffect(() => {
+    piRequest.current += 1;
+    clearScopeEdits();
+    setSelectedPi(null);
+    setSelectedLineCode("");
+    setPiBrowseCountry(defaultCountry);
+    setFilters((current) => ({ ...current, country: defaultCountry, piCode: undefined, piLineCode: undefined, page: 1 }));
+  }, [authorizationKey]);
 
   function showImportError(reason: unknown): void {
     setImportError(actionableError(reason, "Could not complete VIN import. Check the selected PI and BOM/VIN headers, then preview again. / VIN 导入未完成，请核对所选 PI 和 BOM、VIN 表头后重新预览；若仍失败，请联系管理员检查服务日志。"));
@@ -792,6 +805,7 @@ export function OrderGeniusVehicleAllocationPage() {
 
   return (
     <div className="vehicle-allocation-page" ref={pageRef}>
+      <OrderingBrandNotice user={user} />
       <div className="va-header">
         <div>
           <div className="va-kicker">Order Genius</div>
@@ -824,7 +838,7 @@ export function OrderGeniusVehicleAllocationPage() {
       )}
       {cocError ? <div className="va-message is-error" role="alert">{cocError}
         <div className="va-button-row"><button type="button" disabled={cocBusy || scopeBusy} onClick={() => void searchCocLibrary()}>Retry / 重试</button>
-          {user?.role === "admin" || user?.role === "editor" ? <a href="/product/coc-match">Open COC workbench / 打开 COC 工作台</a> : null}
+          {isAdmin || user?.role === "editor" ? <a href="/product/coc-match">Open COC workbench / 打开 COC 工作台</a> : null}
         </div></div> : null}
       {cocDownloadConfirm ? <div className="va-message is-notice" role="alert">
         Download {cocDownloadConfirm.codes.length} available PDFs only? Missing PDF {cocDownloadConfirm.missing} · Awaiting VIN {cocDownloadConfirm.awaiting} / 仅下载 {cocDownloadConfirm.codes.length} 份可用 PDF？缺 PDF {cocDownloadConfirm.missing} · 待录 VIN {cocDownloadConfirm.awaiting}。不会把不完整下载标成整批。
@@ -1132,7 +1146,7 @@ export function OrderGeniusVehicleAllocationPage() {
                   <button type="button" className="btn-secondary" onClick={() => openPiTool("status")}>
                     Status / 状态 · {tableSummary.ready} ready for pickup · {tableSummary.allocated} allocated
                   </button>
-                  {user?.role === "admin" && (deleteConfirmPi === selectedPi.header.piCode ? (
+                  {(isAdmin || selectedPi.canDelete) && (deleteConfirmPi === selectedPi.header.piCode ? (
                     <span style={{ display: "flex", flexWrap: "wrap", maxWidth: "100%", gap: 4, alignItems: "center" }}>
                       <span style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>Delete {selectedPi.lines.reduce((sum, line) => sum + line.quantity, 0)} units + VINs; release PI allocation, retain monthly demand? / 删除整批及 VIN、释放占用，保留月需求？</span>
                       <button type="button" className="btn btn-sm btn-primary" style={{ background: "#dc2626", padding: "2px 10px", fontSize: 11 }}
