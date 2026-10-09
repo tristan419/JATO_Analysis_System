@@ -562,8 +562,15 @@ def set_colour_hex_rule_standard(
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("editor")),
 ) -> dict:
-    """Confirm a shared name, optionally updating its single/dual swatch."""
+    """Save the shared colour and optionally confirm this material atomically."""
     try:
+        confirm_code = clean_text(body.get("confirmMaterialCode")).upper()
+        confirm_sku = repo.get_sku_by_material_code(session, confirm_code) if confirm_code else None
+        if confirm_code and (confirm_sku is None or (
+            repo.resolve_material_brand(confirm_sku.brand, confirm_sku.model_name, confirm_sku.bom_template),
+            clean_text(confirm_sku.exterior_color_code).upper(),
+        ) != (repo.normalize_brand(body.get("brand")), clean_text(body.get("colourCode")).upper())):
+            raise ValueError("Confirmation material must belong to this brand + code / 确认物料必须属于当前品牌及色码")
         result = repo.set_standard_colour_hex_for_rule(
             session,
             brand=str(body.get("brand") or ""),
@@ -571,6 +578,8 @@ def set_colour_hex_rule_standard(
             colour_name=str(body.get("colourName", body.get("colour_name")) or ""),
             colour_hex=body.get("colourHex", body.get("colour_hex")),
         )
+        if confirm_sku is not None:
+            confirm_sku.colour_code_confirmed = True
     except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -847,6 +856,12 @@ def patch_colour_code(
     old_material_code = sku.material_code
     old_colour_code = clean_text(sku.exterior_color_code).upper()
     new_code = clean_text(body.get("colourCode")).upper()
+    if new_code != old_colour_code:
+        try:
+            repo.require_unreferenced_material_codes(session, [old_material_code])
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not new_code:
         sku.exterior_color_code = ""
         sku.colour_code_confirmed = False
@@ -912,7 +927,8 @@ def patch_colour_code(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         detail = str(exc)
-        status_code = 409 if "already exists" in detail.lower() else 400
+        session.rollback()
+        status_code = 409 if "already exists" in detail.lower() or "referenced by a pi" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
     if (
         colour_hex_supplied
@@ -964,7 +980,8 @@ def patch_material_code(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         detail = str(exc)
-        status_code = 409 if "already exists" in detail.lower() else 400
+        session.rollback()
+        status_code = 409 if "already exists" in detail.lower() or "referenced by a pi" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
     session.commit()
     return {
@@ -1001,7 +1018,8 @@ def patch_bom_template_material_code(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         detail = str(exc)
-        status_code = 409 if "already exists" in detail.lower() else 400
+        session.rollback()
+        status_code = 409 if "already exists" in detail.lower() or "referenced by a pi" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
     session.commit()
     return {

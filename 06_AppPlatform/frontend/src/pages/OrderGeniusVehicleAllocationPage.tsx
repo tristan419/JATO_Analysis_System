@@ -34,6 +34,7 @@ import { VEHICLE_COLUMNS, COLUMN_GROUPS, matchesVehicleText } from "../component
 import { ptColor } from "../utils/colors";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
 import { compareProductModels } from "../utils/orderGeniusProductSort";
+import { parseOrderGeniusColourSwatch } from "../utils/orderGeniusColourSwatch";
 
 const ALLOCATION_STATUSES: AllocationStatus[] = [
   "unallocated",
@@ -1170,6 +1171,13 @@ export function OrderGeniusVehicleAllocationPage() {
             resetKey={gridResetKey} onEdit={selectVehicle} onSelection={changeSelection}
             onFilterChange={clearSelection} onViewChange={changeGridView}
             renderCell={(vehicle, key) => {
+              if (key === "exteriorColorName") {
+                const swatch = parseOrderGeniusColourSwatch(vehicle.colourHex);
+                return <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span title={vehicle.colourHex || "Missing / Review HEX · 缺失或待确认色卡"} style={{ width: 14, height: 14, flexShrink: 0, border: "1px solid #cbd5e1", borderRadius: 3, background: swatch.background }} />
+                  {vehicleCell(vehicle, key)}
+                </span>;
+              }
               if (key !== "cocPdf") return vehicleCell(vehicle, key);
               const status = cocResult?.items.find((item) => item.carCode === vehicle.carCode)?.status;
               return status === "available" ? <button type="button" disabled={cocBusy} onClick={() => void downloadCocs([vehicle.carCode])}>PDF ↓</button> : status === "missing" ? "Missing / 缺 PDF" : status === "awaiting_vin" ? "Awaiting VIN / 待录" : "Search library / 查库";

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.db import models
 from app.core.security import UserContext, validate_country_access
 from app.api.routes import order_genius_vehicle_allocation as vehicle_route
+from app.api.routes import order_genius as colour_route
 from app.api.routes.order_genius_vehicle_allocation import _normalise_import_rows_payload
 from app.infra import order_genius_repository as order_repo
 from app.infra import order_genius_vehicle_repository as vehicle_repo
@@ -69,6 +70,7 @@ def vehicle_db():
         models.MaterialSkuMaster,
         models.CountrySkuFobResolved,
         models.BrandColourSurchargeRule,
+        models.BrandColourSwatchRule,
         models.SpecialColourSurchargeRule,
         models.CountryTemplateFobPeriod,
         models.OrderQuantityCell,
@@ -681,7 +683,8 @@ def test_updating_pi_line_metadata_does_not_reprice_saved_fob(monkeypatch) -> No
     monkeypatch.setattr(vehicle_repo, "get_header_by_code", lambda *_args: header)
     monkeypatch.setattr(vehicle_repo, "list_allocations_by_line", lambda *_args: [])
     monkeypatch.setattr(vehicle_service, "_sync_vehicles_from_line", lambda *_args: None)
-    monkeypatch.setattr(vehicle_service, "line_to_dict", lambda row: {"fobEur": float(row.fob_eur)})
+    monkeypatch.setattr(vehicle_service, "_pi_colour_hex_map", lambda _: {})
+    monkeypatch.setattr(vehicle_service, "line_to_dict", lambda row, _colours: {"fobEur": float(row.fob_eur)})
     monkeypatch.setattr(
         vehicle_service,
         "_line_payload_from_material",
@@ -1311,6 +1314,97 @@ def mixed_market_pi(vehicle_db, monkeypatch):
         validate_country_access(accounts, user.name, user.role, country or "")
     monkeypatch.setattr(vehicle_route, "_validate_country", check_country)
     return pi, cars
+
+
+def _colour_sku(session, material_code, **overrides):
+    sku = models.MaterialSkuMaster(
+        baseline_version_id=session.info["baseline"], material_code=material_code,
+        brand="OMODA", model_name="Test model", version="Premium", powertrain="BEV",
+        bom_template="TEST**001", exterior_color_code="BX", exterior_color_name="Saved white",
+        exterior_color_type="single", colour_tier="single", colour_hex=None,
+        is_active=True, lifecycle_status="active", colour_code_confirmed=False,
+    )
+    for field, value in overrides.items():
+        setattr(sku, field, value)
+    session.add(sku)
+    session.flush()
+    return sku
+
+
+@pytest.mark.parametrize("historical", ["archived", "expired", "label"])
+def test_latest_library_hex_changes_historical_pi_display_only(vehicle_db, historical):
+    old = _colour_sku(vehicle_db, "TESTBX001")
+    current = _colour_sku(vehicle_db, "NEWBX002")
+    pi, cars = _vin_fill_pi(vehicle_db, materials=(old.material_code,), quantity=2)
+    for order in [*cars, *vehicle_repo.list_lines_by_pi(vehicle_db, vehicle_repo.get_header_by_code(vehicle_db, pi).pi_id)]:
+        order.brand, order.exterior_color_code, order.exterior_color_name, order.bom = "OMODA", "BX", "Saved white", "TEST**001"
+    if historical == "archived":
+        old.is_active = False
+    elif historical == "expired":
+        old.effective_to_date = date.today() - timedelta(days=1)
+    else:
+        old.lifecycle_status = "historical"
+    for car in cars:
+        car.freight_eur, car.insurance_eur = 100, 20
+    vehicle_db.commit()
+    before = vehicle_service.get_pi_detail(vehicle_db, pi)
+    colour_route.set_colour_hex_rule_standard({"brand": "OMODA", "colourCode": "BX", "colourName": "Reviewed white", "colourHex": "#112233"}, vehicle_db)
+    after = vehicle_service.get_pi_detail(vehicle_db, pi)
+    assert current.colour_hex == "#112233"
+    assert old.colour_hex is None and old.exterior_color_name == "Saved white"
+    assert order_repo.resolve_colour_display_values(old, order_repo.list_persistent_colour_standard_map(vehicle_db)) == ("Saved white", None)
+    assert all(row["colourHex"] == "#112233" for row in after["vehicles"] + after["lines"])
+    for section in ("vehicles", "lines"):
+        assert [{k: v for k, v in row.items() if k != "colourHex"} for row in after[section]] == [{k: v for k, v in row.items() if k != "colourHex"} for row in before[section]]
+    assert all(car.material_code == "TESTBX001" for car in cars)
+    colour_route.set_colour_hex_rule_standard({"brand": "OMODA", "colourCode": "BX", "colourName": "Reviewed white", "colourHex": "#445566"}, vehicle_db)
+    assert vehicle_service.get_pi_detail(vehicle_db, pi)["vehicles"][0]["colourHex"] == "#445566"
+
+
+def test_shared_save_confirms_only_requested_material_and_rolls_back_together(vehicle_db, monkeypatch):
+    first, second = _colour_sku(vehicle_db, "TESTBX001"), _colour_sku(vehicle_db, "TESTBX002")
+    vehicle_db.commit()
+    save = order_repo.set_standard_colour_hex_for_rule
+    def failing_save(*args, **kwargs):
+        save(*args, **kwargs)
+        raise ValueError("test save failure")
+    monkeypatch.setattr(order_repo, "set_standard_colour_hex_for_rule", failing_save)
+    payload = {"brand": "OMODA", "colourCode": "BX", "colourName": "Reviewed white", "colourHex": "#112233", "confirmMaterialCode": first.material_code}
+    with pytest.raises(HTTPException):
+        colour_route.set_colour_hex_rule_standard(payload, vehicle_db)
+    assert first.colour_hex is None and not first.colour_code_confirmed
+    assert second.colour_hex is None and not second.colour_code_confirmed
+    assert order_repo.list_persistent_colour_standard_map(vehicle_db) == {}
+    monkeypatch.setattr(order_repo, "set_standard_colour_hex_for_rule", save)
+    colour_route.set_colour_hex_rule_standard(payload, vehicle_db)
+    assert first.colour_code_confirmed and not second.colour_code_confirmed
+    assert first.colour_hex == second.colour_hex == "#112233"
+
+
+@pytest.mark.parametrize("operation", ["colour", "clear", "material", "template"])
+def test_referenced_material_identity_cannot_move_or_change_bom(vehicle_db, operation):
+    sku = _colour_sku(vehicle_db, "TESTBX001")
+    pi, cars = _vin_fill_pi(vehicle_db, materials=(sku.material_code,), quantity=2)
+    before = vehicle_service.get_pi_detail(vehicle_db, pi)
+    with pytest.raises((HTTPException, ValueError), match="Referenced by a PI"):
+        if operation in {"colour", "clear"}:
+            colour_route.patch_colour_code(sku.material_code, {"colourCode": "ZZ" if operation == "colour" else "", "colourName": "Other white"}, vehicle_db)
+        elif operation == "material":
+            order_repo.update_sku_material_code(vehicle_db, sku.material_code, "NEWZZ001")
+        else:
+            order_repo.update_bom_template_material_codes(vehicle_db, [sku.material_code], "NEW**001")
+    assert sku.material_code == "TESTBX001" and sku.exterior_color_code == "BX"
+    assert vehicle_service.get_pi_detail(vehicle_db, pi) == before
+
+
+def test_pi_colour_lookup_never_matches_names_materials_or_other_brands(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=2)
+    for car in cars:
+        car.brand, car.exterior_color_code, car.exterior_color_name = "OMODA", "BX", "Khaki white"
+    vehicle_db.add(models.BrandColourSwatchRule(brand="JAECOO", colour_code="BX", colour_name="Khaki white", colour_hex="#112233", is_active=True))
+    vehicle_db.add(models.BrandColourSwatchRule(brand="OMODA", colour_code="BW", colour_name="Khaki white", colour_hex="#445566", is_active=True))
+    vehicle_db.flush()
+    assert all(row["colourHex"] is None for row in vehicle_service.vehicles_to_dict(vehicle_db, cars))
 
 
 def test_pi_read_and_search_hide_other_market_vehicles(vehicle_db, mixed_market_pi, monkeypatch):
