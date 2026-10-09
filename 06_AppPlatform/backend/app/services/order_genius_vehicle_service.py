@@ -135,7 +135,7 @@ def create_pi_line(session: Session, pi_code: str, payload: dict[str, Any], user
         username,
     )
     _ensure_vehicle_units_for_line(session, header, line, username)
-    result = line_to_dict(line)
+    result = line_to_dict(line, _pi_colour_hex_map(session))
     result["allocations"] = [allocation_to_dict(row) for row in repo.list_allocations_by_line(session, line.pi_line_id)]
     return result
 
@@ -184,7 +184,7 @@ def update_pi_line(session: Session, pi_line_code: str, payload: dict[str, Any],
         _sync_default_line_allocation(session, header, line, username)
         _ensure_vehicle_units_for_line(session, header, line, username)
     _sync_vehicles_from_line(session, line, username)
-    result = line_to_dict(line)
+    result = line_to_dict(line, _pi_colour_hex_map(session))
     result["allocations"] = [allocation_to_dict(row) for row in repo.list_allocations_by_line(session, line.pi_line_id)]
     return result
 
@@ -433,13 +433,14 @@ def get_order_matrix_allocation_plan(session: Session, country: str, year: int, 
         existing_line_rows.append(allocation_to_dict(allocation))
 
     legacy_lines = repo.list_lines_without_allocations_for_country_month(session, country_code, order_month)
+    colour_hex_map = _pi_colour_hex_map(session) if legacy_lines else {}
     for line in legacy_lines:
         material_code = line.material_code or ""
         if material_code:
             existing_by_material[material_code] = existing_by_material.get(material_code, 0) + int(line.quantity or 0)
             vehicle_count = repo.count_vehicles_for_line(session, line.pi_line_code)
             existing_vehicle_by_material[material_code] = existing_vehicle_by_material.get(material_code, 0) + vehicle_count
-        existing_line_rows.append(line_to_dict(line))
+        existing_line_rows.append(line_to_dict(line, colour_hex_map))
 
     line_rows: list[dict[str, Any]] = []
     remaining_items: list[dict[str, Any]] = []
@@ -519,10 +520,11 @@ def get_pi_detail(session: Session, pi_code: str, countries: set[str] | None = N
     vehicles = repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
     if countries is not None:
         vehicles = [vehicle for vehicle in vehicles if vehicle.country_code in countries]
-    vehicle_rows = vehicles_to_dict(session, vehicles)
+    colour_hex_map = _pi_colour_hex_map(session)
+    vehicle_rows = vehicles_to_dict(session, vehicles, colour_hex_map)
     line_rows: list[dict[str, Any]] = []
     for line in lines:
-        row = line_to_dict(line)
+        row = line_to_dict(line, colour_hex_map)
         row["allocations"] = [allocation_to_dict(allocation) for allocation in allocations_by_line.get(line.pi_line_id, [])]
         if countries is not None:
             line_vehicles = [vehicle for vehicle in vehicle_rows if vehicle["piLineCode"] == line.pi_line_code]
@@ -949,7 +951,20 @@ def header_to_dict(header: PiOrderHeader) -> dict:
     }
 
 
-def line_to_dict(line: PiOrderLine) -> dict:
+def _pi_colour_hex_map(session: Session) -> dict[tuple[str, str], str | None]:
+    """Read latest library HEX once per response, never alter order snapshots."""
+    return {
+        (rule["brand"], rule["colourCode"]): rule["standardColourHex"]
+        if not rule["hasNameConflict"] and not rule["hasSwatchConflict"] else None
+        for rule in og_repo.list_colour_hex_rules(session)
+    }
+
+
+def _pi_colour_hex(order: PiOrderLine | PiVehicleUnit, colours: dict[tuple[str, str], str | None]) -> str | None:
+    return colours.get((og_repo.normalize_brand(order.brand), str(order.exterior_color_code or "").strip().upper()))
+
+
+def line_to_dict(line: PiOrderLine, colour_hex_map: dict[tuple[str, str], str | None] | None = None) -> dict:
     return {
         "piLineId": str(line.pi_line_id),
         "piCode": line.pi_code,
@@ -963,6 +978,7 @@ def line_to_dict(line: PiOrderLine) -> dict:
         "powertrain": line.powertrain,
         "exteriorColorName": line.exterior_color_name,
         "exteriorColorCode": line.exterior_color_code,
+        "colourHex": _pi_colour_hex(line, colour_hex_map or {}),
         "interiorColorName": line.interior_color_name,
         "interiorColourCode": line.interior_colour_code,
         "quantity": line.quantity,
@@ -987,10 +1003,11 @@ def allocation_to_dict(allocation: PiOrderLineAllocation) -> dict:
     }
 
 
-def vehicles_to_dict(session: Session, vehicles: list[PiVehicleUnit]) -> list[dict]:
+def vehicles_to_dict(session: Session, vehicles: list[PiVehicleUnit], colour_hex_map: dict[tuple[str, str], str | None] | None = None) -> list[dict]:
     header_cache: dict[str, PiOrderHeader | None] = {}
     price_cache: dict[tuple[str, str], float | None] = {}
-    return [vehicle_to_dict(session, vehicle, header_cache, price_cache) for vehicle in vehicles]
+    colours = colour_hex_map if colour_hex_map is not None else _pi_colour_hex_map(session)
+    return [vehicle_to_dict(session, vehicle, header_cache, price_cache, colours) for vehicle in vehicles]
 
 
 def vehicle_to_dict(
@@ -998,6 +1015,7 @@ def vehicle_to_dict(
     vehicle: PiVehicleUnit,
     header_cache: dict[str, PiOrderHeader | None] | None = None,
     price_cache: dict[tuple[str, str], float | None] | None = None,
+    colour_hex_map: dict[tuple[str, str], str | None] | None = None,
 ) -> dict:
     cache = header_cache if header_cache is not None else {}
     if vehicle.pi_code not in cache:
@@ -1033,6 +1051,7 @@ def vehicle_to_dict(
         "powertrain": vehicle.powertrain,
         "exteriorColorName": vehicle.exterior_color_name,
         "exteriorColorCode": vehicle.exterior_color_code,
+        "colourHex": _pi_colour_hex(vehicle, colour_hex_map if colour_hex_map is not None else _pi_colour_hex_map(session)),
         "interiorColorName": vehicle.interior_color_name,
         "interiorColourCode": vehicle.interior_colour_code,
         "orderDate": _date_str(header.order_date) if header else None,

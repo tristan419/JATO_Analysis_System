@@ -331,7 +331,7 @@ export interface ColourHexRuleLookup {
   status: ColourHexRuleStatus | "none";
   colourName: string | null;
   colourHex: string | null;
-  source: "persistent_rule" | "brand_code_rule" | "generated_from_name" | "name_candidate" | "name_candidates" | "none";
+  source: "persistent_rule" | "brand_code_rule" | "name_candidates" | "none";
   hasNameConflict: boolean;
   hasSwatchConflict: boolean;
   nameCandidates: Array<{

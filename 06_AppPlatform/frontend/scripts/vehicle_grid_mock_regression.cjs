@@ -296,7 +296,7 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     await page.getByText("450 selected / 已选", { exact: false }).waitFor();
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await scroll.evaluate((element) => { element.scrollLeft = 1500; });
-    await page.locator('.ag-header-cell[col-id="cocPdf"] .ag-header-cell-filter-button').click({ force: true });
+    await page.locator('.ag-header-cell[col-id="cocPdf"] .ag-header-cell-filter-button').click();
     await page.locator(".ag-filter .command-select-trigger").click();
     await page.getByRole("option", { name: /available/ }).click();
     await page.getByRole("option", { name: /awaiting_vin/ }).click();
@@ -352,7 +352,8 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
         assert.equal(Math.round(size.page.height), 640);
         await page.locator(".ag-paging-panel").scrollIntoViewIfNeeded();
         const scrolled = await layoutGeometry();
-        assert(await page.evaluate(() => window.scrollY > 0));
+        // Bottom padding can overflow while pagination is already fully visible.
+        if (size.pagination.bottom > viewport.height) assert(await page.evaluate(() => window.scrollY > 0));
         assert(scrolled.pagination.top >= 0 && scrolled.pagination.bottom <= viewport.height, JSON.stringify(scrolled));
       } else assert(size.pagination.bottom <= viewport.height, JSON.stringify(size));
       assert(!size.overflowX);

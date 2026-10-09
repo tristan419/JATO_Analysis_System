@@ -92,6 +92,7 @@ export interface PiOrderLine {
   powertrain: string | null;
   exteriorColorName: string | null;
   exteriorColorCode: string | null;
+  colourHex?: string | null;
   interiorColorName: string | null;
   interiorColourCode: string | null;
   quantity: number;
@@ -136,6 +137,7 @@ export interface PiVehicleUnit {
   powertrain: string | null;
   exteriorColorName: string | null;
   exteriorColorCode: string | null;
+  colourHex?: string | null;
   interiorColorName: string | null;
   interiorColourCode: string | null;
   orderDate: string | null;

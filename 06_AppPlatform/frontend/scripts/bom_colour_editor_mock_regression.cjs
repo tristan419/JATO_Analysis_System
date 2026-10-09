@@ -46,10 +46,11 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
         if (failSave) { failSave = false; return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Mock save rejected" }) }); }
         assert.equal(payload.colourCode, "BX");
         for (const sku of skus) Object.assign(sku, { colour: payload.colourName, ...(payload.colourHex ? { colourHex: payload.colourHex, storedColourHex: payload.colourHex } : {}) });
+        if (payload.confirmMaterialCode) skus.find(sku => sku.materialCode === payload.confirmMaterialCode).colourCodeConfirmed = true;
         body = { ...payload, updated: 2, materialCodes: skus.map(sku => sku.materialCode) };
       }
-      else if (path.endsWith("/colour-hex-rules/lookup")) body = lookupResponse ?? { brand: "OMODA", colourCode: "BX", status: "suggested", colourName: "Khaki white", colourHex: "#F2F4F8",
-        source: "name_candidate", hasNameConflict: false, hasSwatchConflict: false,
+      else if (path.endsWith("/colour-hex-rules/lookup")) body = lookupResponse ?? { brand: "OMODA", colourCode: "BX", status: "missing", colourName: null, colourHex: null,
+        source: "name_candidates", hasNameConflict: false, hasSwatchConflict: false,
         nameCandidates: [{ brand: "OMODA", colourCode: "BW", colourName: "Khaki white", colourHex: "#F2F4F8", hasNameConflict: false, hasSwatchConflict: false }] };
       else if (path.endsWith("/colour-hex-rules/preview")) body = fillPreview;
       else if (path.endsWith("/colour-hex-rules/apply")) {
@@ -58,6 +59,11 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
         Object.assign(skus[1], { colour: "Reviewed white", colourHex: "#123456", storedColourHex: "#123456" });
         ruleOverrides = {};
         body = { updated: 1, unchanged: 1, rulesCreated: 0, generatedRules: 0, conflicts: 0, missingRules: 0, materialCodes: payload.materialCodes, items: fillPreview.items, fingerprint: fillPreview.fingerprint };
+      }
+      else if (/\/material-skus\/[^/]+\/confirm-colour-code$/.test(path)) {
+        writes.push({ path, payload: null });
+        skus.find(sku => path.includes(sku.materialCode)).colourCodeConfirmed = true;
+        body = { materialCode: material.materialCode, colourCodeConfirmed: true };
       }
       else if (/\/material-skus\/[^/]+\/colour-code$/.test(path)) {
         const payload = req.postDataJSON(); writes.push({ path, payload });
@@ -309,6 +315,44 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
       assert.equal(material.colourHex, storedHex);
     }
     checks.push("Correction Keep preview matches reread stored HEX, including null; desktop and narrow screen");
+
+    Object.assign(material, { materialCode: "T6480J1BXLX0017", colourCode: "BX", colour: "", colourHex: null, storedColourHex: null, colourCodeConfirmed: false });
+    skus[1].colourCodeConfirmed = false;
+    ruleOverrides = {};
+    lookupResponse = { brand: "OMODA", colourCode: "BX", status: "missing", colourName: null, colourHex: null, source: "none", hasNameConflict: false, hasSwatchConflict: false, nameCandidates: [] };
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.reload(); await showBom(); await swatch.click();
+    assert.equal(await editor.getByLabel("Shared colour name", { exact: true }).inputValue(), "");
+    await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.getByTitle("Unconfirmed colour code — click to edit and confirm", { exact: true }).first().click();
+    await editor.waitFor();
+    await screenshot(page, "missing-name-confirm-code.png");
+    const countBeforeConfirm = writes.length;
+    await editor.getByRole("button", { name: "Confirm code", exact: true }).click();
+    const codeConfirmation = page.getByRole("dialog", { name: "Confirm code / 确认色码" });
+    await codeConfirmation.getByRole("button", { name: "Confirm code", exact: true }).click();
+    await page.getByText(/Tables refreshed/).waitFor();
+    assert.equal(writes.length, countBeforeConfirm + 1);
+    assert(writes.at(-1).path.endsWith("/confirm-colour-code"));
+    assert.equal(material.colourCodeConfirmed, true);
+    assert.equal(skus[1].colourCodeConfirmed, false);
+    assert.equal(material.colour, "");
+    checks.push("Missing-name chip/text both open; unchanged Confirm code only confirms current material, no shared write");
+
+    material.colourCodeConfirmed = false;
+    await page.reload(); await showBom(); await swatch.click();
+    await editor.getByLabel("Shared colour name", { exact: true }).fill("Reviewed white");
+    await editor.getByLabel("Primary HEX", { exact: true }).fill("#334455");
+    const beforeAtomic = writes.length;
+    await editor.getByRole("button", { name: "Save & confirm code", exact: true }).click();
+    await page.getByRole("dialog", { name: "Confirm shared colour / 确认共享颜色" }).getByRole("button", { name: "Save & confirm code", exact: true }).click();
+    await page.getByText(/Tables refreshed/).waitFor();
+    assert.equal(writes.length, beforeAtomic + 1);
+    assert(writes.at(-1).path.endsWith("/colour-hex-rules/standard"));
+    assert.equal(writes.at(-1).payload.confirmMaterialCode, material.materialCode);
+    assert.equal(material.colourCodeConfirmed, true);
+    assert.equal(skus[1].colourCodeConfirmed, false);
+    checks.push("Changed unconfirmed Save & confirm code uses one shared request with current material identity");
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ status: "ok", checks, pageErrors: errors.length, mockWrites: writes.length, realBusinessWrites: 0 }));
   } finally { await browser.close(); }

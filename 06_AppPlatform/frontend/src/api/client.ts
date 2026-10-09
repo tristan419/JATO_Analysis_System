@@ -5257,7 +5257,7 @@ export const api = {
     return request<ColourHexRuleLookup>(`/order-genius/colour-hex-rules/lookup?${qs.toString()}`);
   },
 
-  setOrderGeniusColourHexRuleStandard: (body: { brand: string; colourCode: string; colourName: string; colourHex?: string }) =>
+  setOrderGeniusColourHexRuleStandard: (body: { brand: string; colourCode: string; colourName: string; colourHex?: string; confirmMaterialCode?: string }) =>
     request<{ brand: string; colourCode: string; colourName: string; normalizedColourName: string; colourHex: string | null; updated: number; materialCodes: string[] }>(
       "/order-genius/colour-hex-rules/standard",
       { method: "PATCH", body: JSON.stringify(body) },

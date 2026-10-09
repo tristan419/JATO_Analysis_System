@@ -11,7 +11,6 @@ import json
 import math
 import re
 import unicodedata
-from colorsys import hsv_to_rgb
 from collections import Counter
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
@@ -184,94 +183,6 @@ def normalize_colour_rule_alias(colour_name: str | None) -> str:
     text = re.sub(r"\s*[()]\s*[A-Za-z0-9]{1,4}\s*[)]\s*$", "", text)
     text = re.sub(r"[^0-9A-Za-z\u0080-\uffff]+", " ", text)
     return re.sub(r"\s+", " ", text).strip().casefold()
-
-
-_COLOUR_NAME_HEX: tuple[tuple[str, str], ...] = (
-    ("carbon crystal black", "#1A1A1A"),
-    ("new carbon black", "#1A1A1A"),
-    ("matte black", "#202020"),
-    ("khaki white", "#F0ECE0"),
-    ("new khaki white", "#F0ECE0"),
-    ("phantom gray", "#5B5F62"),
-    ("phantom grey", "#5B5F62"),
-    ("moonlight silver", "#C4C7C9"),
-    ("aviation silver", "#C8C0B8"),
-    ("alpine green", "#3A7D44"),
-    ("model green", "#3A7D44"),
-    ("aquatic green", "#1ABC9C"),
-    ("misty green", "#8BA99A"),
-    ("mist green", "#8BA99A"),
-    ("blood red", "#8B0000"),
-    ("matte gray", "#444444"),
-    ("matte grey", "#444444"),
-    ("fjord gray", "#6F777B"),
-    ("fjord grey", "#6F777B"),
-    ("glacier blue", "#6FA8DC"),
-    ("olive gray", "#808080"),
-    ("olive grey", "#808080"),
-    ("tech gray", "#6B7278"),
-    ("tech grey", "#6B7278"),
-    ("water blue", "#B6D3FB"),
-    ("silver", "#BFC3C7"),
-    ("sliver", "#BFC3C7"),
-    ("black", "#1A1A1A"),
-    ("white", "#F0ECE0"),
-    ("gray", "#73777A"),
-    ("grey", "#73777A"),
-    ("green", "#3A7D44"),
-    ("blue", "#4F86B8"),
-    ("red", "#9B2C2C"),
-    ("brown", "#795548"),
-    ("orange", "#D97706"),
-    ("gold", "#C79A2B"),
-    ("beige", "#D6C6A8"),
-    ("khaki", "#B7A77A"),
-    ("purple", "#73518A"),
-    ("yellow", "#D6B51E"),
-    ("黑", "#1A1A1A"),
-    ("白", "#F0ECE0"),
-    ("灰", "#73777A"),
-    ("银", "#BFC3C7"),
-    ("绿", "#3A7D44"),
-    ("蓝", "#4F86B8"),
-    ("红", "#9B2C2C"),
-    ("棕", "#795548"),
-    ("橙", "#D97706"),
-    ("金", "#C79A2B"),
-    ("紫", "#73518A"),
-    ("黄", "#D6B51E"),
-)
-
-
-def _generated_single_colour_hex(colour_name: str) -> str:
-    normalized = normalize_colour_rule_alias(colour_name)
-    normalized = re.sub(r"\s*\([^)]*\)\s*$", "", normalized).strip()
-    for phrase, colour_hex in _COLOUR_NAME_HEX:
-        if phrase in normalized:
-            return colour_hex
-    # Unknown marketing names still get a stable, visibly useful suggestion.
-    # It remains a preview until the user confirms the brand+code standard.
-    digest = hashlib.sha256(normalized.encode("utf-8")).digest()
-    hue = int.from_bytes(digest[:2], "big") / 65535
-    saturation = 0.42 + (digest[2] / 255) * 0.18
-    value = 0.58 + (digest[3] / 255) * 0.20
-    red, green, blue = hsv_to_rgb(hue, saturation, value)
-    return f"#{round(red * 255):02X}{round(green * 255):02X}{round(blue * 255):02X}"
-
-
-def generate_colour_hex_from_name(colour_name: str | None) -> str | None:
-    """Generate one deterministic approximate swatch from a confirmed name."""
-    display_name = str(colour_name or "").strip()
-    if not display_name:
-        return None
-    parts = [
-        part.strip()
-        for part in re.split(r"\s*(?:&|\+|/|\band\b)\s*", display_name, flags=re.IGNORECASE)
-        if part.strip()
-    ]
-    if len(parts) == 2:
-        return "|".join(_generated_single_colour_hex(part) for part in parts)
-    return _generated_single_colour_hex(display_name)
 
 
 def normalize_colour_hex_value(colour_hex: str | None) -> str | None:
@@ -2417,6 +2328,8 @@ def build_colour_hex_rules_from_skus(
     """Derive reusable colour rules from active SKUs by normalized brand + code."""
     groups: dict[tuple[str, str], dict] = {}
     for sku in skus:
+        if not getattr(sku, "is_active", True) or resolve_effective_lifecycle_status(sku, date.today()) == "historical":
+            continue
         colour_name = str(getattr(sku, "exterior_color_name", "") or "").strip()
         key = _colour_rule_key(
             resolve_material_brand(
@@ -2617,38 +2530,12 @@ def resolve_colour_display_values(
         getattr(sku, "exterior_color_code", None),
     )
     standard = standards.get(key) if standards and key else None
-    if standard is not None and getattr(sku, "is_active", True):
+    if standard is not None and getattr(sku, "is_active", True) and resolve_effective_lifecycle_status(sku, date.today()) != "historical":
         return standard.colour_name, standard.colour_hex or getattr(sku, "colour_hex", None)
     return (
         str(getattr(sku, "exterior_color_name", "") or "") or None,
         getattr(sku, "colour_hex", None),
     )
-
-
-def _persistent_colour_standard_candidates(
-    session: Session,
-    brand: str,
-    colour_name: str,
-) -> list[dict]:
-    alias = normalize_colour_rule_alias(colour_name)
-    if not alias:
-        return []
-    candidates: list[dict] = []
-    for row in list_persistent_colour_standard_map(session).values():
-        if normalize_brand(row.brand) != normalize_brand(brand):
-            continue
-        if normalize_colour_rule_alias(row.colour_name) != alias:
-            continue
-        candidates.append({
-            "brand": normalize_brand(row.brand),
-            "colourCode": row.colour_code,
-            "colourName": row.colour_name,
-            "colourHex": row.colour_hex,
-            "status": "complete" if row.colour_hex else "missing",
-            "hasNameConflict": False,
-            "hasSwatchConflict": False,
-        })
-    return sorted(candidates, key=lambda item: item["colourCode"])
 
 
 def _upsert_persistent_colour_standard(
@@ -2743,6 +2630,8 @@ def _list_colour_rule_candidate_skus(
             getattr(row, "model_name", None),
             getattr(row, "bom_template", None),
         ) == normalized_brand
+        and getattr(row, "is_active", True)
+        and resolve_effective_lifecycle_status(row, date.today()) != "historical"
     ]
 
 
@@ -2756,24 +2645,15 @@ def _list_colour_rule_name_candidates(
     alias = normalize_colour_rule_alias(colour_name)
     if not normalized_brand or not alias:
         return []
-    stmt = select(MaterialSkuMaster).where(MaterialSkuMaster.is_active == True)
-    rows = [
-        row
-        for row in session.execute(stmt).scalars().all()
-        if resolve_material_brand(
-            getattr(row, "brand", None),
-            getattr(row, "model_name", None),
-            getattr(row, "bom_template", None),
-        ) == normalized_brand
-        and normalize_colour_rule_alias(
-            getattr(row, "exterior_color_name", None)
-        ) == alias
-    ]
-    if not rows:
-        return []
-    rules = build_colour_hex_rules_from_skus(rows)
+    # Inspect the entire code group, not just matching-name rows: otherwise
+    # a different name or HEX in that group could be hidden from conflict checks.
+    rules = list_colour_hex_rules(session)
     candidates: list[dict] = []
     for rule in rules:
+        if rule["brand"] != normalized_brand or not any(
+            normalize_colour_rule_alias(option["colourName"]) == alias for option in rule["nameOptions"]
+        ):
+            continue
         candidates.append({
             "brand": rule["brand"],
             "colourCode": rule["colourCode"],
@@ -2943,9 +2823,7 @@ def preview_colour_rule_fills(session: Session) -> dict:
         **plan,
         "total": len(plan["items"]),
         "ruleCount": len(plan["rules"]),
-        "generatedRuleCount": sum(
-            1 for rule in plan["rules"] if rule["source"] == "generated_from_name"
-        ),
+        "generatedRuleCount": 0,
         "fingerprint": _colour_fill_fingerprint(plan["rules"], plan["items"]),
     }
 
@@ -2959,10 +2837,9 @@ def lookup_colour_rule(
 ) -> dict:
     """Resolve a shared colour rule without mutating any SKU.
 
-    Brand+code is authoritative. A name alias is only considered when that
-    lookup has no reusable rule, and is auto-reusable only when exactly one
-    unambiguous existing rule matches. Conflicting rules remain explicit so
-    the caller must resolve them rather than silently replacing a saved swatch.
+    Brand+code is authoritative. Same-name other-code saved swatches are only
+    suggestions: the caller must explicitly adopt their HEX before saving.
+    Never generate or approximate a swatch from a colour name.
     """
     normalized_brand = normalize_brand(brand)
     normalized_code = str(colour_code or "").strip().upper()
@@ -3019,16 +2896,6 @@ def lookup_colour_rule(
         normalized_brand,
         str(colour_name or ""),
     )
-    existing_codes = {candidate["colourCode"] for candidate in name_candidates}
-    name_candidates.extend(
-        candidate
-        for candidate in _persistent_colour_standard_candidates(
-            session,
-            normalized_brand,
-            str(colour_name or ""),
-        )
-        if candidate["colourCode"] not in existing_codes
-    )
     reusable_candidates = [
         candidate
         for candidate in name_candidates
@@ -3036,46 +2903,16 @@ def lookup_colour_rule(
         and not candidate["hasNameConflict"]
         and not candidate["hasSwatchConflict"]
     ]
-    if len(reusable_candidates) == 1:
-        candidate = reusable_candidates[0]
-        return {
-            "brand": normalized_brand,
-            "colourCode": normalized_code or candidate["colourCode"],
-            "status": candidate["status"],
-            "colourName": candidate["colourName"],
-            "colourHex": candidate["colourHex"],
-            "source": "name_candidate",
-            "hasNameConflict": False,
-            "hasSwatchConflict": False,
-            "nameCandidates": name_candidates,
-        }
-    generated_hex = (
-        None
-        if is_placeholder_colour_name(colour_name, normalized_code)
-        else generate_colour_hex_from_name(colour_name)
-    )
-    if generated_hex is not None:
-        return {
-            "brand": normalized_brand,
-            "colourCode": normalized_code,
-            "status": "missing",
-            "colourName": str(colour_name or "").strip(),
-            "colourHex": generated_hex,
-            "source": "generated_from_name",
-            "hasNameConflict": False,
-            "hasSwatchConflict": False,
-            "nameCandidates": name_candidates,
-        }
     return {
         "brand": normalized_brand,
         "colourCode": normalized_code,
         "status": "missing",
         "colourName": None,
         "colourHex": None,
-        "source": "name_candidates" if name_candidates else "none",
-        "hasNameConflict": any(candidate["hasNameConflict"] for candidate in name_candidates),
-        "hasSwatchConflict": any(candidate["hasSwatchConflict"] for candidate in name_candidates),
-        "nameCandidates": name_candidates,
+        "source": "name_candidates" if reusable_candidates else "none",
+        "hasNameConflict": False,
+        "hasSwatchConflict": False,
+        "nameCandidates": [candidate for candidate in reusable_candidates if candidate["colourHex"]],
     }
 
 
@@ -3099,14 +2936,10 @@ def resolve_colour_attributes(
     )
     reusable = rule["source"] in {
         "brand_code_rule",
-        "generated_from_name",
-        "name_candidate",
         "persistent_rule",
     } and not rule["hasNameConflict"] and not rule["hasSwatchConflict"]
     resolved_name = explicit_name
-    if rule["source"] in {"name_candidate", "generated_from_name"} and reusable:
-        resolved_name = rule["colourName"] or explicit_name
-    elif is_placeholder_colour_name(explicit_name, colour_code) and reusable:
+    if is_placeholder_colour_name(explicit_name, colour_code) and reusable:
         resolved_name = rule["colourName"]
     resolved_hex = (
         explicit_hex
@@ -3173,9 +3006,7 @@ def apply_colour_rule_fills(
         "updated": len(applied),
         "unchanged": max(0, planned_sku_count - len(applied)),
         "rulesCreated": sum((rule["brand"], rule["colourCode"]) not in standards for rule in plan["rules"]),
-        "generatedRules": sum(
-            1 for rule in plan["rules"] if rule["source"] == "generated_from_name"
-        ),
+        "generatedRules": 0,
         "conflicts": int(plan["unresolvedConflictCount"]),
         "missingRules": int(plan["unresolvedRuleCount"]),
         "materialCodes": [item["materialCode"] for item in applied],
@@ -3252,18 +3083,32 @@ def update_sku_remark(
     return result.rowcount > 0
 
 
+def require_unreferenced_material_codes(session: Session, material_codes: list[str]) -> None:
+    """Only unreferenced entry mistakes may be renumbered in place."""
+    if not material_codes:
+        return
+    referenced = session.execute(select(or_(
+        select(PiOrderLine.pi_line_id).where(PiOrderLine.material_code.in_(material_codes)).exists(),
+        select(PiOrderLineAllocation.pi_line_allocation_id).where(PiOrderLineAllocation.material_code.in_(material_codes)).exists(),
+        select(PiVehicleUnit.vehicle_unit_id).where(PiVehicleUnit.material_code.in_(material_codes)).exists(),
+    ))).scalar_one_or_none()
+    if referenced:
+        raise ValueError("Referenced by a PI: add/copy a new material version and archive the original. / 已有 PI 引用，请新增或复制新版物料并归档旧版，保留原订单及数量记录。")
+
+
 def update_sku_material_code(
     session: Session,
     old_material_code: str,
     new_material_code: str,
 ) -> bool:
-    """Update a SKU's material code and all Order Genius references."""
+    """Correct an unreferenced SKU and its selection quantity/finance keys."""
     old_code = clean_text(old_material_code).upper()
     new_code = clean_text(new_material_code).upper()
     if not old_code or not new_code:
         raise ValueError("material code is required")
     if old_code == new_code:
         return get_sku_by_material_code_any_status(session, old_code) is not None
+    require_unreferenced_material_codes(session, [old_code])
 
     conflict = session.execute(
         select(MaterialSkuMaster.material_code).where(
@@ -3300,21 +3145,6 @@ def update_sku_material_code(
     session.execute(
         update(OrderQuantityCell)
         .where(OrderQuantityCell.material_code == old_code)
-        .values(material_code=new_code)
-    )
-    session.execute(
-        update(PiOrderLine)
-        .where(PiOrderLine.material_code == old_code)
-        .values(material_code=new_code)
-    )
-    session.execute(
-        update(PiOrderLineAllocation)
-        .where(PiOrderLineAllocation.material_code == old_code)
-        .values(material_code=new_code)
-    )
-    session.execute(
-        update(PiVehicleUnit)
-        .where(PiVehicleUnit.material_code == old_code)
         .values(material_code=new_code)
     )
     session.execute(
@@ -3414,6 +3244,11 @@ def update_bom_template_material_codes(
         ordered_skus,
         bom_template,
     )
+    require_unreferenced_material_codes(session, [
+        sku.material_code for sku in ordered_skus
+        if mapping[sku.material_code] != sku.material_code
+        or clean_text(sku.bom_template).upper() != normalized_template
+    ])
     bind = session.get_bind()
     inspector = inspect(bind)
     has_material_lifecycle = inspector.has_table("material_lifecycle", schema="ordering")
@@ -3467,21 +3302,6 @@ def update_bom_template_material_codes(
             update(OrderQuantityCell)
             .where(OrderQuantityCell.material_code == old_code)
             .values(material_code=new_code)
-        )
-        session.execute(
-            update(PiOrderLine)
-            .where(PiOrderLine.material_code == old_code)
-            .values(material_code=new_code, bom=normalized_template)
-        )
-        session.execute(
-            update(PiOrderLineAllocation)
-            .where(PiOrderLineAllocation.material_code == old_code)
-            .values(material_code=new_code)
-        )
-        session.execute(
-            update(PiVehicleUnit)
-            .where(PiVehicleUnit.material_code == old_code)
-            .values(material_code=new_code, bom=normalized_template)
         )
         session.execute(
             update(MaterialSkuRemarkHistory)

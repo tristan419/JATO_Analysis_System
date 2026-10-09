@@ -1131,25 +1131,31 @@ def test_colour_rules_report_unknown_placeholder_as_missing() -> None:
 
 
 @pytest.mark.parametrize(
-    ("colour_name", "expected"),
+    "colour_name",
     [
-        ("Khaki white", "#F0ECE0"),
-        ("Carbon crystal black&Alpine green", "#1A1A1A|#3A7D44"),
-        ("Matte gray (UE)", "#444444"),
+        "Khaki white",
+        "Carbon crystal black&Alpine green",
+        "Matte gray (UE)",
+        "Starlight Aurora",
     ],
 )
-def test_generate_colour_hex_from_name_uses_stable_automotive_palette(
-    colour_name: str,
-    expected: str,
-) -> None:
-    assert repo.generate_colour_hex_from_name(colour_name) == expected
+def test_colour_name_without_a_saved_rule_never_generates_hex(colour_name: str) -> None:
+    result = repo.resolve_colour_attributes(_FakeSession(), "OMODA", "ZZ", colour_name=colour_name)
+    assert result["colourName"] == colour_name
+    assert result["colourHex"] is None
+    assert result["source"] == "none"
 
 
-def test_generate_colour_hex_from_unknown_name_is_stable_and_valid() -> None:
-    first = repo.generate_colour_hex_from_name("Starlight Aurora")
-
-    assert first == repo.generate_colour_hex_from_name("Starlight Aurora")
-    assert repo.normalize_colour_hex_value(first) == first
+def test_cross_code_suggestion_checks_entire_group_for_conflicts(monkeypatch) -> None:
+    rows = [SimpleNamespace(material_code=code, brand="OMODA", exterior_color_code="BW",
+        exterior_color_name=name, colour_hex=hex_value) for code, name, hex_value in [
+        ("A", "Khaki white", "#112233"), ("B", "Other white", "#445566"),
+    ]]
+    monkeypatch.setattr(repo, "_list_colour_rule_candidate_skus", lambda *_: [])
+    result = repo.lookup_colour_rule(_FakeSession(rows), "OMODA", "BX", colour_name="Khaki white")
+    assert result["source"] == "none"
+    assert result["colourHex"] is None
+    assert result["nameCandidates"] == []
 
 
 def test_summarize_invalid_colour_rule_identities_exposes_sample_without_mutation() -> None:
@@ -1220,14 +1226,15 @@ def test_lookup_colour_rule_uses_unique_name_alias_after_code_miss(monkeypatch) 
         colour_name="khaki white",
     )
 
-    assert result["source"] == "name_candidate"
+    assert result["source"] == "name_candidates"
     assert result["colourCode"] == "ZZ"
-    assert result["colourName"] == "Khaki White (BW)"
-    assert result["colourHex"] == "#F0ECE0"
+    assert result["colourName"] is None
+    assert result["colourHex"] is None
     assert len(result["nameCandidates"]) == 1
+    assert result["nameCandidates"][0]["colourHex"] == "#F0ECE0"
 
 
-def test_lookup_colour_rule_generates_when_name_alias_has_multiple_old_swatches(monkeypatch) -> None:
+def test_lookup_colour_rule_suggests_saved_swatches_without_adoption(monkeypatch) -> None:
     session = _FakeSession([
         SimpleNamespace(
             material_code="A",
@@ -1259,12 +1266,12 @@ def test_lookup_colour_rule_generates_when_name_alias_has_multiple_old_swatches(
         colour_name="Khaki White",
     )
 
-    assert result["source"] == "generated_from_name"
-    assert result["colourHex"] == "#F0ECE0"
+    assert result["source"] == "name_candidates"
+    assert result["colourHex"] is None
     assert [item["colourCode"] for item in result["nameCandidates"]] == ["BW", "KW"]
 
 
-def test_lookup_colour_rule_generates_preview_for_new_brand_code(monkeypatch) -> None:
+def test_lookup_colour_rule_leaves_unknown_code_missing(monkeypatch) -> None:
     session = _FakeSession([])
     monkeypatch.setattr(repo, "_list_colour_rule_candidate_skus", lambda *_args: [])
 
@@ -1275,12 +1282,12 @@ def test_lookup_colour_rule_generates_preview_for_new_brand_code(monkeypatch) ->
         colour_name="Carbon crystal black&Alpine green",
     )
 
-    assert result["source"] == "generated_from_name"
-    assert result["colourName"] == "Carbon crystal black&Alpine green"
-    assert result["colourHex"] == "#1A1A1A|#3A7D44"
+    assert result["source"] == "none"
+    assert result["colourName"] is None
+    assert result["colourHex"] is None
 
 
-def test_resolve_colour_attributes_canonicalizes_unique_name_alias(monkeypatch) -> None:
+def test_resolve_colour_attributes_requires_explicit_cross_code_adoption(monkeypatch) -> None:
     session = _FakeSession([
         SimpleNamespace(
             material_code="A",
@@ -1302,9 +1309,12 @@ def test_resolve_colour_attributes_canonicalizes_unique_name_alias(monkeypatch) 
         colour_name="khaki white",
     )
 
-    assert result["colourName"] == "Khaki White"
-    assert result["colourHex"] == "#F0ECE0"
-    assert result["source"] == "name_candidate"
+    assert result["colourName"] == "khaki white"
+    assert result["colourHex"] is None
+    assert result["source"] == "name_candidates"
+    adopted = repo.resolve_colour_attributes(session, "JAECOO", "ZZ", colour_name="khaki white", colour_hex="#F0ECE0", colour_hex_supplied=True)
+    assert adopted["colourCode"] == "ZZ"
+    assert adopted["colourHex"] == "#F0ECE0"
 
 
 def test_resolve_colour_attributes_preserves_explicit_hex_clear() -> None:
