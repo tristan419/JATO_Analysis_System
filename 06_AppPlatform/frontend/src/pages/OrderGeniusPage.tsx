@@ -4063,7 +4063,7 @@ export function BomAdminPanel({
   const copyDraftInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const bomGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const bomTemplateRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
-  const auditNavigationTargetRef = useRef<{ modelGroupKey: string; bomTemplate: string } | null>(null);
+  const auditNavigationTargetRef = useRef<{ modelGroupKey: string; bomTemplate: string; materialCode?: string } | null>(null);
   const expandedBomGroupKeyRef = useRef<string | null>(null);
   const [dragSku, setDragSku] = useState<string | null>(null);
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
@@ -4353,12 +4353,16 @@ export function BomAdminPanel({
         const nextItems = res.items || [];
         const auditTarget = auditNavigationTargetRef.current;
         if (auditTarget) {
-          const targetSku = nextItems.find((sku) => bomMaterialKey(sku.bomTemplate) === bomMaterialKey(auditTarget.bomTemplate));
-          if (targetSku) {
-            const groupKey = getBomAdminModelGroupKey(targetSku.brand, targetSku.modelName, targetSku.powertrain);
-            auditTarget.modelGroupKey = groupKey;
-            setExpandedGroups((current) => new Set([...current, groupKey]));
-          }
+          const targetSku = nextItems.find((sku) => (
+            bomMaterialKey(sku.bomTemplate) === bomMaterialKey(auditTarget.bomTemplate)
+            && (!auditTarget.materialCode || bomMaterialKey(sku.materialCode) === bomMaterialKey(auditTarget.materialCode))
+          ));
+          if (!targetSku) throw new Error("The audit material is no longer available. Refresh the audit and retry.");
+          const groupKey = getBomAdminModelGroupKey(targetSku.brand, targetSku.modelName, targetSku.powertrain);
+          auditTarget.modelGroupKey = groupKey;
+          setExpandedGroups((current) => new Set([...current, groupKey]));
+          const editKey = buildBomEditScopeKey(groupKey, targetSku.version || "Default", String(targetSku.bomTemplate));
+          setEditingBoms((current) => new Set([...current, editKey]));
         }
         setSkus(nextItems);
         setOptimisticColourTiers((current) => {
@@ -4411,7 +4415,7 @@ export function BomAdminPanel({
     const bomTemplate = target.bomTemplate.trim().toUpperCase();
     const search = getBomTemplateSearchText(bomTemplate);
     const modelGroupKey = getBomAdminModelGroupKey(target.brand, target.modelName);
-    auditNavigationTargetRef.current = { modelGroupKey, bomTemplate };
+    auditNavigationTargetRef.current = { modelGroupKey, bomTemplate, materialCode: target.materialCode };
     expandedBomGroupKeyRef.current = modelGroupKey;
     setExpandedGroups((current) => {
       const next = new Set(current);
@@ -4424,8 +4428,11 @@ export function BomAdminPanel({
       skipNextDebouncedLoadRef.current = true;
       setDebouncedSearch(search);
     }
-    await load(search);
-    setBomAdminNotice(`Showing BOM template ${bomTemplate}. Review its saved Single / Dual / Special placement, then refresh the FOB audit.`);
+    if (!await load(search)) {
+      auditNavigationTargetRef.current = null;
+      throw new Error("Could not load the BOM correction editor. Please retry.");
+    }
+    setBomAdminNotice(`Editing BOM template ${bomTemplate}${target.materialCode ? ` · ${target.materialCode}` : ""}. Drag the colour to its intended Single / Dual / Special tier, or correct the country base; then refresh the FOB audit.`);
   }, [debouncedSearch, load]);
 
   const scheduleLoad = useCallback((delay = 0) => {
@@ -6416,7 +6423,7 @@ export function BomAdminPanel({
 
   useEffect(() => {
     const target = auditNavigationTargetRef.current;
-    if (!target || !expandedGroups.has(target.modelGroupKey)) return;
+    if (!target || loading || !expandedGroups.has(target.modelGroupKey)) return;
     const row = bomTemplateRowRefs.current[bomMaterialKey(target.bomTemplate)];
     if (!row) return;
     auditNavigationTargetRef.current = null;
@@ -6424,7 +6431,7 @@ export function BomAdminPanel({
       row.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [expandedGroups, skus]);
+  }, [expandedGroups, skus, loading]);
 
   // Shared colour chip renderer used by BOM rows
   const renderColourChip = (s: any, isHist: boolean, editing: boolean) => {

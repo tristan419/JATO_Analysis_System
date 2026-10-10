@@ -1004,6 +1004,58 @@ def test_apply_rejects_changed_rule_and_route_rolls_back(db):
     assert repo.get_brand_colour_surcharge(db, "JAECOO", "dual").surcharge_eur == 300
 
 
+def test_audit_exposes_charged_single_and_existing_tier_correction_preserves_prices(db):
+    sku(db, "BW", "single", name="Matte gray")
+    sku(db, "UE", "single", name="Colour")
+    sku(db, "ZE", "dual")
+    for country, base in [("CZ", 27850), ("AT", 28000)]:
+        fob(db, "BW", base, base=base, country=country)
+        fob(db, "UE", base + 300, base=base, surcharge=300, country=country)
+        fob(db, "ZE", base + 300, base=base, surcharge=300, country=country)
+    db.commit()
+    before = {(row.material_code, row.country_code): float(row.final_fob_eur)
+              for row in db.scalars(select(models.CountrySkuFobResolved))}
+    audit = repo.audit_colour_surcharge_reprice(db)
+    assert audit["summary"]["singleSurchargeConflict"] == 2
+    assert audit["summary"]["ambiguousBase"] == 2
+    charged = [item for item in audit["items"] if item["materialCode"] == "UE"]
+    assert all(item["category"] == "single_surcharge_conflict" for item in charged)
+    assert all(item["expectedFinalFobEur"] is None for item in charged)
+    assert all(item["category"] == "not_applicable"
+               for item in audit["items"] if item["materialCode"] == "BW")
+    apply = repo.apply_colour_surcharge_reprice_audit(db, audit["fingerprint"])
+    assert apply["totals"]["updated"] == 0
+    result = routes.patch_sku_colour_tier(
+        "UE", {"colourTier": "special"}, db, SimpleNamespace(name="test", role="admin"),
+    )
+    assert result["colourTier"] == "special"
+    after = {(row.material_code, row.country_code): float(row.final_fob_eur)
+             for row in db.scalars(select(models.CountrySkuFobResolved))}
+    assert after == before
+    corrected = repo.audit_colour_surcharge_reprice(db)
+    assert corrected["summary"]["singleSurchargeConflict"] == 0
+    assert corrected["summary"]["ambiguousBase"] == 0
+    assert corrected["summary"]["autoReprice"] == 0
+    scoped = repo.audit_colour_surcharge_reprice(
+        db, allowed_brands={"JAECOO"}, allowed_countries={"CZ"},
+    )
+    assert scoped["summary"]["rows"] == 3
+    assert {item["countryCode"] for item in scoped["items"]} == {"CZ"}
+
+
+def test_audit_single_surcharge_conflict_respects_authorized_scope(db):
+    sku(db, "J", "single")
+    sku(db, "O", "single", brand="OMODA")
+    fob(db, "J", 1300, 1000, 300, country="CZ")
+    fob(db, "J", 1400, 1100, 300, country="CH")
+    fob(db, "O", 1200, 1000, 200, country="CZ")
+    audit = repo.audit_colour_surcharge_reprice(
+        db, allowed_brands={"JAECOO"}, allowed_countries={"CZ"},
+    )
+    assert audit["summary"]["singleSurchargeConflict"] == 1
+    assert [(item["materialCode"], item["countryCode"]) for item in audit["items"]] == [("J", "CZ")]
+
+
 @pytest.mark.parametrize("overwrite", [False, True])
 def test_country_copy_uses_target_base_or_replaces_whole_base(db, overwrite):
     sku(db, "S", "single")

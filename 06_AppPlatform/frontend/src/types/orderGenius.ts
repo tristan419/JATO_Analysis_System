@@ -394,6 +394,7 @@ export type ColourSurchargeRepriceCategory =
   | "explicit_final"
   | "missing_tier"
   | "missing_rule"
+  | "single_surcharge_conflict"
   | "not_applicable";
 
 export interface ColourSurchargeRepriceItem {
@@ -431,6 +432,7 @@ export interface ColourSurchargeRepriceSummary {
   explicitFinal: number;
   missingTier: number;
   missingRule: number;
+  singleSurchargeConflict: number;
   notApplicable: number;
 }
 

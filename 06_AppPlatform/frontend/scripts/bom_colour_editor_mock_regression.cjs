@@ -40,6 +40,21 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
       const req = route.request(), path = new URL(req.url()).pathname;
       let body = { items: [], total: 0 };
       if (path.endsWith("/auth/me")) body = { username: "mock", role: "admin", primaryCountry: "NL", secondaryCountries: [], countryCodes: ["NL"] };
+      else if (path.endsWith("/colour-surcharge-reprice/audit")) body = {
+        filters: { materialCodes: [], countryCode: null }, fingerprint: "single-source-audit",
+        summary: { rows: 1, autoReprice: 0, alreadyCorrect: 0, missingBase: 0, ambiguousBase: 0,
+          explicitFinal: 0, missingTier: 0, missingRule: 0, singleSurchargeConflict: 1, notApplicable: 0 },
+        items: [{ ...material, colourName: material.colour, countryCode: "NL", paymentTermCode: "TT",
+          currentBaseFobEur: 25100, currentColourSurchargeEur: 300, currentFinalFobEur: 25400,
+          category: "single_surcharge_conflict", expectedFinalFobEur: null }],
+      };
+      else if (/\/material-skus\/[^/]+\/colour-tier$/.test(path)) {
+        const payload = req.postDataJSON(); writes.push({ path, payload });
+        assert(path.includes(material.materialCode)); assert.equal(payload.colourTier, "special");
+        material.colourTier = "special";
+        body = { materialCode: material.materialCode, colourTier: "special", reprice: { updated: 0, unchanged: 1,
+          skippedManual: 0, skippedNoBase: 0, skippedAmbiguous: 0, skippedMissingTier: 0, skippedMissingRule: 0, details: [] } };
+      }
       else if (path.endsWith("/bom-admin")) { bomReads++; body = { items: skus, countries: ["NL"] }; }
       else if (path.endsWith("/colour-hex-rules/standard")) {
         const payload = req.postDataJSON(); writes.push({ path, payload });
@@ -353,6 +368,36 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     assert.equal(material.colourCodeConfirmed, true);
     assert.equal(skus[1].colourCodeConfirmed, false);
     checks.push("Changed unconfirmed Save & confirm code uses one shared request with current material identity");
+    // The audit correction must enter the real template Edit state, not just scroll to a read-only row.
+    for (const viewport of [{ width: 1920, height: 1080 }, { width: 1280, height: 720 }]) {
+      await page.setViewportSize(viewport);
+      material.colourTier = "single";
+      await page.reload(); await showBom();
+      if (await page.locator(".bom-admin-toolbar.is-tools-open").count() === 0) {
+        await page.getByRole("button", { name: "Edit tools", exact: true }).click();
+      }
+      await page.getByRole("button", { name: "Refresh FOB Audit", exact: true }).click();
+      await page.getByRole("button", { name: "Review audit", exact: true }).click();
+      const audit = page.getByRole("dialog", { name: "FOB colour reprice audit" });
+      await audit.getByText(/Single has a saved surcharge/).waitFor();
+      assert(await audit.getByText(/25,100 \+ 300 = 25,400/).isVisible());
+      assert(await audit.getByRole("button", { name: "Apply 0 safe rows" }).isDisabled());
+      const beforeCorrection = writes.length;
+      await audit.getByRole("button", { name: "Edit charged Single", exact: true }).click();
+      await audit.waitFor({ state: "hidden" });
+      assert.equal(writes.length, beforeCorrection, "opening Edit never writes data");
+      const row = page.locator("tr").filter({ has: page.locator(`input[placeholder="BOM / Material Code"][value="${material.bomTemplate}"]`) });
+      await row.getByRole("button", { name: "Done", exact: true }).waitFor();
+      const chip = row.locator('[draggable="true"]').filter({ has: page.getByText(material.colourCode, { exact: true }) }).first();
+      assert(await chip.isVisible(), "audit source is immediately draggable");
+      const special = row.locator("td").nth(4);
+      await chip.dragTo(special);
+      await page.getByText(/single → special/).waitFor();
+      assert.equal(writes.length, beforeCorrection + 1);
+      assert(writes.at(-1).path.endsWith("/colour-tier"));
+      assert.equal(material.fobByCountry.NL.finalFobEur, 25400);
+      checks.push(`FOB audit opens real Edit, read-only navigation, explicit tier drag: ${viewport.width}×${viewport.height}`);
+    }
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ status: "ok", checks, pageErrors: errors.length, mockWrites: writes.length, realBusinessWrites: 0 }));
   } finally { await browser.close(); }
