@@ -122,6 +122,45 @@ afterEach(() => {
 });
 
 describe("BOM FOB reprice audit controls", () => {
+  it("exposes the charged Single source and opens its existing editor without writing", async () => {
+    const payload = {
+      ...auditPayload,
+      summary: { ...auditPayload.summary, rows: 6, singleSurchargeConflict: 1 },
+      items: [...auditPayload.items, {
+        ...auditPayload.items[0],
+        materialCode: "T6481QNUELX0002", bomTemplate: "T6481QN**LX0002",
+        colourCode: "UE", colourTier: "single", countryCode: "CZ",
+        category: "single_surcharge_conflict",
+        currentBaseFobEur: 27850, currentColourSurchargeEur: 300,
+        currentFinalFobEur: 28150, expectedFinalFobEur: null,
+      }],
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json(payload));
+    vi.stubGlobal("fetch", fetchMock);
+    const onOpenBomTemplate = vi.fn(async () => undefined);
+    render(<BomFobRepriceAuditCard onOpenBomTemplate={onOpenBomTemplate} />);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh FOB Audit" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review audit" }));
+    expect(screen.getByText("Single has a saved surcharge")).toBeTruthy();
+    expect(screen.getByText(/T6481QNUELX0002 · CZ · 27,850 \+ 300 = 28,150/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Edit charged Single" }));
+    await waitFor(() => expect(onOpenBomTemplate).toHaveBeenCalledWith({
+      bomTemplate: "T6481QN**LX0002", brand: "JAECOO", modelName: "JAECOO8 SHS",
+      version: "Luxury-AWD", materialCode: "T6481QNUELX0002",
+    }));
+    expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+  });
+
+  it("keeps the audit visible when opening the correction editor fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(auditPayload)));
+    render(<BomFobRepriceAuditCard onOpenBomTemplate={async () => { throw new Error("BOM load failed"); }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh FOB Audit" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review audit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open BOM template" }));
+    expect(await screen.findByText("BOM load failed")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "FOB colour reprice audit" })).toBeTruthy();
+  });
+
   it("previews tier-derived changes before applying the fingerprinted plan", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "POST") {

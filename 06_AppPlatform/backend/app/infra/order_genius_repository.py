@@ -4437,8 +4437,9 @@ def _colour_surcharge_reprice_item(
         item["reason"] = "colour_tier_not_configured"
         return item
     if tier == "single":
-        item["category"] = "not_applicable"
-        item["reason"] = "single_colour"
+        charged_single = item["currentColourSurchargeEur"] not in (None, 0)
+        item["category"] = "single_surcharge_conflict" if charged_single else "not_applicable"
+        item["reason"] = "single_has_saved_surcharge" if charged_single else "single_colour"
         return item
     surcharge_decision = resolve_colour_surcharge_for_sku(session, sku, tier)
     item["surchargeRuleStatus"] = surcharge_decision["status"]
@@ -4526,7 +4527,7 @@ def audit_colour_surcharge_reprice(
     allowed_brands: set[str] | None = None,
     allowed_countries: set[str] | None = None,
 ) -> dict[str, object]:
-    """Audit all active Dual/Special FOB rows without changing any data."""
+    """Audit derived prices and charged Single sources without changing data."""
     normalized_codes = sorted(
         {clean_text(code) for code in (material_codes or []) if clean_text(code)}
     )
@@ -4541,7 +4542,7 @@ def audit_colour_surcharge_reprice(
         return {
             "filters": {"materialCodes": normalized_codes, "countryCode": normalized_country},
             "fingerprint": _colour_surcharge_reprice_fingerprint([]),
-            "summary": {"rows": 0, "autoReprice": 0, "alreadyCorrect": 0, "missingBase": 0, "ambiguousBase": 0, "explicitFinal": 0, "missingTier": 0, "missingRule": 0, "notApplicable": 0},
+            "summary": {"rows": 0, "autoReprice": 0, "alreadyCorrect": 0, "missingBase": 0, "ambiguousBase": 0, "explicitFinal": 0, "missingTier": 0, "missingRule": 0, "singleSurchargeConflict": 0, "notApplicable": 0},
             "items": [],
         }
     codes = [sku.material_code for sku in skus]
@@ -4594,6 +4595,7 @@ def audit_colour_surcharge_reprice(
         "explicitFinal": int(counts.get("explicit_final", 0)),
         "missingTier": int(counts.get("missing_tier", 0)),
         "missingRule": int(counts.get("missing_rule", 0)),
+        "singleSurchargeConflict": int(counts.get("single_surcharge_conflict", 0)),
         "notApplicable": int(counts.get("not_applicable", 0)),
     }
     return {

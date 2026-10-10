@@ -2346,6 +2346,7 @@ def test_colour_surcharge_reprice_audit_classifies_generic_rows_without_writing(
         "explicitFinal": 0,
         "missingTier": 0,
         "missingRule": 0,
+        "singleSurchargeConflict": 0,
         "notApplicable": 0,
     }
     assert by_code[dual.material_code]["expectedFinalFobEur"] == 19650
@@ -2425,6 +2426,7 @@ def test_colour_surcharge_reprice_audit_keeps_manual_row_ambiguous(
         "explicitFinal": 0,
         "missingTier": 0,
         "missingRule": 0,
+        "singleSurchargeConflict": 0,
         "notApplicable": 0,
     }
     assert result["items"][0]["trustedSingleBaseFobEur"] is None

@@ -14,6 +14,7 @@ export type BomFobAuditTemplateTarget = {
   brand: string;
   modelName: string | null;
   version: string | null;
+  materialCode?: string;
 };
 
 type BomFobRepriceAuditCardProps = {
@@ -33,6 +34,7 @@ type RepriceExceptionGroup = {
   colourTiers: string[];
   countryCodes: string[];
   singleBaseConflicts: Array<{ countryCode: string; candidates: number[] }>;
+  chargedSingles: ColourSurchargeRepriceItem[];
 };
 
 function getErrorMessage(error: unknown): string {
@@ -49,6 +51,7 @@ function formatEur(value: number | null | undefined): string {
 }
 
 function exceptionLabel(category: ColourSurchargeRepriceCategory): string {
+  if (category === "single_surcharge_conflict") return "Single has a saved surcharge";
   if (category === "ambiguous_base") return "Ambiguous Single base";
   if (category === "missing_base") return "Missing Single base";
   if (category === "missing_tier") return "Missing colour tier";
@@ -57,6 +60,9 @@ function exceptionLabel(category: ColourSurchargeRepriceCategory): string {
 }
 
 function exceptionGuidance(group: RepriceExceptionGroup): string {
+  if (group.category === "single_surcharge_conflict") {
+    return "Single requires +0, but these saved prices include a surcharge. Open Edit and explicitly correct the colour tier or country base. No tier is inferred and no price is lowered by the audit. Then refresh.";
+  }
   if (group.category === "ambiguous_base") {
     return "This template has more than one saved Single base in the affected countries. Open the template, keep the intended base colour in Single, move any misclassified charged colour to Dual or Special, or save one template-country Single base. Then refresh the audit.";
   }
@@ -88,6 +94,7 @@ function groupExceptions(items: ColourSurchargeRepriceItem[]): RepriceExceptionG
     colourTiers: Set<string>;
     countryCodes: Set<string>;
     singleBaseCandidatesByCountry: Map<string, Set<number>>;
+    chargedSingles: ColourSurchargeRepriceItem[];
   }>();
 
   for (const item of items) {
@@ -104,11 +111,13 @@ function groupExceptions(items: ColourSurchargeRepriceItem[]): RepriceExceptionG
       colourTiers: new Set<string>(),
       countryCodes: new Set<string>(),
       singleBaseCandidatesByCountry: new Map<string, Set<number>>(),
+      chargedSingles: [],
     };
     group.materialCodes.add(item.materialCode);
     if (item.colourCode) group.colourCodes.add(item.colourCode);
     if (item.colourTier) group.colourTiers.add(item.colourTier);
     if (item.countryCode) group.countryCodes.add(item.countryCode);
+    if (item.category === "single_surcharge_conflict") group.chargedSingles.push(item);
     const countryCandidates = group.singleBaseCandidatesByCountry.get(item.countryCode) ?? new Set<number>();
     for (const candidate of item.singleBaseCandidates ?? []) {
       countryCandidates.add(candidate);
@@ -128,11 +137,13 @@ function groupExceptions(items: ColourSurchargeRepriceItem[]): RepriceExceptionG
     colourCodes: sortedValues(group.colourCodes),
     colourTiers: sortedValues(group.colourTiers),
     countryCodes: sortedValues(group.countryCodes),
+    chargedSingles: group.chargedSingles,
     singleBaseConflicts: [...group.singleBaseCandidatesByCountry.entries()]
       .map(([countryCode, candidates]) => ({
         countryCode,
         candidates: [...candidates].sort((left, right) => left - right),
       }))
+      .filter((conflict) => conflict.candidates.length > 0)
       .sort((left, right) => left.countryCode.localeCompare(right.countryCode)),
   })).sort((left, right) => left.bomTemplate.localeCompare(right.bomTemplate));
 }
@@ -155,6 +166,7 @@ export function BomFobRepriceAuditCard({ onApplied, onOpenBomTemplate }: BomFobR
     || item.category === "missing_base"
     || item.category === "missing_tier"
     || item.category === "missing_rule"
+    || item.category === "single_surcharge_conflict"
   )) ?? [];
   const exceptionGroups = groupExceptions(exceptions);
 
@@ -199,6 +211,7 @@ export function BomFobRepriceAuditCard({ onApplied, onOpenBomTemplate }: BomFobR
         brand: group.brand,
         modelName: group.modelName,
         version: group.version,
+        ...(group.chargedSingles.length > 0 ? { materialCode: group.chargedSingles[0].materialCode } : {}),
       });
       setReviewOpen(false);
     } catch (cause) {
@@ -260,6 +273,11 @@ export function BomFobRepriceAuditCard({ onApplied, onOpenBomTemplate }: BomFobR
                             <span>{group.countryCodes.length} countr{group.countryCodes.length === 1 ? "y" : "ies"}: {group.countryCodes.join(", ")}</span>
                             <span>{group.materialCodes.length} affected colour SKU{group.materialCodes.length === 1 ? "" : "s"}: {group.colourCodes.join(", ") || group.materialCodes.join(", ")}</span>
                             {group.colourTiers.length > 0 ? <span>Saved affected tier: {group.colourTiers.join(", ")}</span> : null}
+                            {group.chargedSingles.map((item) => (
+                              <span key={`${item.materialCode}|${item.countryCode}|${item.paymentTermCode ?? ""}`}>
+                                {item.materialCode} · {item.countryCode} · {formatEur(item.currentBaseFobEur)} + {formatEur(item.currentColourSurchargeEur)} = {formatEur(item.currentFinalFobEur)} EUR
+                              </span>
+                            ))}
                             {group.singleBaseConflicts.length > 0 ? (
                               <span>
                                 Single conflicts: {group.singleBaseConflicts.slice(0, 4).map((conflict) => (
@@ -279,7 +297,7 @@ export function BomFobRepriceAuditCard({ onApplied, onOpenBomTemplate }: BomFobR
                               disabled={applying || openingTemplateKey !== null}
                               onClick={() => void openBomTemplate(group)}
                             >
-                              {openingTemplateKey === group.key ? "Opening..." : "Open BOM template"}
+                              {openingTemplateKey === group.key ? "Opening..." : group.category === "single_surcharge_conflict" ? "Edit charged Single" : "Open BOM template"}
                             </button>
                           ) : null}
                         </div>
