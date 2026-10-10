@@ -267,7 +267,7 @@ describe("Shared colour standard confirmation interactions", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Edit tools" }));
     fireEvent.click(await screen.findByRole("button", { name: "Preview shared swatch standards" }));
     const preview = await screen.findByRole("dialog", { name: "Colour rule fill preview" });
-    expect(within(preview).getByText("1 names / 名称 · 0 swatches / 色卡")).toBeTruthy();
+    expect(await within(preview).findByText("1 names / 名称 · 0 swatches / 色卡")).toBeTruthy();
     expect(within(preview).getByText(/Keep missing/)).toBeTruthy();
     fireEvent.click(within(preview).getByRole("button", { name: "Confirm 1 shared standards" }));
     await waitFor(() => expect(apply).toHaveBeenCalledWith("name-only", ["B"]));
