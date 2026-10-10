@@ -1228,7 +1228,7 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-side,.va-main{display:flex;flex-direction:column;gap:16px;min-width:0;min-height:0}
         .va-browse-panel{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto}
         .va-browse-panel > :not(.va-pi-list){flex:none}
-        .va-lines-panel{display:flex;flex-direction:column;flex:none;max-height:40%;min-height:0;overflow:auto}
+        .va-lines-panel{display:flex;flex-direction:column;flex:none;max-height:40%;min-height:0;overflow:hidden}
         .va-lines-panel > button,.va-lines-panel > small{flex:none;align-self:flex-start}
         .va-main > :not(.va-grid){flex:none}
         .va-panel,.va-filters,.va-pi-detail,.va-table-wrap{background:#fff;border:1px solid #d8dee6;border-radius:8px}
@@ -1299,7 +1299,7 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-bulk-panel textarea{min-height:90px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
         .va-bulk-fields{display:grid;grid-template-columns:repeat(2,minmax(112px,1fr));gap:8px}
         .va-bulk-fields label,.va-bulk-fields .va-field{display:grid;gap:5px;font-size:12px;font-weight:700;color:#475467}
-        .va-line-list{display:grid;align-content:start;gap:6px;margin-top:12px;flex:1;min-height:0;overflow:auto}
+        .va-line-list{display:grid;grid-auto-rows:max-content;align-content:start;gap:6px;margin-top:12px;flex:1;min-height:0;overflow:auto}
         .va-line-row{display:flex;align-items:stretch;border:1px solid #e5eaf0;border-radius:6px;background:#fbfcfe;color:#111827;overflow:hidden}
         .va-line-row.is-active{border-color:#1c69d4;background:#eef5ff}
         .va-line-all{background:#fff}
