@@ -15,7 +15,7 @@ const vehicles = Array.from({ length: 450 }, (_, i) => ({
 }));
 const header = { piCode: PI, countryCode: "CH", orderingAccountCode: "CH", marketCountryCodes: ["CH"], status: "draft", orderMonth: "2026-09", rowVersion: 1 };
 let extraLines = 0;
-const detail = () => ({ header, lines: [{ piCode: PI, piLineCode: PI + "-L01", materialCode: "T71506JCLMH0008", quantity: 450, allocations: [] }], vehicles,
+const detail = () => ({ header, lines: [{ piCode: PI, piLineCode: PI + "-L01", materialCode: "T71506JCLMH0008", brand: "OMODA", modelName: "OMODA5 MY HEV", version: "Comfort-FWD", powertrain: "HEV", quantity: 450, allocations: [] }], vehicles,
   summary: { totalUnits: 450, vinAssigned: 200, vinMissing: 250, readyForPickup: 0, allocated: 0 } });
 const saves = [], viewExports = [], errors = [];
 let rejectNextSave = true;
@@ -57,7 +57,7 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
       else if (path.includes("/vehicles/") && req.method() === "PATCH") { saves.push(req.postDataJSON()); body = vehicles[0]; }
       else if (path.endsWith("/pi/" + PI)) {
         body = detail();
-        body.lines.push(...Array.from({ length: extraLines }, (_, i) => ({ ...body.lines[0], piLineCode: `${PI}-L${i + 2}`, quantity: 0 })));
+        body.lines.push(...Array.from({ length: extraLines }, (_, i) => ({ ...body.lines[0], piLineCode: `${PI}-L${String(i + 2).padStart(2, "0")}`, quantity: 0 })));
       }
       else if (path.endsWith("/pi")) body = { items: Array.from({ length: 12 }, (_, index) => index === 0 ? header : { ...header, piCode: `PI-CH-202609-${String(index + 1).padStart(3, "0")}` }), total: 12 };
       else body = { items: [], total: 0, columns: [] };
@@ -407,11 +407,52 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
     assert((await page.getByRole("button", { name: "Save changes / 保存修改" }).boundingBox()).y < 1080);
     await page.getByRole("button", { name: "Close", exact: true }).click();
     checks.push("Responsive 1080p/4K/zoom-equivalent/short/narrow layouts; aligned columns, pagination visible or reachable by real short-window scrolling, taller-shell resize, selection and column state retained");
-    // Exercise real scroll offsets, not just scrollHeight metadata.
-    extraLines = 40;
-    await page.getByRole("button", { name: new RegExp("^" + PI) }).click();
+    // Every card must contain its text, even when the list has more rows than fit.
+    const assertReadableLines = async () => assert(await page.locator(".va-line-row").evaluateAll((rows) => rows.every((row) => row.clientHeight > 0 && row.clientHeight + 1 >= row.querySelector(".va-line-body").scrollHeight)), "PI line content is clipped inside its card");
+    for (const lineCount of [1, 11, 60]) {
+      extraLines = lineCount - 1;
+      await page.locator(".va-pi-list").getByRole("button", { name: new RegExp("^" + PI) }).click();
+      await page.getByText("Loading PI / 正在读取 PI…", { exact: true }).waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: /PI lines/ }).click();
+      assert.equal(await page.locator(".va-line-row").count(), lineCount + 1);
+      await assertReadableLines();
+    }
+    for (const viewport of [{ width: 1920, height: 1080 }, { width: 3840, height: 2160 }, { width: 1280, height: 720 }, { width: 700, height: 950 }]) {
+      await page.setViewportSize(viewport);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.waitForFunction(() => innerWidth <= 1100 || Math.abs(document.querySelector(".vehicle-allocation-page").getBoundingClientRect().bottom - Math.max(innerHeight, document.querySelector(".vehicle-allocation-page").getBoundingClientRect().top + 640)) <= 2);
+      await assertReadableLines();
+      const list = page.locator(".va-line-list");
+      const panel = page.locator(".va-lines-panel");
+      await list.evaluate((element) => { element.scrollTop = 0; });
+      const headingTop = (await panel.locator("button").first().boundingBox()).y;
+      await list.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+      const bottomCard = await page.locator(".va-line-row").last().boundingBox(), listBox = await list.boundingBox();
+      assert(bottomCard.y >= listBox.y - 1 && bottomCard.y + bottomCard.height <= listBox.y + listBox.height + 1, JSON.stringify({ viewport, bottomCard, listBox }));
+      assert.equal(await panel.evaluate((element) => element.scrollTop), 0);
+      assert.equal((await panel.locator("button").first().boundingBox()).y, headingTop);
+      if (viewport.width <= 1100) await page.locator(".va-line-row").last().scrollIntoViewIfNeeded();
+      await screenshot(page, `pi-lines-60-${viewport.width}x${viewport.height}.png`);
+    }
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    const largerText = await page.addStyleTag({ content: ".va-line-body strong,.va-line-body span,.va-line-body small{font-size:18px!important}" });
+    await assertReadableLines();
+    await largerText.evaluate((element) => element.remove());
+    vehicles[449].piLineCode = PI + "-L60";
+    await page.locator(".va-pi-list").getByRole("button", { name: new RegExp("^" + PI) }).click();
     await page.getByText("Loading PI / 正在读取 PI…", { exact: true }).waitFor({ state: "hidden" });
     await page.getByRole("button", { name: /PI lines/ }).click();
+    await page.locator(".va-line-row").nth(1).getByRole("button").click();
+    await page.getByText("449 filtered / 筛选", { exact: false }).waitFor();
+    await page.locator(".va-line-row").last().getByRole("button").click();
+    await page.getByText("1 filtered / 筛选", { exact: false }).waitFor();
+    await page.getByRole("button", { name: /PI lines/ }).click();
+    await page.getByText("1 filtered / 筛选", { exact: false }).waitFor();
+    await page.getByRole("button", { name: /PI lines/ }).click();
+    await page.locator(".va-line-all button").click();
+    await page.getByText("450 filtered / 筛选", { exact: false }).waitFor();
+    checks.push("1/11/60 PI lines remain readable; one list scrollbar with fixed heading; 1080p/4K/zoom-equivalent/narrow/large text; first/last line clicks and All PI preserve scope rules");
+    // Exercise real scroll offsets, not just scrollHeight metadata.
     const gridScroll = page.locator(".ag-body-viewport");
     const originalGeometry = await layoutGeometry();
     for (const selector of [".va-pi-list", ".va-line-list"]) {
@@ -447,7 +488,8 @@ const screenshot = (page, name) => process.env.JATO_REGRESSION_ARTIFACT_DIR
       assert(!size.overflowX);
       if (viewport.width > 1100) assert(Math.abs(size.side.bottom - size.main.bottom) <= 2);
       else assert(size.main.top >= size.side.bottom);
-      await page.getByRole("button", { name: /PI lines/ }).click();
+      const lineToggle = page.getByRole("button", { name: /PI lines/ });
+      if (await lineToggle.getAttribute("aria-expanded") === "true") await lineToggle.click();
       await page.locator('.ag-row .ag-cell[col-id="carCode"]').first().click();
       const save = page.getByRole("button", { name: "Save changes / 保存修改" });
       await save.waitFor();
