@@ -1,6 +1,7 @@
 # JATO Monthly Update Data Lifecycle Runbook
 
 Date: 2026-05-17
+Last updated: 2026-07-21
 Scope: JATO monthly Excel upload, active Parquet publication, MarketScan/Dashboard data correctness, and deploy/runtime boundaries.
 
 ## Executive Rule
@@ -84,6 +85,49 @@ This is the desired behavior for staggered JATO releases. Example:
 - Second batch advanced Germany, Poland, Hungary, Denmark, Austria, Finland, Slovakia to `2026 Mar`.
 - First-batch countries should remain unchanged after the second publish.
 - Countries not present in either batch remain at their previous latest month.
+
+## Historical Change And Correction Policy
+
+The routine monthly-update path and an intentional historical correction are related, but they do not have the same risk level. The default production rule is:
+
+> A routine country update preserves that country's current active history and uses uploaded rows only after the country's active latest month.
+
+The Review must classify each uploaded country's historical differences and offer only the decisions that the backend has validated:
+
+| Decision | Meaning | When allowed | Effect |
+|---|---|---|---|
+| `keep_active` | Preserve active history | Default for every monthly update; mandatory when historical monthly sales totals differ | Keep all active rows through the country's active latest month, then use uploaded rows strictly after that month |
+| `use_latest` | Adopt uploaded historical classification | Only when historical monthly sales totals are stable and Review reports the affected dimensions | Replace the reviewed country's historical classification/details with the uploaded version; this is an explicit historical correction, not a routine append |
+| Historical sales correction | Correct historical sales totals and details | High-risk controlled flow only; not supported by the routine monthly fast path as of 2026-07-21 | Replace only explicitly approved country-month partitions after a dedicated diff, reason, second approval, backup, and rollback plan |
+
+`use_latest` is therefore a limited historical-correction decision inside JATO Monthly Update. It must not be interpreted as blanket permission to trust every historical row in a newly washed workbook. If historical monthly sales totals changed, the current routine flow must expose `keep_active` only and stop the upload from rewriting those months.
+
+### Routine Monthly Update Rules
+
+1. Do not automatically select a historical decision for the user.
+2. Require a decision for every country whose uploaded history differs from active.
+3. For `keep_active`, retain active history exactly and append uploaded data only for months later than the country's active latest month.
+4. Reject overlapping month boundaries, country regression, duplicate business keys, negative sales, schema regression, and suspected near-2x accumulation.
+5. Reuse the existing candidate and run Smart Merge exactly once after the complete decision set is submitted.
+6. Require post-merge `resolutionValidation=pass` for every `keep_active` country before Review approval.
+7. Keep countries absent from the upload logically and physically unchanged; their partition manifests and fingerprints must remain stable.
+8. Publish only after explicit approval, active/candidate/report fingerprint checks, active backup, and final historical sales/configuration guards.
+
+### Historical Correction Rules
+
+If JATO or the data-washing owner confirms that active history is wrong, keep the correction in the JATO Monthly Update product but place it in an explicit correction mode:
+
+1. Select exact countries, month ranges, fields, and a correction reason.
+2. Show before/after values, monthly sales deltas, affected models/configurations, missing fields, and duplicate-key findings.
+3. Separate classification-only correction from sales-total correction. Stable sales may use `use_latest`; changed sales require the high-risk flow.
+4. Replace approved country-month partitions atomically. Never append historical rows blindly and never broaden the correction beyond the selected scope.
+5. Bind the correction decision to upload SHA-256, candidate fingerprint, active-base fingerprint, report fingerprint, approver, and timestamp.
+6. Create a recoverable active backup before promotion and support rollback by correction batch.
+7. Re-run Dashboard/MarketScan freshness, country latest-month, monthly-total, partition-count, and no-accumulation checks after publication.
+
+### June 2026 Sixteen-Country Decision
+
+For the June 2026 sixteen-country workbook, the approved business intent is `keep_active` for all uploaded countries: prior active months remain unchanged, while uploaded data is used only after each country's active latest month. Historical differences in the washed workbook are Review evidence, not authorization to overwrite active history.
 
 ## 2026-05-17 Incident Record
 
