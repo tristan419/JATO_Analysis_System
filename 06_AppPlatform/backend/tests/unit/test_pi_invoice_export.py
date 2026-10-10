@@ -67,6 +67,7 @@ def test_invoice_saved_snapshots_formulas_cached_totals_and_print(templates, cou
     assert formula.auto_filter.ref is None
     assert formula.page_setup.fitToWidth == 1
     assert formula.print_title_rows == "$26:$27"
+    assert not any(merged.min_row == 28 for merged in formula.merged_cells.ranges)
     assert (templates / f"{country}_OJ.xlsx").read_bytes() == original
     assert detail == before
 
@@ -79,6 +80,48 @@ def test_different_saved_costs_split_rows_and_zero_override_is_explicit(template
     merged = openpyxl.load_workbook(exporter.generate_pi_invoice_excel(detail, {"freightEur": 0, "insuranceEur": 0}), data_only=True).active
     assert merged["H28"].value == 2
     assert merged["M29"].value == 20000.22
+
+
+@pytest.mark.parametrize("country,version_col,qty_col,amount_col,total_col", [
+    ("CH", "C", "F", "H", "L"), ("SE", "D", "H", "J", "M"),
+])
+def test_model_version_merge_only_consecutive_runs_without_changing_details(
+    templates, country, version_col, qty_col, amount_col, total_col,
+):
+    detail = pi(country, quantity=8)
+    labels = [("A", "V1"), ("A", "V1"), ("A", "V2"), ("A", "V2"),
+              ("B", "V2"), ("B", "V2"), ("A", "V1"), ("A", "V1")]
+    for index, (vehicle, (model, version)) in enumerate(zip(detail["vehicles"], labels)):
+        vehicle.update(modelName=model, version=version, materialCode=f"MATERIAL-{index}")
+    before = deepcopy(detail)
+    output = exporter.generate_pi_invoice_excel(detail, {})
+    ws = openpyxl.load_workbook(output).active
+    values = openpyxl.load_workbook(BytesIO(output.getvalue()), data_only=True).active
+    body_merges = {str(merged) for merged in ws.merged_cells.ranges if 28 <= merged.min_row < 36}
+    assert body_merges == {"B28:B31", "B32:B33", "B34:B35",
+                          *(f"{version_col}{start}:{version_col}{start + 1}" for start in (28, 30, 32, 34))}
+    for row in range(28, 36):
+        assert ws[f"A{row}"].value == row - 27
+        assert ws[f"{'E' if country == 'CH' else 'G'}{row}"].value == f"MATERIAL-{row - 28}"
+        assert values[f"{qty_col}{row}"].value == 1
+        assert values[f"{amount_col}{row}"].value == 10000.11
+        if country == "SE":
+            assert ws[f"C{row}"].value == "BEV"
+    for merged in body_merges:
+        assert ws[merged.split(":")[0]].alignment.horizontal == "center"
+        assert ws[merged.split(":")[0]].alignment.vertical == "center"
+    assert values[f"{qty_col}36"].value == 8
+    assert values[f"{total_col}36"].value == 81042.72
+    assert ws[f"{total_col}36"].value == f"=SUM({total_col}28:{total_col}35)"
+    assert detail == before
+
+
+def test_empty_model_and_version_are_not_merged(templates):
+    detail = pi()
+    for index, vehicle in enumerate(detail["vehicles"]):
+        vehicle.update(modelName="", version=None, materialCode=f"MATERIAL-{index}")
+    ws = openpyxl.load_workbook(exporter.generate_pi_invoice_excel(detail, {})).active
+    assert not any(merged.min_row == 28 for merged in ws.merged_cells.ranges)
 
 
 @pytest.mark.parametrize("key,value", [("freightEur", None), ("insuranceEur", None), ("fobEur", 0),

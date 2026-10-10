@@ -317,6 +317,17 @@ def generate_pi_invoice_excel(detail: dict, options: dict) -> io.BytesIO:
         cached[f"{get_column_letter(amount_col)}{row}"] = (fob * quantity).quantize(Decimal("0.01"))
         cached[f"{get_column_letter(last_col)}{row}"] = ((fob + freight + insurance + (handling if country == "CH" else 0)) * quantity).quantize(Decimal("0.01"))
     total_row = 28 + len(grouped)
+    keys = list(grouped)
+    # Version runs stop at model boundaries; never reorder invoice details.
+    for column, key_size in ((2, 1), (3 if country == "CH" else 4, 2)):
+        start = 0
+        for end in range(1, len(keys) + 1):
+            if end < len(keys) and keys[end][:key_size] == keys[start][:key_size]:
+                continue
+            if str(keys[start][key_size - 1] or "").strip() and end - start > 1:
+                ws.merge_cells(start_row=28 + start, start_column=column,
+                               end_row=27 + end, end_column=column)
+            start = end
     ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=quantity_col - 1)
     text_at(total_row, 1, "Total")
     for col in range(1, last_col + 1):
