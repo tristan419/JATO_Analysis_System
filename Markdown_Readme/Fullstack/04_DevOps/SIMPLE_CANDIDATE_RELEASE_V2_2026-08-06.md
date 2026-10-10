@@ -1186,8 +1186,9 @@ incident recovery/fence/hold 状态机。
 - 数据库 env 不再被 shell source；只从 root-owned、精确 `0400/0600`、非 symlink 的
   `KEY=value` 文件解析 `APP_DATABASE_ENABLED` 与 `APP_DATABASE_URL`。不支持 `export`
   或变量展开，这是部署配置格式契约。
-- 数据库子进程使用不继承 parent 的最小 env；Active code 执行 `alembic current`，
-  Candidate code 执行离线 `alembic heads`，命令白名单测试明确禁止所有 migration、
+- 数据库子进程使用不继承 parent 的最小 env；目标构件执行 `alembic current` 读取生产库，
+  同一目标构件执行离线 `alembic heads`。2026-10-10已撤回旧Active代码读取current的执行规则，
+  避免已升级schema在旧migration graph中无法识别；不改严格revision相等要求。命令白名单测试明确禁止所有 migration、
   dump/restore verb。
 - PostgreSQL URL 只在子进程私有 env 中规范为已安装的 `postgresql+psycopg` driver；
   raw output、连接串和其派生 hash 均不进入错误或 repr。disabled 返回

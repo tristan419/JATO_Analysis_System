@@ -456,8 +456,9 @@ def test_database_revision_match_is_compatible(tmp_path: Path) -> None:
         "readOnly": True,
     }
     assert [call[0][-1] for call in calls] == ["current", "heads"]
+    assert all(call[0][0] == str(config.candidate_python) for call in calls)
     assert [call[1] for call in calls] == [
-        config.active_root / "06_AppPlatform/backend",
+        config.candidate_root / "06_AppPlatform/backend",
         config.candidate_root / "06_AppPlatform/backend",
     ]
 
@@ -476,6 +477,33 @@ def test_database_revision_mismatch_requires_migration(tmp_path: Path) -> None:
     assert result["status"] == "migration-required"
     assert result["current"] == ["20260715_0046"]
     assert result["heads"] == ["20260801_0047"]
+
+
+@pytest.mark.parametrize("current", ["20261009_0055", "20261010_0056"])
+def test_migrated_production_revision_uses_target_graph(tmp_path: Path, current: str) -> None:
+    config = database_config(
+        tmp_path,
+        "APP_DATABASE_ENABLED=true\nAPP_DATABASE_URL=postgresql://u:p@db/jato_app\n",
+    )
+    calls = []
+
+    def runner(arguments, cwd, environment):
+        calls.append(arguments[-1])
+        assert environment["APP_DATABASE_URL"] == "postgresql+psycopg://u:p@db/jato_app"
+        assert environment["DATABASE_URL"] == environment["APP_DATABASE_URL"]
+        assert environment["PGOPTIONS"] == "-c default_transaction_read_only=on"
+        if arguments[0] == str(config.active_python):
+            return MODULE.CommandResult(255, "", "Can't locate revision identified by '20261009_0055'")
+        assert arguments[0] == str(config.candidate_python)
+        assert cwd == config.candidate_root / "06_AppPlatform/backend"
+        revision = current if arguments[-1] == "current" else "20261009_0055"
+        return MODULE.CommandResult(0, revision + " (head)\n", "")
+
+    result = MODULE.inspect_database_compatibility(config, runner=runner)
+    assert calls == ["current", "heads"]
+    assert result["current"] == [current]
+    assert result["heads"] == ["20261009_0055"]
+    assert result["status"] == ("compatible" if current == "20261009_0055" else "migration-required")
 
 
 def test_database_disabled_does_not_run_commands(tmp_path: Path) -> None:

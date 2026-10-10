@@ -661,7 +661,7 @@ def inspect_database_compatibility(
     sync_url = _sync_postgresql_url(raw_url)
     _require_runtime(config.active_root, config.active_python, "active")
     _require_runtime(config.candidate_root, config.candidate_python, "candidate")
-    active_backend = _backend_working_directory(config.active_root, "active")
+    _backend_working_directory(config.active_root, "active")
     candidate_backend = _backend_working_directory(config.candidate_root, "candidate")
     environment = dict(SAFE_COMMAND_ENV)
     environment.update(
@@ -674,8 +674,8 @@ def inspect_database_compatibility(
     )
     current = _revision_set(
         runner(
-            (str(config.active_python), "-m", "alembic", "current"),
-            active_backend,
+            (str(config.candidate_python), "-m", "alembic", "current"),
+            candidate_backend,
             environment,
         ),
         "alembic current",
