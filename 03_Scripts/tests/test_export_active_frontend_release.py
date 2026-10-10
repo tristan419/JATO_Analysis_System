@@ -132,7 +132,108 @@ def _active_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
         "root": root,
         "release_dir": release_dir,
         "proof": proof,
+        "inspect_kwargs": {
+            "expected_commit": commit,
+            "source_seal_helper": source_helper,
+            "active_link": active_link,
+            "releases_root": releases_root,
+            "active_slot_file": active_slot_file,
+            "slot_env_root": slot_env_root,
+        },
     }
+
+
+def _package_v2(fixture: dict[str, object]) -> dict[str, object]:
+    root = fixture["root"]
+    metadata_path = root / "hermes/deploy_release.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update(actualCommitSha="", commitSha="")
+    _write_json(metadata_path, metadata)
+    frontend = metadata["frontendRelease"]
+    manifest = {
+        "schemaVersion": 1,
+        "repository": frontend["release"]["repository"],
+        "commitSha": fixture["commit"],
+        "archive": {"bytes": 1234, "sha256": fixture["proof"]["archiveSha256"]},
+        "frontend": {
+            "artifactIdentity": frontend["artifact"]["id"],
+            "artifactChecksum": frontend["artifact"]["checksum"],
+            "buildId": frontend["frontend"]["buildId"],
+        },
+        "buildMetadataSha256": HELPER._hash_file(metadata_path),
+    }
+    _write_json(root / "release-v2-manifest.json", manifest)
+    return manifest
+
+
+def test_inspect_accepts_bound_v2_packaged_metadata_without_post_deploy_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _active_fixture(tmp_path, monkeypatch)
+    _package_v2(fixture)
+    assert HELPER.inspect_active(**fixture["inspect_kwargs"]) == fixture["proof"]
+
+
+@pytest.mark.parametrize(
+    "field", ["commitSha", "archive", "frontend", "buildMetadataSha256", "schemaVersion", "repository"],
+)
+def test_inspect_rejects_v2_binding_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str,
+) -> None:
+    fixture = _active_fixture(tmp_path, monkeypatch)
+    manifest = _package_v2(fixture)
+    # Valid legacy fields must not cause a damaged V2 manifest to be ignored.
+    metadata_path = fixture["root"] / "hermes/deploy_release.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update(actualCommitSha=fixture["commit"], commitSha=fixture["commit"])
+    _write_json(metadata_path, metadata)
+    manifest["buildMetadataSha256"] = HELPER._hash_file(metadata_path)
+    manifest[field] = "wrong"
+    _write_json(fixture["root"] / "release-v2-manifest.json", manifest)
+    with pytest.raises(HELPER.ActiveFrontendExportError, match="Active V2 manifest"):
+        HELPER.inspect_active(**fixture["inspect_kwargs"])
+
+
+@pytest.mark.parametrize("v2", [False, True])
+@pytest.mark.parametrize("value", ["", "f" * 40])
+@pytest.mark.parametrize("field", ["actualCommitSha", "commitSha"])
+def test_inspect_rejects_unbound_empty_or_wrong_commit_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, v2: bool, value: str, field: str,
+) -> None:
+    fixture = _active_fixture(tmp_path, monkeypatch)
+    manifest = _package_v2(fixture) if v2 else None
+    metadata_path = fixture["root"] / "hermes/deploy_release.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata[field] = value
+    _write_json(metadata_path, metadata)
+    if v2 and value == "":
+        # Even otherwise valid packaged fields cannot bypass an unbound metadata hash.
+        metadata["unexpected"] = "changed after packaging"
+        _write_json(metadata_path, metadata)
+    elif v2:
+        manifest["buildMetadataSha256"] = HELPER._hash_file(metadata_path)
+        _write_json(fixture["root"] / "release-v2-manifest.json", manifest)
+    with pytest.raises(HELPER.ActiveFrontendExportError, match="identity mismatch"):
+        HELPER.inspect_active(**fixture["inspect_kwargs"])
+
+
+@pytest.mark.parametrize("field", ["expectedCommitSha", "githubId", "githubDigest"])
+def test_v2_still_requires_expected_commit_and_original_github_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str,
+) -> None:
+    fixture = _active_fixture(tmp_path, monkeypatch)
+    manifest = _package_v2(fixture)
+    metadata_path = fixture["root"] / "hermes/deploy_release.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if field == "expectedCommitSha":
+        metadata[field] = "f" * 40
+    else:
+        metadata["frontendRelease"]["artifact"][field] = "invalid"
+    _write_json(metadata_path, metadata)
+    manifest["buildMetadataSha256"] = HELPER._hash_file(metadata_path)
+    _write_json(fixture["root"] / "release-v2-manifest.json", manifest)
+    with pytest.raises(HELPER.ActiveFrontendExportError, match="deploy metadata identity mismatch"):
+        HELPER.inspect_active(**fixture["inspect_kwargs"])
 
 
 def test_inspect_and_verify_download_bind_current_active(

@@ -319,10 +319,34 @@ def inspect_active(
         or artifact.get("payload") != "frontend-dist.tar.gz"
     ):
         raise ActiveFrontendExportError("Active frontend manifest/runtime identity mismatch")
-    deploy_release, _ = _read_regular_json(
+    deploy_release, deploy_raw = _read_regular_json(
         root / "hermes/deploy_release.json",
         "Active deploy metadata",
     )
+    allowed_commit_fields = (active_commit,)
+    v2_path = root / "release-v2-manifest.json"
+    if os.path.lexists(v2_path):
+        v2, _ = _read_regular_json(v2_path, "Active V2 manifest")
+        v2_archive = _required_mapping(v2, "archive", "Active V2 manifest")
+        frontend_release = _required_mapping(manifest, "release", "frontend manifest")
+        frontend_build = _required_mapping(manifest, "frontend", "frontend manifest")
+        if (
+            type(v2.get("schemaVersion")) is not int or v2["schemaVersion"] != 1
+            or v2.get("commitSha") != active_commit
+            or v2_archive.get("sha256") != archive_sha256
+            or type(v2_archive.get("bytes")) is not int
+            or v2_archive["bytes"] <= 0
+            or v2.get("repository") != frontend_release.get("repository")
+            or v2.get("frontend") != {
+                "artifactIdentity": identity["frontendIdentity"],
+                "artifactChecksum": identity["frontendChecksum"],
+                "buildId": frontend_build.get("buildId"),
+            }
+            or v2.get("buildMetadataSha256") != hashlib.sha256(deploy_raw).hexdigest()
+        ):
+            raise ActiveFrontendExportError("Active V2 manifest identity mismatch")
+        # V2 seals the packaged metadata; post-deployment commit fields stay empty.
+        allowed_commit_fields = (active_commit, "")
     enriched_manifest = deploy_release.get("frontendRelease")
     if not isinstance(enriched_manifest, dict):
         raise ActiveFrontendExportError("Active deploy metadata identity mismatch")
@@ -338,8 +362,8 @@ def inspect_active(
     base_enriched_manifest["artifact"] = base_enriched_artifact
     if (
         deploy_release.get("expectedCommitSha") != active_commit
-        or deploy_release.get("actualCommitSha") != active_commit
-        or deploy_release.get("commitSha") != active_commit
+        or deploy_release.get("actualCommitSha") not in allowed_commit_fields
+        or deploy_release.get("commitSha") not in allowed_commit_fields
         or base_enriched_manifest != manifest
         or not isinstance(github_artifact_id, str)
         or not github_artifact_id.isdigit()

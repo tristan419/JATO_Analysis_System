@@ -555,6 +555,11 @@ www Active -> 既有独立 sync-www-active-to-intl -> intl
 - `update-active` 只更新并验证 www Active，不自动排队、调用或修改 intl 同步。
 - intl 沿用既有 `sync-www-active-to-intl`：在用户另行启动时，从当时的 current Active
   导出并同步；V2 不新增输入、receipt、自动 dispatch 或跨 workflow 状态。
+- intl 的既有 `inspect_active` 读取 V2 不可变元数据时，先验证运行封印及
+  `release-v2-manifest.json` 对 commit/archive/frontend/buildMetadataSha256 的绑定；
+  `expectedCommitSha` 必须等于 Active，封存的 `actualCommitSha`/`commitSha` 可为空，
+  但非空错配仍拒绝。没有 V2 sidecar 时保留旧字段精确相等契约；损坏 V2 不回退旧规则。
+  控制助手的正常 PR/CI 更新不要求重新构建或推广 Active，仍同步当前 Active 原前端。
 - intl 同步失败不影响已经成功的 www Active，也不得触发 www 回退；这是两个独立操作。
 - Candidate 永远不能自动升级为 Active，也不能触发 intl。Active mutation 必须可追溯
   到用户对该精确已测试构件的明确批准。
