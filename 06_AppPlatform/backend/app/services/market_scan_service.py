@@ -4396,7 +4396,12 @@ def _resolve_deck_period(
     available_periods: list[str],
 ) -> str:
     # Explicit selections take precedence; freshness only chooses the default.
-    requested_period = target_period or (time_range or {}).get("end")
+    requested_period = target_period
+    if not requested_period and time_range:
+        range_detail = _resolve_period_range_detail(
+            available_periods, time_range, _resolve_period(None, available_periods),
+        )
+        requested_period = (range_detail["resolvedTimeRange"] or {}).get("end")
     if requested_period:
         return _resolve_period(requested_period, available_periods)
     selected_country = _normalize_country_lookup(country, _country_options(repo.current_dataset_token()))

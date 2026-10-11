@@ -13,6 +13,7 @@ from pydantic import ValidationError
         ("Sweden", None, None, "2026-09"),
         ("THE NETHERLANDS", "2026-09", None, "2026-09"),
         ("THE NETHERLANDS", None, {"start": "2026-02", "end": "2026-07"}, "2026-07"),
+        ("THE NETHERLANDS", None, {"start": "2026-08", "end": "2026-02"}, "2026-08"),
     ],
 )
 def test_deck_period_uses_country_freshness_only_for_default(
