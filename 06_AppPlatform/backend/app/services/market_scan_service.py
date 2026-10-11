@@ -4389,6 +4389,23 @@ def query_ranking_trend(
     }
 
 
+def _resolve_deck_period(
+    country: str | None,
+    target_period: str | None,
+    time_range: dict[str, str] | None,
+    available_periods: list[str],
+) -> str:
+    # Explicit selections take precedence; freshness only chooses the default.
+    requested_period = target_period or (time_range or {}).get("end")
+    if requested_period:
+        return _resolve_period(requested_period, available_periods)
+    selected_country = _normalize_country_lookup(country, _country_options(repo.current_dataset_token()))
+    for item in repo.country_data_freshness():
+        if str(item["country"]).strip().lower() == selected_country["value"].strip().lower():
+            return _resolve_period(_month_column_to_period(str(item["latestMonth"])), available_periods)
+    return _resolve_period(None, available_periods)
+
+
 def query_market_scan_deck(
     country: str | None,
     target_period: str | None,
@@ -4428,7 +4445,7 @@ def query_market_scan_deck(
         try:
             columns = _get_columns()
             available_periods = _available_periods(columns)
-            resolved_period = _resolve_period(target_period, available_periods)
+            resolved_period = _resolve_deck_period(country, target_period, time_range, available_periods)
             cache_key = build_deck_cache_key(
                 country or "", resolved_period, time_range,
                 fuel_types, ranking_limit, dataset_token,
@@ -5349,7 +5366,7 @@ def _query_market_scan_deck_impl(
     t_start = time.monotonic()
     columns = _get_columns()
     available_periods = _available_periods(columns)
-    resolved_period = _resolve_period(target_period, available_periods)
+    resolved_period = _resolve_deck_period(country, target_period, time_range, available_periods)
     range_detail = _resolve_period_range_detail(available_periods, time_range, resolved_period)
     custom_periods = range_detail["periods"]
     same_month_last_year_period = _shift_period(resolved_period, -12)
