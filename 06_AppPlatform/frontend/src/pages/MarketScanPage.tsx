@@ -2225,7 +2225,7 @@ function FuelPanel({
   );
 }
 
-function DrilldownSection({
+export function DrilldownSection({
   page,
   fuelOrder,
   salesMode,
@@ -2248,11 +2248,13 @@ function DrilldownSection({
   rankingLimit?: number;
   onRankingLimitChange?: (limit: number) => void;
 }) {
-  if (!page?.monthTotalRanking?.items?.length) return null;
   const normalizedRankingLimit = normalizeMarketScanRankingLimit(rankingLimit);
-  const insight = buildDrilldownInsight(page);
   const activeWindow = marketScanActiveDrilldownWindow(page, salesMode, customRangeActive, customRangeLabel);
   const activeTotalRanking = activeWindow.ranking;
+  if (!activeTotalRanking.items.length) {
+    return <div className="market-scan-empty">当前销量口径及筛选下暂无排行数据。</div>;
+  }
+  const insight = buildDrilldownInsight(page);
   const activeFuelTrend = activeWindow.fuelTrend;
   const activeFuelTrendTitle = activeWindow.trendTitle;
   const activeFuelTrendSubtitle = activeWindow.trendSubtitle;

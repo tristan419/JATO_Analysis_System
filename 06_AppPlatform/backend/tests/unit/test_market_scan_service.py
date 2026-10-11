@@ -6,6 +6,37 @@ from app.api.schemas import MarketScanDeckRequest, PositioningPricingDeckRequest
 from pydantic import ValidationError
 
 
+@pytest.mark.parametrize(
+    ("country", "period", "time_range", "expected"),
+    [
+        ("THE NETHERLANDS", None, None, "2026-08"),
+        ("Sweden", None, None, "2026-09"),
+        ("THE NETHERLANDS", "2026-09", None, "2026-09"),
+        ("THE NETHERLANDS", None, {"start": "2026-02", "end": "2026-07"}, "2026-07"),
+        ("THE NETHERLANDS", None, {"start": "2026-08", "end": "2026-02"}, "2026-08"),
+    ],
+)
+def test_deck_period_uses_country_freshness_only_for_default(
+    monkeypatch: pytest.MonkeyPatch,
+    country: str,
+    period: str | None,
+    time_range: dict[str, str] | None,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(market_scan_service.repo, "current_dataset_token", lambda: "range-test")
+    monkeypatch.setattr(market_scan_service, "_country_options", lambda token: [
+        {"value": "The Netherlands", "label": "The Netherlands"},
+        {"value": "Sweden", "label": "Sweden"},
+    ])
+    monkeypatch.setattr(market_scan_service.repo, "country_data_freshness", lambda: [
+        {"country": "The Netherlands", "latestMonth": "2026 Aug"},
+        {"country": "Sweden", "latestMonth": "2026 Sep"},
+    ])
+    assert market_scan_service._resolve_deck_period(
+        country, period, time_range, [f"2026-{month:02d}" for month in range(1, 10)],
+    ) == expected
+
+
 def test_total_ranking_drive_share_is_4wd_over_total() -> None:
     """driveSharePct = 4WD / total volume (simple percentage)."""
     frame = pd.DataFrame(
