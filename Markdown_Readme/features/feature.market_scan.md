@@ -4,6 +4,7 @@
 
 - The default period uses the existing selected-country freshness result, not the global newest Parquet column. Explicit periods remain explicit; a custom range uses its end month as the page context, without replacing the selected range.
 - SUV / drilldown / body-type slides render according to the active monthly, YTD, rolling-12 or custom-range ranking. An empty latest-month ranking must not hide a populated custom-range ranking. Empty active results show the existing empty-state styling rather than a blank slide.
+- Ordinary and China-origin fuel sub-rankings use the same selected custom range, including its title and prior-year comparison; never substitute monthly counts. Models with sales only in earlier months of a long custom range still participate. Reuse the existing window precomputation and one fuel-panel assembler. Cache schema default is 5 so old responses without range panels are not reused.
 - Reuse existing query/cache, period state and chart flow; no new filter platform or data writes. Scope does not include pricing/version-comparison decks. Public availability bounds remain global; freshness keeps its existing definition and is not a new import-completeness check.
 - Test: different country cutoff months, explicit unavailable-current-country month, custom-range context, monthly-empty/range-populated rendering and empty active result. COC Active storage configuration is a separate runtime operation, not part of this code change.
 

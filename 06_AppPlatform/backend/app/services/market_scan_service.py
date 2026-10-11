@@ -3908,7 +3908,8 @@ def precompute_model_rankings(
         month_vol = _row_sum(row, current_month_columns)
         ytd_vol = _row_sum(row, current_ytd_columns)
         rolling_vol = _row_sum(row, current_rolling12_columns)
-        if ytd_vol <= 0 and month_vol <= 0 and rolling_vol <= 0:
+        custom_vol = _row_sum(row, custom_range_columns) if custom_range_columns else 0
+        if ytd_vol <= 0 and month_vol <= 0 and rolling_vol <= 0 and custom_vol <= 0:
             continue
 
         seg_str = str(segment).strip()
@@ -3920,7 +3921,7 @@ def precompute_model_rankings(
             "monthVolume": month_vol, "monthPrior": _row_sum(row, same_month_columns),
             "ytdVolume": ytd_vol, "ytdPrior": _row_sum(row, prior_ytd_columns),
             "rollingVolume": rolling_vol, "rollingPrior": _row_sum(row, prior_rolling12_columns),
-            "customVolume": _row_sum(row, custom_range_columns) if custom_range_columns else 0,
+            "customVolume": custom_vol,
             "customPrior": _row_sum(row, prior_custom_range_columns) if prior_custom_range_columns else 0,
         }
 
@@ -4016,17 +4017,18 @@ def model_stats_to_ranking(
     return result
 
 
-def _build_origin_fuel_panel_items(
+def _build_fuel_panel_items(
     seg: str,
     fuel_panels: tuple[str, ...],
     precomputed: dict[tuple[str, str, str], list[dict[str, Any]]],
     month_number: int,
     resolved_period: str,
+    custom_range_periods: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build fuel panel items for a specific origin from precomputed rankings."""
+    """Build ordinary or origin-filtered panels from the same window rankings."""
     items: list[dict[str, Any]] = []
     for fuel_type in fuel_panels:
-        items.append({
+        item = {
             "fuelType": fuel_type,
             "ytdTitle": f"{fuel_type} 1-{month_number}月累计",
             "rolling12Title": f"{fuel_type} 近12个月 · 截至 {_short_period_label(resolved_period)}",
@@ -4034,7 +4036,14 @@ def _build_origin_fuel_panel_items(
             "ytdRanking": precomputed.get((seg, fuel_type, "ytd"), []),
             "rolling12Ranking": precomputed.get((seg, fuel_type, "rolling12"), []),
             "monthRanking": precomputed.get((seg, fuel_type, "month"), []),
-        })
+        }
+        if custom_range_periods:
+            item["customRangeTitle"] = (
+                f"{fuel_type} 自定义区间 · {_short_period_label(custom_range_periods[0])}"
+                f"–{_short_period_label(custom_range_periods[-1])}"
+            )
+            item["customRangeRanking"] = precomputed.get((seg, fuel_type, "customRange"), [])
+        items.append(item)
     return items
 
 
@@ -4084,13 +4093,15 @@ def _build_all_drilldowns(
     t_precomp = time.monotonic()
     logger.info("MarketScan [%s] drilldown precompute_model_rankings: %.3fs  (%d stats)",
                 resolved_period, t_precomp - t_dd_start, len(all_stats))
+    fuel_windows = {
+        "month": (current_month_columns, same_month_columns),
+        "ytd": (current_ytd_columns, prior_ytd_columns),
+        "rolling12": (current_rolling12_columns, prior_rolling12_columns),
+    }
+    if custom_range_periods:
+        fuel_windows["customRange"] = (custom_range_columns, prior_custom_range_columns)
     fuel_panel_rankings = _precompute_single_fuel_panel_rankings(
-        ranking_frame,
-        {
-            "month": (current_month_columns, same_month_columns),
-            "ytd": (current_ytd_columns, prior_ytd_columns),
-            "rolling12": (current_rolling12_columns, prior_rolling12_columns),
-        },
+        ranking_frame, fuel_windows,
         ranking_limit=ranking_limit,
     )
 
@@ -4100,12 +4111,7 @@ def _build_all_drilldowns(
         china_frame = ranking_frame[ranking_frame["__origin"] == "中系"]
         if not china_frame.empty:
             china_fuel_rankings = _precompute_single_fuel_panel_rankings(
-                china_frame,
-                {
-                    "month": (current_month_columns, same_month_columns),
-                    "ytd": (current_ytd_columns, prior_ytd_columns),
-                    "rolling12": (current_rolling12_columns, prior_rolling12_columns),
-                },
+                china_frame, fuel_windows,
                 ranking_limit=ranking_limit,
             )
 
@@ -4120,17 +4126,10 @@ def _build_all_drilldowns(
         seg_fuels = _available_fuel_types(seg_frame)
 
         # Fuel panels reuse the precomputed per-segment/fuel/model rankings.
-        fuel_panel_items = []
-        for fuel_type in fuel_panels:
-            fuel_panel_items.append({
-                "fuelType": fuel_type,
-                "ytdTitle": f"{fuel_type} 1-{month_number}月累计",
-                "rolling12Title": f"{fuel_type} 近12个月 · 截至 {_short_period_label(resolved_period)}",
-                "monthTitle": f"{fuel_type} {_short_period_label(resolved_period)}",
-                "ytdRanking": fuel_panel_rankings.get((seg, fuel_type, "ytd"), []),
-                "rolling12Ranking": fuel_panel_rankings.get((seg, fuel_type, "rolling12"), []),
-                "monthRanking": fuel_panel_rankings.get((seg, fuel_type, "month"), []),
-            })
+        fuel_panel_items = _build_fuel_panel_items(
+            seg, fuel_panels, fuel_panel_rankings, month_number, resolved_period,
+            custom_range_periods,
+        )
 
         rolling12_total = model_stats_to_ranking(all_stats, seg, "rollingVolume", "rollingPrior", seg_fuels, ranking_limit)
         headline_model = rolling12_total[0]["model"] if rolling12_total else "市场"
@@ -4168,8 +4167,9 @@ def _build_all_drilldowns(
                 {
                     "origin": "China",
                     "originLabel": "中系",
-                    "fuelPanels": _build_origin_fuel_panel_items(
+                    "fuelPanels": _build_fuel_panel_items(
                         seg, fuel_panels, china_fuel_rankings, month_number, resolved_period,
+                        custom_range_periods,
                     ),
                 }
             ],
