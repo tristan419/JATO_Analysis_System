@@ -387,6 +387,59 @@ def test_market_scan_deck_request_defaults_to_top10() -> None:
     assert payload.ranking_limit == 10
 
 
+def test_custom_range_includes_all_fuel_panels_and_earlier_only_models() -> None:
+    frame = pd.DataFrame({
+        "__segment_raw": ["SUV A0"] * 4,
+        "__model": ["Europe BEV", "China BEV", "Europe ICE", "Earlier BEV"],
+        "__powertrain": ["BEV", "BEV", "ICE", "BEV"],
+        "__origin": ["欧系", "中系", "欧系", "欧系"],
+        "__drive_type": ["2WD"] * 4,
+        "__registration_type": ["Private"] * 4,
+        "2024 Jan": [0.0, 0.0, 0.0, 11.0],
+        "2025 Jan": [4.0, 2.0, 5.0, 0.0],
+        "2025 Feb": [6.0, 3.0, 5.0, 0.0],
+        "2026 Jan": [10.0, 5.0, 20.0, 0.0],
+        "2026 Feb": [30.0, 5.0, 30.0, 0.0],
+    })
+    payload = market_scan_service._build_all_drilldowns(
+        frame=frame,
+        available_periods=["2024-01", "2025-01", "2025-02", "2026-01", "2026-02"],
+        resolved_period="2026-02",
+        same_month_last_year_period="2025-02",
+        segment_values=["SUV A0"],
+        fuel_panels=("BEV", "PHEV"), ranking_limit=10,
+        custom_range_periods=["2024-01", "2026-01", "2026-02"],
+    )["SUV A0"]
+
+    total = {item["model"]: item["volume"] for item in payload["customRangeTotalRanking"]["items"]}
+    assert total == {"Europe BEV": 40, "China BEV": 10, "Europe ICE": 50, "Earlier BEV": 11}
+    panel, empty_panel = payload["fuelPanels"]
+    assert "24.01" in panel["customRangeTitle"] and "26.02" in panel["customRangeTitle"]
+    assert {item["model"]: item["volume"] for item in panel["customRangeRanking"]} == {
+        "Europe BEV": 40, "China BEV": 10, "Earlier BEV": 11,
+    }
+    assert panel["monthRanking"][0]["volume"] == 30
+    assert empty_panel["customRangeRanking"] == []
+    china_panel = payload["originFuelPanels"][0]["fuelPanels"][0]
+    assert len(china_panel["customRangeRanking"]) == 1
+    assert china_panel["customRangeRanking"][0]["volume"] == 10
+    assert china_panel["monthRanking"][0]["volume"] == 5
+    assert china_panel["customRangeRanking"][0]["yoy"]["value"] == pytest.approx(1)
+
+
+def test_precomputed_models_keep_sales_from_earlier_custom_months() -> None:
+    frame = pd.DataFrame({
+        "__segment_raw": ["SUV A0"], "__model": ["Earlier BEV"],
+        "__powertrain": ["BEV"], "2024 Jan": [11.0], "2026 Feb": [0.0],
+    })
+    stats = market_scan_service.precompute_model_rankings(
+        frame, ["2026 Feb"], [], ["2026 Feb"], [], ["2026 Feb"], [],
+        ["2024 Jan", "2026 Feb"], [], fuel_order=["BEV"],
+    )
+    assert len(stats) == 1
+    assert stats[0]["customVolume"] == 11
+
+
 def test_market_scan_deck_request_rejects_ranking_limit_below_top10() -> None:
     with pytest.raises(ValidationError):
         MarketScanDeckRequest(ranking_limit=6)

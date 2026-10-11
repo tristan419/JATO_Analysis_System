@@ -1,4 +1,9 @@
-from app.services.market_scan_cache import invalidate_market_scan_deck_cache
+from app.services.market_scan_cache import build_deck_cache_key, invalidate_market_scan_deck_cache
+
+
+def test_deck_cache_uses_range_fuel_panel_schema() -> None:
+    key = build_deck_cache_key("Sweden", "2026-02", None, ["BEV"], 10, "test")
+    assert key.startswith("ms:deck:v5:")
 
 
 class _FakeRedis:

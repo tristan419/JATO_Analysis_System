@@ -56,6 +56,21 @@ describe("DrilldownSection active window", () => {
     expect(markup(page, false)).toContain("当前销量口径及筛选下暂无排行数据");
     expect(markup(page, false)).not.toContain("Range model");
   });
+  it("uses custom range data for ordinary and China fuel panels", () => {
+    const panel = {
+      fuelType: "BEV", monthTitle: "BEV monthly", ytdTitle: "BEV YTD",
+      rolling12Title: "BEV rolling", customRangeTitle: "BEV range 26.02–26.08",
+      monthRanking: [{ ...page.customRangeTotalRanking!.items[0], model: "Monthly only" }],
+      ytdRanking: [], rolling12Ranking: [],
+      customRangeRanking: [{ ...page.customRangeTotalRanking!.items[0], model: "Range fuel" }],
+    };
+    const result = markup({ ...page, fuelPanels: [panel], originFuelPanels: [{
+      origin: "China", originLabel: "中系", fuelPanels: [panel],
+    }] }, true);
+    expect(result.match(/BEV range 26.02–26.08/g)?.length).toBe(2);
+    expect(result).toContain("Range fuel");
+    expect(result).not.toContain("Monthly only");
+  });
 });
 
 describe("SlideLayoutEditor", () => {
