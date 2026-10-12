@@ -24,6 +24,13 @@ async function expand() {
 }
 
 describe("Model material changes board", () => {
+  it("keeps personal reminder countries independent of the temporary timeline filter", async () => {
+    const timeline = vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country) => dataset(country));
+    render(<MaterialTimelineBoard {...props} countries={["CH"]} noticeCountries={["CH", "SE"]} />);
+    await waitFor(() => expect(api.getMaterialNotices).toHaveBeenCalledWith("SE"));
+    expect(timeline).toHaveBeenCalledWith("CH", false);
+    expect(timeline).not.toHaveBeenCalledWith("SE", false);
+  });
   it("loads certificate segments only after opt-in, without changing BOM windows or reminders", async () => {
     const record = { materialGroup: "NEW", wvtaNo: "e4*2018/858*00273*02", cocNo: "00273-02&COC002",
       validFrom: "2026-03-11", validTo: "2026-04-14", comments: "Certificate note", pageNumber: 3, tableRowNumber: 40,

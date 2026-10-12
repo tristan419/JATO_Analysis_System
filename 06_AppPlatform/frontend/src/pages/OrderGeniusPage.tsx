@@ -3435,13 +3435,15 @@ export function OrderGeniusPage() {
       {canFillOrders && timelineCountries.length > 0 ? <MaterialTimelineBoard
         key={authorizationKey}
         countries={timelineCountries}
+        noticeCountries={isAdmin ? countries.map((item) => item.countryCode) : userCountries}
         selectionRows={combinedMatrix.rows}
         selectionComplete={!loading && !error && selectedCountries.every((country) => Boolean(matrices[country])) && combinedMatrix.rows.length >= combinedMatrix.totalRows}
         authorizationKey={authorizationKey}
         bomEditing={showBomAdmin}
         canMaintainRelations={canMaintainBom}
         canManageReference={isAdmin}
-        onViewModel={(brand, model) => {
+        onViewModel={(brand, model, noticeCountry) => {
+          if (noticeCountry) setSelectedCountries([noticeCountry]);
           setBrandFilter(brand); setModelFilter(model); setPowertrainFilter("");
           setVersionFilter(""); setColourFilter(""); setMaterialSearch("");
         }}

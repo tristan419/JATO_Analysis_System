@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { MaterialNotice } from "../../types/orderGenius";
 
-interface Props { countries: string[]; authorizationKey: string; revision: number; onViewModel: (brand: string, model: string) => void }
+interface Props { countries: string[]; authorizationKey: string; revision: number; onViewModel: (brand: string, model: string, country?: string) => void }
 interface Load { scope: string; status: "loading" | "ready" | "error"; notices: MaterialNotice[] }
 export function MaterialNotices({ countries, authorizationKey, revision, onViewModel }: Props) {
   const countryKey = [...new Set(countries)].sort().join(",");
@@ -42,7 +42,7 @@ export function MaterialNotices({ countries, authorizationKey, revision, onViewM
       {items.map((notice) => <div className={`og-material-notice${notice.read ? " is-read" : ""}`} key={notice.key}>
         <p>{notice.countryCode} · {notice.date} · {notice.kind === "start" ? "First order date / 开始下单" : notice.kind === "end" ? "Final order date / 最后下单日" : "Relation updated / 更替关系更新"}</p>
         <p>{notice.bomTemplate}{notice.kind === "relation" ? ` → ${notice.target ?? "Disconnected / 已断开"}` : ""} {notice.note}</p>
-        <button type="button" className="btn btn-sm btn-ghost" onClick={() => onViewModel(notice.brand, notice.modelName)}>View model / 查看车型</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={() => onViewModel(notice.brand, notice.modelName, notice.countryCode)}>View model / 查看车型</button>
         <button type="button" className="btn btn-sm btn-ghost" disabled={busy !== null} onClick={() => void mark(notice)}>{notice.read ? "Mark unread / 标为未读" : "Mark read / 标为已读"}</button>
       </div>)}
     </details>)}

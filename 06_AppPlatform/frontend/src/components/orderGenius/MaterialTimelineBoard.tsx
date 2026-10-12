@@ -10,13 +10,14 @@ import { MaterialNotices } from "./MaterialNotices";
 
 interface Props {
   countries: string[];
+  noticeCountries?: string[];
   authorizationKey: string;
   selectionRows: Array<MaterialSkuMatrixRow & { _countryCode?: string }>;
   selectionComplete: boolean;
   bomEditing?: boolean;
   canManageReference?: boolean;
   canMaintainRelations?: boolean;
-  onViewModel: (brand: string, model: string) => void;
+  onViewModel: (brand: string, model: string, country?: string) => void;
 }
 type LoadState = { scope: string; status: "loading" | "error" | "ready"; data: MaterialTimelineResponse[] };
 type NodeRef = { country: string; node: MaterialTimelineNode; certificate?: WvtaReferenceRecord };
@@ -39,7 +40,7 @@ function chainRows(nodes: MaterialTimelineNode[]): number[] {
   });
 }
 
-export function MaterialTimelineBoard({ countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, canManageReference = false, canMaintainRelations = false, onViewModel }: Props) {
+export function MaterialTimelineBoard({ countries, noticeCountries = countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, canManageReference = false, canMaintainRelations = false, onViewModel }: Props) {
   const [showWvta, setShowWvta] = useState(false);
   const [expandedModels, setExpandedModels] = useState<string[]>([]);
   const countryKey = [...new Set(countries)].sort().join(",");
@@ -142,7 +143,7 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
       <label><input type="checkbox" checked={showWvta} onChange={(event) => setShowWvta(event.currentTarget.checked)} /> Show WVTA reference / 叠加WVTA参考（不改变BOM下单日期）</label>
       {canManageReference ? <WvtaReferenceUpload onSaved={() => setRevision((value) => value + 1)} /> : null}
     </div> : null}
-    {!bomEditing ? <MaterialNotices countries={countries} authorizationKey={authorizationKey} revision={revision} onViewModel={onViewModel} /> : null}
+    {!bomEditing ? <MaterialNotices countries={noticeCountries} authorizationKey={authorizationKey} revision={revision} onViewModel={onViewModel} /> : null}
     {expanded && !busy && load.status === "ready" ? <div className="og-timeline-content">
       <p>As of / 按今天 {data[0]?.today} · {data[0]?.windowFrom} – {data[0]?.windowTo} · Not the selected order month / 不随选品月份</p>
       {showWvta ? <p className="og-wvta-source">{data[0]?.wvtaReference?.status === "ready"
