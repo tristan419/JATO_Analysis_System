@@ -3244,6 +3244,7 @@ export function MarketScanPage({
               <DeckPeriodTimeline
                 options={deck?.metadata.availablePeriods ?? []}
                 value={resolvedTimeRange}
+                defaultPeriod={deck?.metadata.resolvedPeriod}
                 onChange={setPeriodSelection}
                 disabled={!deck}
                 commitOnIdle={false}

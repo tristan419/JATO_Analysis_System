@@ -54,3 +54,27 @@
   .og-timeline-summary > strong { width: 100%; }
   .og-timeline-summary > span { width: 100%; }
 }
+.og-replacement-editor label { display: grid; gap: 5px; margin: 10px 0; }
+.og-replacement-editor input, .og-replacement-editor select, .og-replacement-editor textarea { width: 100%; min-width: 0; }
+.og-replacement-canvas { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; max-height: 300px; overflow: auto; padding: 4px; }
+.og-replacement-canvas button { display: grid; gap: 4px; text-align: left; padding: 10px; background: #f8fafc; border: 1px solid #cbd5e1; border-left-width: 4px; border-radius: 6px; cursor: grab; overflow-wrap: anywhere; }
+.og-replacement-canvas .is-source { outline: 2px solid #2563eb; }
+.og-replacement-canvas .is-target { background: #dbeafe; }
+.og-timeline-chain { margin: 8px 0; min-width: 780px; }
+.og-timeline-chain-axis { position: relative; height: 20px; margin: 12px 4px 0; font-size: 12px; }
+.og-timeline-chain-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.og-timeline-chain-axis span:first-child { transform: none; }
+.og-timeline-chain-axis span:last-child { transform: translateX(-100%); }
+.og-timeline-chain-nodes { display: flex; gap: 12px; overflow-x: auto; padding: 4px; }
+.og-timeline-chain-nodes button { flex: 0 0 240px; min-width: 0; }
+.og-timeline-chain-track { position: relative; margin: 12px 4px; border: 1px solid #e2e8f0; background: repeating-linear-gradient(90deg, transparent, transparent calc(25% - 1px), #e2e8f0 25%); }
+.og-timeline-chain-track > .og-timeline-today { top: 0; bottom: 0; z-index: 1; pointer-events: none; }
+.og-timeline-chain-generation { position: absolute; height: 32px; width: 100%; }
+.og-timeline-chain-range { position: absolute; height: 30px; background: #eff6ff; border: 2px solid; border-radius: 5px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.og-timeline-chain-range.is-historical { border-style: dashed; background: #f8fafc; }
+.og-timeline-chain-range.is-not_yet_active { border-style: dotted; }
+.og-timeline-chain-undated { background: transparent; border: 0; cursor: pointer; color: #475569; }
+.og-material-notices { border: 1px solid #cbd5e1; padding: 10px; margin-bottom: 12px; border-radius: 6px; }
+.og-material-notice { border-left: 3px solid #2563eb; padding: 5px 12px; margin: 10px 0; overflow-wrap: anywhere; }
+.og-material-notice.is-read { border-left-color: #cbd5e1; color: #64748b; }
+.og-timeline-version-details > summary { font-size: 12px; padding: 8px; }

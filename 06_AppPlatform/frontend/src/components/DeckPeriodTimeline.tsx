@@ -9,6 +9,7 @@ interface DeckPeriodTimelineProps {
   disabled?: boolean;
   label?: string;
   commitOnIdle?: boolean;
+  defaultPeriod?: string;
 }
 
 const AUTO_COMMIT_DELAY_MS = 1000;
@@ -17,6 +18,7 @@ function buildRangeState(
   options: MarketScanCountryOption[],
   startIndex: number,
   endIndex: number,
+  isDefaultLatest: boolean,
 ) {
   const latestIndex = options.length - 1;
   const normalizedStartIndex = Math.min(startIndex, endIndex);
@@ -33,7 +35,7 @@ function buildRangeState(
     startOption,
     endOption,
     latestOption,
-    isDefaultLatest: startOption.value === latestOption.value && endOption.value === latestOption.value,
+    isDefaultLatest,
     isCustomRange: startOption.value !== endOption.value,
   };
 }
@@ -45,6 +47,7 @@ export function DeckPeriodTimeline({
   disabled = false,
   label = "Period",
   commitOnIdle = true,
+  defaultPeriod,
 }: DeckPeriodTimelineProps) {
   const [expanded, setExpanded] = useState(false);
   const [activeThumb, setActiveThumb] = useState<"start" | "end">("start");
@@ -54,20 +57,23 @@ export function DeckPeriodTimeline({
       return null;
     }
     const latestIndex = options.length - 1;
+    const countryIndex = options.findIndex((option) => option.value === defaultPeriod);
+    const defaultIndex = countryIndex >= 0 ? countryIndex : latestIndex;
     const rawStartIndex = value
       ? options.findIndex((option) => option.value === value.start)
-      : latestIndex;
+      : defaultIndex;
     const rawEndIndex = value
       ? options.findIndex((option) => option.value === value.end)
-      : latestIndex;
+      : defaultIndex;
     const normalizedStartIndex = rawStartIndex >= 0 ? rawStartIndex : latestIndex;
     const normalizedEndIndex = rawEndIndex >= 0 ? rawEndIndex : latestIndex;
     const startIndex = Math.min(normalizedStartIndex, normalizedEndIndex);
     const endIndex = Math.max(normalizedStartIndex, normalizedEndIndex);
-    return buildRangeState(options, startIndex, endIndex);
-  }, [options, value]);
+    return buildRangeState(options, startIndex, endIndex, value === null);
+  }, [options, value, defaultPeriod]);
   const [draftRange, setDraftRange] = useState<{ startIndex: number; endIndex: number } | null>(null);
   const draftRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
+  useEffect(() => { draftRangeRef.current = null; setDraftRange(null); }, [defaultPeriod]);
 
   useEffect(() => {
     if (expanded || !committedRangeState) {
@@ -109,10 +115,11 @@ export function DeckPeriodTimeline({
 
   const rangeState = useMemo(() => {
     if (expanded && draftRange) {
-      return buildRangeState(options, draftRange.startIndex, draftRange.endIndex);
+      return buildRangeState(options, draftRange.startIndex, draftRange.endIndex, value === null
+        && draftRange.startIndex === committedRangeState?.startIndex && draftRange.endIndex === committedRangeState.endIndex);
     }
     return committedRangeState;
-  }, [committedRangeState, draftRange, expanded, options]);
+  }, [committedRangeState, draftRange, expanded, options, value]);
 
   const firstOption = options[0] ?? null;
 
@@ -125,13 +132,7 @@ export function DeckPeriodTimeline({
     if (!startOption || !endOption || !latestOption) {
       return;
     }
-    if (startOption.value === latestOption.value && endOption.value === latestOption.value) {
-      if (!value) {
-        return;
-      }
-      onChange(null);
-      return;
-    }
+    if (!value && startIndex === committedRangeState?.startIndex && endIndex === committedRangeState.endIndex) return;
     if (value?.start === startOption.value && value.end === endOption.value) {
       return;
     }

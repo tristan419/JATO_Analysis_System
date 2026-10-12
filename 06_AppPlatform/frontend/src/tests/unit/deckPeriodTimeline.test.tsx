@@ -36,6 +36,25 @@ function TestHarness({
 }
 
 describe("DeckPeriodTimeline", () => {
+  it("uses the country default anchor but preserves explicit selection of the global latest month", () => {
+    function CountryHarness() {
+      const [period, setPeriod] = useState<MarketScanPeriodRange | null>(null);
+      return <><DeckPeriodTimeline options={PERIOD_OPTIONS} defaultPeriod="2026-03" value={period} onChange={setPeriod} commitOnIdle={false} /><span>{period ? period.end : "default"}</span></>;
+    }
+    render(<CountryHarness />);
+    expect(screen.getByText("26.03")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "展开时间轴" }));
+    const start = screen.getByRole("slider", { name: "开始月份" });
+    const end = screen.getByRole("slider", { name: "结束月份" });
+    expect(start.getAttribute("value")).toBe("1");
+    fireEvent.change(end, { target: { value: "2" } }); fireEvent.pointerUp(end);
+    fireEvent.change(start, { target: { value: "2" } }); fireEvent.pointerUp(start);
+    expect(screen.getByText("2026-04")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "回到默认最新月" }));
+    expect(screen.getByText("default")).toBeTruthy();
+    expect(start.getAttribute("value")).toBe("1");
+    expect(end.getAttribute("value")).toBe("1");
+  });
   afterEach(() => {
     cleanup();
   });

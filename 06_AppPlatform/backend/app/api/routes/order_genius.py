@@ -26,7 +26,7 @@ from app.api.order_genius_schemas import (
 from app.core.config import PROJECT_ROOT
 from app.core.security import (require_min_role, require_roles, validate_country_access,
                                validate_brand_access, ordering_brands, ordering_countries, is_admin)
-from app.db.models import CountryPaymentTermMaster, CountryTemplateFobPeriod, PaymentTermAuditLog
+from app.db.models import CountryPaymentTermMaster, CountryTemplateFobPeriod, PaymentTermAuditLog, User
 from app.db.session import get_db_session
 from app.infra import order_genius_repository as repo
 from app.services import material_master_upload_service as upload_svc
@@ -47,6 +47,8 @@ from app.services.order_genius_service import (
 )
 from app.services.ordering_normalization import clean_text, normalize_brand, normalize_brand_text
 from app.services.coc_fill_service import read_wvta_reference, set_wvta_reference
+from app.services.material_replacement_service import (replacement_catalog, save_replacement,
+    material_notices, acknowledge_material_notice)
 from app.services.order_quantity_parser import parse_order_quantity_xlsx
 
 router = APIRouter(prefix="/order-genius", tags=["order_genius"])
@@ -2318,6 +2320,66 @@ def post_wvta_reference(
 ) -> dict:
     return set_wvta_reference(str(body.get("uploadId") or ""), triggered_by=user.name,
                               expected_sha256=str(body.get("sha256") or ""))
+
+
+@router.get("/material-replacements")
+def get_material_replacements(
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    return replacement_catalog(session, ordering_brands(session, user))
+
+
+@router.put("/material-replacements")
+def put_material_replacement(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    brand = str(body.get("brand") or "").strip().upper()
+    validate_brand_access(session, user, brand)
+    source = str(body.get("from") or "").strip().upper()
+    target = str(body.get("to") or "").strip().upper() or None
+    if not isinstance(body.get("rowVersion"), int) or isinstance(body["rowVersion"], bool):
+        raise HTTPException(400, "rowVersion is required")
+    result = save_replacement(session, brand=brand, source=source, target=target,
+        note=str(body.get("note") or ""), expected_version=body["rowVersion"],
+        actor=user.name, allowed_brands=ordering_brands(session, user))
+    session.commit()
+    return result
+
+
+@router.get("/material-notices")
+def get_material_notices(
+    country: str = Query(min_length=2, max_length=2),
+    session: Session = Depends(get_db_session),
+    user=Depends(require_roles("order_filler", "editor", "admin", "developer")),
+) -> dict:
+    country = country.strip().upper()
+    validate_country_access(session, user.name, user.role, country)
+    account = session.query(User).filter(User.username == user.name).first()
+    if not account:
+        raise HTTPException(403, "Account required / 需要真实账号")
+    projection = build_material_timeline(session, country, allowed_brands=ordering_brands(session, user))
+    return {"countryCode": country, "notices": material_notices(session, projection,
+        user_id=account.id, username=user.name)}
+
+
+@router.put("/material-notices/{notice_key}/read")
+def put_material_notice_read(
+    notice_key: str, body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_roles("order_filler", "editor", "admin", "developer")),
+) -> dict:
+    country = str(body.get("country") or "").strip().upper()
+    if not isinstance(body.get("read"), bool):
+        raise HTTPException(400, "read must be true or false")
+    current = get_material_notices(country, session, user)
+    account = session.query(User).filter(User.username == user.name).first()
+    acknowledge_material_notice(session, key=notice_key, user_id=account.id,
+                               notices=current["notices"], read=body["read"])
+    session.commit()
+    return {"read": body["read"]}
 
 
 @router.get("/material-lifecycle")

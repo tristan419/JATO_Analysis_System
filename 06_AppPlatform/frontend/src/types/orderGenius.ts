@@ -1,3 +1,30 @@
+export interface MaterialReplacementNode {
+  brand: string;
+  bomTemplate: string;
+  modelName: string;
+  version: string;
+  powertrain: string;
+  materialCodes: string[];
+}
+export interface MaterialReplacementCatalog {
+  nodes: MaterialReplacementNode[];
+  links: Array<{ brand: string; from: string; to: string | null; note: string; rowVersion: number }>;
+}
+export interface MaterialNotice {
+  key: string;
+  countryCode: string;
+  kind: "start" | "end" | "relation";
+  date: string;
+  bomTemplate: string;
+  brand: string;
+  modelName: string;
+  target: string | null;
+  previousTarget?: string | null;
+  note: string;
+  changedBy?: string;
+  read: boolean;
+}
+
 export interface MaterialTimelineNode {
   bomTemplate: string;
   brand: string;
@@ -21,7 +48,7 @@ export interface MaterialTimelineResponse {
   windowFrom: string;
   windowTo: string;
   nodes: MaterialTimelineNode[];
-  links: Array<{ from: string; to: string }>;
+  links: Array<{ from: string; to: string; note?: string }>;
   events: Array<{ bomTemplate: string; kind: "start" | "end"; date: string }>;
   wvtaReference?: {
     status: "missing" | "ready";

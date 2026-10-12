@@ -5,6 +5,8 @@ import { orderGeniusPowertrainColor } from "../../utils/orderGeniusBomAdmin";
 import { compareProductModels } from "../../utils/orderGeniusProductSort";
 import "./MaterialTimelineBoard.css";
 import { WvtaReferenceUpload } from "./WvtaReferenceUpload";
+import { MaterialReplacementEditor } from "./MaterialReplacementEditor";
+import { MaterialNotices } from "./MaterialNotices";
 
 interface Props {
   countries: string[];
@@ -13,6 +15,7 @@ interface Props {
   selectionComplete: boolean;
   bomEditing?: boolean;
   canManageReference?: boolean;
+  canMaintainRelations?: boolean;
   onViewModel: (brand: string, model: string) => void;
 }
 type LoadState = { scope: string; status: "loading" | "error" | "ready"; data: MaterialTimelineResponse[] };
@@ -24,7 +27,19 @@ const STATUS: Record<string, string> = {
 };
 const dayNumber = (day: string): number => Date.parse(`${day}T00:00:00Z`) / 86400000;
 
-export function MaterialTimelineBoard({ countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, canManageReference = false, onViewModel }: Props) {
+function chainRows(nodes: MaterialTimelineNode[]): number[] {
+  const occupied: Array<Array<[number, number]>> = [];
+  return nodes.map((node) => {
+    const start = node.effectiveFrom ? dayNumber(node.effectiveFrom) : -Infinity;
+    const end = node.effectiveTo ? dayNumber(node.effectiveTo) : Infinity;
+    let row = occupied.findIndex((ranges) => ranges.every(([first, last]) => end < first || start > last));
+    if (row < 0) { row = occupied.length; occupied.push([]); }
+    occupied[row].push([start, end]);
+    return row;
+  });
+}
+
+export function MaterialTimelineBoard({ countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, canManageReference = false, canMaintainRelations = false, onViewModel }: Props) {
   const [showWvta, setShowWvta] = useState(false);
   const [expandedModels, setExpandedModels] = useState<string[]>([]);
   const countryKey = [...new Set(countries)].sort().join(",");
@@ -127,6 +142,7 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
       <label><input type="checkbox" checked={showWvta} onChange={(event) => setShowWvta(event.currentTarget.checked)} /> Show WVTA reference / 叠加WVTA参考（不改变BOM下单日期）</label>
       {canManageReference ? <WvtaReferenceUpload onSaved={() => setRevision((value) => value + 1)} /> : null}
     </div> : null}
+    {!bomEditing ? <MaterialNotices countries={countries} authorizationKey={authorizationKey} revision={revision} onViewModel={onViewModel} /> : null}
     {expanded && !busy && load.status === "ready" ? <div className="og-timeline-content">
       <p>As of / 按今天 {data[0]?.today} · {data[0]?.windowFrom} – {data[0]?.windowTo} · Not the selected order month / 不随选品月份</p>
       {showWvta ? <p className="og-wvta-source">{data[0]?.wvtaReference?.status === "ready"
@@ -151,10 +167,21 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
         {grouped.filter((group) => !focusModel || `${group.brand}|${group.model}` === focusModel).map((group) => {
           const item = data.find((value) => value.countryCode === group.country);
           const links = item?.links ?? [];
-          const byTemplate = new Map(group.nodes.map((node) => [node.bomTemplate, node]));
+          const byTemplate = new Map((item?.nodes ?? []).map((node) => [node.bomTemplate, node]));
           const seen = new Set<string>();
           const branches: MaterialTimelineNode[][] = [];
-          const heads = group.nodes.filter((node) => !links.some((link) => link.to === node.bomTemplate && byTemplate.has(link.from)));
+          const heads = group.nodes.map((seed) => {
+            let head = seed;
+            const visited = new Set<string>();
+            while (!visited.has(head.bomTemplate)) {
+              visited.add(head.bomTemplate);
+              const parent = links.find((link) => link.to === head.bomTemplate && byTemplate.has(link.from));
+              const previous = parent ? byTemplate.get(parent.from) : undefined;
+              if (!previous) break;
+              head = previous;
+            }
+            return head;
+          });
           for (const head of [...heads, ...group.nodes]) {
             if (seen.has(head.bomTemplate)) continue;
             const branch: MaterialTimelineNode[] = [];
@@ -169,12 +196,32 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
           return <details className="og-timeline-model" key={group.key} open={focusModel === `${group.brand}|${group.model}` || expandedModels.includes(group.key)}>
             <summary onClick={(event) => { event.preventDefault(); setExpandedModels((values) => values.includes(group.key) ? values.filter((key) => key !== group.key) : [...values, group.key]); }}>
               {group.country} · {group.brand} · {group.model} · {group.nodes.length} bases / 基准物料</summary>
-            <div className="og-timeline-axis"><span>Base / 基准物料</span><div>{[0, 25, 50, 75, 100].map((percent) => <span key={percent} style={{ left: `${percent}%` }}>
+            {branches.some((branch) => branch.length === 1) ? <div className="og-timeline-axis"><span>Base / 基准物料</span><div>{[0, 25, 50, 75, 100].map((percent) => <span key={percent} style={{ left: `${percent}%` }}>
               {new Date((left + (right - left) * percent / 100) * 86400000).toISOString().slice(0, 10)}
-            </span>)}</div></div>
-            {branches.map((branch) => <div className="og-timeline-branch" key={branch[0].bomTemplate}>
+            </span>)}</div></div> : null}
+            {branches.map((branch) => { const rows = chainRows(branch); return <div className="og-timeline-branch" key={branch[0].bomTemplate}>
               <div className="og-timeline-relationship">{branch.length > 1 ? `Saved relation / 已保存关联：${branch.map((node) => node.bomTemplate).join(" → ")}` : links.some((link) => link.from === branch[0].bomTemplate || link.to === branch[0].bomTemplate)
                 ? `Saved relation / 已保存关联：${links.filter((link) => link.from === branch[0].bomTemplate || link.to === branch[0].bomTemplate).map((link) => `${link.from} → ${link.to}`).join("；")}` : "Relation not maintained / 关联未维护"}</div>
+              {branch.length > 1 ? <div className="og-timeline-chain" aria-label="Linked product timeline / 已关联产品时间轴">
+                <div className="og-timeline-chain-nodes">{branch.map((node) => <button type="button" key={node.bomTemplate}
+                  className="og-timeline-node" style={{ borderLeftColor: orderGeniusPowertrainColor(node.powertrain) }}
+                  onClick={() => setSelected({ country: group.country, node })}>
+                  <strong>{node.bomTemplate}</strong><span>{node.modelName} · {node.version}</span>
+                  <span>{node.effectiveFrom ?? "Start not set / 起始未设"} → {node.effectiveTo ?? "End not set / 截止未设"}</span>
+                </button>)}</div>
+                <div className="og-timeline-chain-axis">{[0, 25, 50, 75, 100].map((percent) => <span key={percent} style={{ left: `${percent}%` }}>{new Date((left + (right - left) * percent / 100) * 86400000).toISOString().slice(0, 10)}</span>)}</div>
+                <div className="og-timeline-chain-track" style={{ minHeight: `${(Math.max(...rows) + 1) * 38 + 10}px` }}>
+                  <i className="og-timeline-today" style={{ left: `${position(item?.today ?? data[0].today)}%` }} aria-hidden="true" />
+                  {branch.map((node, index) => <div className="og-timeline-chain-generation" key={node.bomTemplate} style={{ top: `${rows[index] * 38 + 4}px` }}>
+                    {node.effectiveFrom || node.effectiveTo ? <button type="button" className={`og-timeline-chain-range is-${node.lifecycleStatus}`}
+                      style={{ left: `${node.effectiveFrom ? position(node.effectiveFrom) : 0}%`, width: `${Math.max(.25, (node.effectiveTo ? position(node.effectiveTo) : 100) - (node.effectiveFrom ? position(node.effectiveFrom) : 0))}%`, borderColor: orderGeniusPowertrainColor(node.powertrain) }}
+                      onClick={() => setSelected({ country: group.country, node })} title={`${node.bomTemplate} · ${node.effectiveFrom ?? "Start not set"} → ${node.effectiveTo ?? "End not set"}`}>
+                      {node.bomTemplate}{!node.effectiveFrom || !node.effectiveTo ? " · Open / 未设边界" : ""}
+                    </button> : <button type="button" className="og-timeline-chain-undated" onClick={() => setSelected({ country: group.country, node })}>{node.bomTemplate} · Dates not maintained / 日期待维护</button>}
+                  </div>)}
+                </div><small>One chain / 同一条链；重叠保留，未设边界不代表已核实有效期。</small>
+              </div> : null}
+              <details className="og-timeline-version-details" open={branch.length === 1 || showWvta}><summary>Version details / 版本详情及WVTA</summary>
               {branch.map((node) => <div className="og-timeline-lane" key={node.bomTemplate}>
                 <button type="button" className="og-timeline-node" aria-label={`${group.country} · ${node.bomTemplate} · ${node.version} · ${node.powertrain} · ${STATUS[node.lifecycleStatus]}`}
                   style={{ borderLeftColor: orderGeniusPowertrainColor(node.powertrain) }} onClick={() => setSelected({ country: group.country, node })}>
@@ -202,7 +249,8 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
                   </div> : null}
                 </div>
               </div>)}
-            </div>)}
+              </details>
+            </div>; })}
           </details>;
         })}
       </div>
@@ -215,6 +263,7 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
         {selectedNode.quoteReasons.map((reason) => <p key={reason}>{reason}</p>)}
         <p>Notes / 备注：{selectedNode.notes.join("；") || "Not maintained / 未维护"}</p>
         <p className="og-timeline-codes">{selectedNode.materialCodes.join(" · ")}</p>
+        {canMaintainRelations && selectedNode.brand ? <MaterialReplacementEditor brand={selectedNode.brand} bomTemplate={selectedNode.bomTemplate} onSaved={() => setRevision((value) => value + 1)} /> : null}
         {selected.certificate ? <div className="og-wvta-detail">
           <strong>Certificate reference only / 仅证书参考：{selected.certificate.sourceStatus}</strong>
           <p>{selected.certificate.wvtaNo} · {selected.certificate.cocNo}</p>
@@ -225,7 +274,7 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
         <button type="button" className="btn btn-sm btn-primary" disabled={!selectedNode.brand} onClick={() => onViewModel(selectedNode.brand, selectedNode.modelName)}>View model selection / 查看车型选品</button>
       </div> : null}
       </> : null}
-      <p>Dashed line = today. Order windows are inclusive. Certificate periods are not order dates. Read-only / 虚线＝今天，下单起止日含当天，证书期不替代下单日；本页只读，不改 PI、物料号或价格。</p>
+      <p>Dashed line = today. Order windows are inclusive. Certificate periods are not order dates. / 虚线＝今天，下单起止日含当天，证书期不替代下单日。关联维护不改PI、物料号或价格，Order Filler只读。</p>
     </div> : null}
   </section>;
 }

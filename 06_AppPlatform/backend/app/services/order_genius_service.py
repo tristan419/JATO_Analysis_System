@@ -11,7 +11,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.db.models import CountryTemplateFobPeriod, CountrySkuFobResolved, MaterialSkuMaster, MaterialLifecycle
+from app.db.models import CountryTemplateFobPeriod, CountrySkuFobResolved, MaterialSkuMaster, MaterialLifecycle, MaterialReplacement
 
 from app.infra import order_genius_repository as repo
 from app.services.material_master_parser import parse_material_master_xlsx, _infer_interior_from_tail_code
@@ -711,6 +711,22 @@ def build_material_timeline(
             invalid_links.add(template)
         elif template not in invalid_links:
             links.add((template, next(iter(successors))))
+    replacements = session.execute(select(MaterialReplacement)).scalars().all()
+    replacement_notes: dict[str, str] = {}
+    for record in replacements:
+        source_members = groups.get(record.source_template, [])
+        if not source_members or {sku.brand.strip().upper() for sku in source_members} != {record.brand}:
+            continue
+        # Explicit base maintenance supersedes the old SKU-level relation, including unlink.
+        links = {(source, target) for source, target in links if source != record.source_template}
+        invalid_links.discard(record.source_template)
+        replacement_notes[record.source_template] = record.note or ""
+        if record.target_template:
+            target_members = groups.get(record.target_template, [])
+            if target_members and {sku.brand.strip().upper() for sku in target_members} == {record.brand} and record.source_template != record.target_template:
+                links.add((record.source_template, record.target_template))
+            else:
+                invalid_links.add(record.source_template)
     successors_by_template = dict(links)
     for template in successors_by_template:
         path: list[str] = []
@@ -776,7 +792,8 @@ def build_material_timeline(
             "lifecycleStatus": next(iter(statuses)) if len(statuses) == 1 else "review",
             "effectiveFrom": first.isoformat() if first else None,
             "effectiveTo": last.isoformat() if last else None,
-            "notes": sorted({sku.remark.strip() for sku in members if sku.remark and sku.remark.strip()}),
+            "notes": sorted({sku.remark.strip() for sku in members if sku.remark and sku.remark.strip()}
+                            | ({replacement_notes[template]} if replacement_notes.get(template) else set())),
             "issues": issues, "quoteDate": reference.isoformat(),
             "quotedSkuCount": ready if not metadata_conflict else 0,
             "quoteReasons": sorted(reasons),
@@ -791,7 +808,7 @@ def build_material_timeline(
         "windowFrom": (today - timedelta(days=30)).isoformat(),
         "windowTo": (today + timedelta(days=30)).isoformat(),
         "nodes": nodes,
-        "links": [{"from": source, "to": target} for source, target in sorted(links) if source in visible and target in visible],
+        "links": [{"from": source, "to": target, "note": replacement_notes.get(source, "")} for source, target in sorted(links) if source in visible and target in visible],
         "events": sorted(events, key=lambda event: (event["date"], event["bomTemplate"], event["kind"])),
     }
 
