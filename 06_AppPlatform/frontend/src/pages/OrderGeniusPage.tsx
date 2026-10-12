@@ -14,6 +14,7 @@ import {
 import { animate } from "animejs";
 import { createPortal } from "react-dom";
 import { BomTemplateLifecycleEditor } from "../components/orderGenius/BomTemplateLifecycleEditor";
+import { MaterialTimelineBoard } from "../components/orderGenius/MaterialTimelineBoard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PiInvoiceExportDialog } from "../components/PiInvoiceExportDialog";
 
@@ -27,6 +28,8 @@ import { formatCountryCodeTooltip } from "../utils/jatoCountries";
 import { compareProductModels } from "../utils/orderGeniusProductSort";
 import {
   buildBomEditScopeKey,
+  orderGeniusPowertrainColor as ptColor,
+  ORDER_GENIUS_POWERTRAIN_COLORS as PT_COLORS,
   resolveBomAdminColourTier,
   type BomAdminColourTier,
 } from "../utils/orderGeniusBomAdmin";
@@ -626,6 +629,7 @@ export function OrderGeniusPage() {
   // ── Filter state ──────────────────────────────────────────────────
   const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
   const [selectedCountries, setSelectedCountries] = useState<string[]>(allCountriesISO);
+  const timelineCountries = isAdmin ? selectedCountries : selectedCountries.filter((country) => userCountries.includes(country));
   const primaryCountry = selectedCountries[0] ?? "SE";
   const [countrySearchQuery, setCountrySearchQuery] = useState("");
   const [countryPickerOpen, setCountryPickerOpen] = useState(false);
@@ -3427,6 +3431,19 @@ export function OrderGeniusPage() {
         </div>
       ) : null}
 
+      {canFillOrders && timelineCountries.length > 0 ? <MaterialTimelineBoard
+        key={authorizationKey}
+        countries={timelineCountries}
+        selectionRows={combinedMatrix.rows}
+        selectionComplete={!loading && !error && selectedCountries.every((country) => Boolean(matrices[country])) && combinedMatrix.rows.length >= combinedMatrix.totalRows}
+        authorizationKey={authorizationKey}
+        bomEditing={showBomAdmin}
+        onViewModel={(brand, model) => {
+          setBrandFilter(brand); setModelFilter(model); setPowertrainFilter("");
+          setVersionFilter(""); setColourFilter(""); setMaterialSearch("");
+        }}
+      /> : null}
+
       {/* ── Matrix grid (AG Grid) ─────────────────────────────────── */}
       {loading ? (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
@@ -3510,13 +3527,6 @@ export function OrderGeniusPage() {
 }
 
 // ── Powertrain colour map ────────────────────────────────────────────────
-
-// Powertrain family colors — must match powertrain_normalizer.py POWERTRAIN_COLORS
-const PT_COLORS: Record<string, string> = {
-  EV: "#16a34a", BEV: "#16a34a", HEV: "#d97706", PHEV: "#2563eb", SHS: "#2563eb",
-  MHEV: "#ca8a04", ICE: "#4b5563", LPG: "#6b7280", REEV: "#0d9488", FCV: "#0891b2",
-};
-function ptColor(pt: string | null): string { return PT_COLORS[pt ?? ""] ?? "#9ca3af"; }
 
 type BomCopyDraftSku = {
   sourceMaterialCode: string;

@@ -1,3 +1,30 @@
+export interface MaterialTimelineNode {
+  bomTemplate: string;
+  brand: string;
+  modelName: string;
+  version: string;
+  powertrain: string;
+  materialCodes: string[];
+  lifecycleStatus: string;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  notes: string[];
+  issues: string[];
+  quoteDate: string;
+  quotedSkuCount: number;
+  quoteReasons: string[];
+}
+
+export interface MaterialTimelineResponse {
+  countryCode: string;
+  today: string;
+  windowFrom: string;
+  windowTo: string;
+  nodes: MaterialTimelineNode[];
+  links: Array<{ from: string; to: string }>;
+  events: Array<{ bomTemplate: string; kind: "start" | "end"; date: string }>;
+}
+
 export interface OrderGeniusOptions {
   countryCode: string;
   paymentTermCode: string | null;

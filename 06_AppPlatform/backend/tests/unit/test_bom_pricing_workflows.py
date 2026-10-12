@@ -31,7 +31,7 @@ def db():
               models.BrandColourSwatchRule, models.CountryPaymentTermMaster,
               models.CountryMaterialFinance, models.CountryFobSourceMapping,
               models.CountryTemplateFobPeriod, models.OrderQuantityCell,
-              models.QuantityCellHistory, models.MaterialSkuRemarkHistory]
+              models.QuantityCellHistory, models.MaterialSkuRemarkHistory, models.MaterialLifecycle]
     metadata = MetaData()
     for model in tables:
         table = model.__table__.to_metadata(metadata)
@@ -1221,3 +1221,205 @@ def test_country_fob_fallback_is_country_only_and_rejects_conflicting_sources(db
     db.flush()
     with pytest.raises(ValueError, match="Conflicting FOB source mappings"):
         repo.get_country_fob_source_mapping(db, "RO", "TT")
+
+
+def timeline_link(db, source, target, country="CH"):
+    db.add(models.MaterialLifecycle(country_code=country, material_code=source,
+        product_identity="JAECOO|Model|Version|BEV", valid_from=date.today() - timedelta(days=90),
+        replaced_by_code=target, lifecycle_status="replaced", remark="Certificate period is not an order date"))
+    db.flush()
+
+
+def test_timeline_country_brand_scope_and_no_model_guess(db):
+    sku(db, "A", "single", template="OLD")
+    sku(db, "B", "single", template="NEXT")
+    sku(db, "OMODA", "single", brand="OMODA", template="OTHER BRAND")
+    fob(db, "A", 1000, base=1000, country="CH")
+    fob(db, "B", 1000, base=1000, country="SE")
+    fob(db, "OMODA", 1000, base=1000, country="CH")
+    result = service.build_material_timeline(db, "CH", allowed_brands={"JAECOO"})
+    assert [node["bomTemplate"] for node in result["nodes"]] == ["OLD"]
+    assert result["links"] == result["events"] == []
+    assert service.build_material_timeline(db, "CH", allowed_brands=set())["nodes"] == []
+    assert len(service.build_material_timeline(db, "CH", allowed_brands=None)["nodes"]) == 2
+
+
+def test_timeline_explicit_chain_includes_history_and_unquoted_successor_only_in_its_country(db):
+    old = sku(db, "A", "single", template="OLD")
+    old.lifecycle_status = "historical"
+    old.is_active = False
+    sku(db, "B", "single", template="MID")
+    sku(db, "C", "single", template="NEXT")
+    fob(db, "A", 1000, base=1000, country="CH")
+    fob(db, "A", 1000, base=1000, country="SE")
+    timeline_link(db, "A", "B")
+    timeline_link(db, "B", "C")
+    result = service.build_material_timeline(db, "CH", allowed_brands={"JAECOO"})
+    assert {node["bomTemplate"] for node in result["nodes"]} == {"OLD", "MID", "NEXT"}
+    assert len(result["links"]) == 2
+    assert all(node["effectiveFrom"] is None and node["effectiveTo"] is None for node in result["nodes"])
+    assert result["events"] == []  # Never borrow the lifecycle/certificate evidence date.
+    assert all(node["quotedSkuCount"] == 0 for node in result["nodes"])
+    other = service.build_material_timeline(db, "SE", allowed_brands={"JAECOO"})
+    assert [node["bomTemplate"] for node in other["nodes"]] == ["OLD"]
+
+
+def test_timeline_dates_events_are_per_base_and_read_only(db):
+    from sqlalchemy import event
+    first = sku(db, "A", "single")
+    second = sku(db, "B", "dual")
+    for value in (first, second):
+        value.effective_from_date = date.today() - timedelta(days=2)
+        value.effective_to_date = date.today() + timedelta(days=3)
+        value.remark = "Upgrade note"
+    fob(db, "A", 1000, base=1000)
+    fob(db, "B", 1300, base=1000, surcharge=300)
+    db.commit()
+    statements = []
+    def capture(_conn, _cursor, statement, _params, _context, _many):
+        statements.append(statement.lstrip().split()[0].upper())
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        result = service.build_material_timeline(db, "CH", allowed_brands={"JAECOO"})
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert len(result["nodes"]) == 1 and len(result["events"]) == 2
+    assert result["nodes"][0]["quotedSkuCount"] == 2
+    assert result["nodes"][0]["notes"] == ["Upgrade note"]
+    assert not set(statements) & {"INSERT", "UPDATE", "DELETE"}
+    assert not db.new and not db.dirty
+
+
+@pytest.mark.parametrize("offset,included", [(-31, False), (-30, True), (30, True), (31, False)])
+def test_timeline_event_window_boundaries(db, offset, included):
+    value = sku(db, "A", "single")
+    value.effective_from_date = date.today() + timedelta(days=offset)
+    fob(db, "A", 1000, base=1000)
+    result = service.build_material_timeline(db, "CH", allowed_brands=None)
+    assert bool(result["events"]) == included
+
+
+def test_timeline_country_period_gap_does_not_fall_back_to_default(db):
+    value = sku(db, "A", "single")
+    fob(db, "A", 1000, base=1000)
+    today = date.today()
+    db.add(models.CountryTemplateFobPeriod(country_code="CH", bom_template=value.bom_template,
+        valid_from=today + timedelta(days=5), base_fob_eur=2000, status="active"))
+    db.flush()
+    result = service.build_material_timeline(db, "CH", allowed_brands=None)
+    assert result["nodes"][0]["quotedSkuCount"] == 0
+    assert result["nodes"][0]["quoteDate"] == today.isoformat()
+    assert result["nodes"][0]["quoteReasons"]
+
+
+def test_timeline_metadata_conflict_stops_events_and_quote_claim(db):
+    first = sku(db, "A", "single")
+    second = sku(db, "B", "single")
+    first.effective_from_date = date.today()
+    second.effective_from_date = date.today() + timedelta(days=1)
+    fob(db, "A", 1000, base=1000)
+    result = service.build_material_timeline(db, "CH", allowed_brands=None)
+    node = result["nodes"][0]
+    assert node["effectiveFrom"] is None and node["issues"]
+    assert node["quotedSkuCount"] == 0 and result["events"] == []
+
+
+@pytest.mark.parametrize("problem", ["cycle", "partial", "other_brand"])
+def test_timeline_does_not_turn_invalid_sku_relations_into_base_chains(db, problem):
+    sku(db, "A", "single", template="OLD")
+    sku(db, "B", "single", template="NEXT", brand="OMODA" if problem == "other_brand" else "JAECOO")
+    fob(db, "A", 1000, base=1000)
+    timeline_link(db, "A", "B")
+    if problem == "cycle":
+        timeline_link(db, "B", "A")
+    if problem == "partial":
+        sku(db, "A2", "single", template="OLD")
+        fob(db, "A2", 1000, base=1000)
+    result = service.build_material_timeline(db, "CH", allowed_brands={"JAECOO"})
+    assert result["links"] == []
+    assert [node["bomTemplate"] for node in result["nodes"]] == ["OLD"]
+    assert result["nodes"][0]["issues"]
+    assert "OMODA" not in str(result)
+
+
+@pytest.mark.parametrize("role,country,brands,expected", [
+    ("viewer", "SE", ["JAECOO"], 403),
+    ("order_filler", "CH", ["JAECOO"], 403),
+    ("order_filler", "SE", ["JAECOO"], 200),
+    ("order_filler", "SE", [], 200),
+    ("editor", "SE", ["JAECOO"], 200),
+    ("admin", "CH", [], 200),
+    ("developer", "CH", [], 200),
+])
+def test_timeline_http_uses_saved_country_brand_and_existing_role_guard(monkeypatch, role, country, brands, expected):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.core.security import UserContext, get_current_user
+    from app.db.session import get_db_session
+    account = SimpleNamespace(primary_country_code="SE", secondary_country_codes=[], brands=brands)
+    class AccountQuery:
+        def filter(self, *_args):
+            return self
+        def first(self):
+            return account
+    session = SimpleNamespace(query=lambda _model: AccountQuery())
+    calls = []
+    def read(_session, country_code, *, allowed_brands):
+        calls.append((country_code, allowed_brands))
+        return {"countryCode": country_code, "nodes": []}
+    monkeypatch.setattr(routes, "build_material_timeline", read)
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.dependency_overrides[get_current_user] = lambda: UserContext(name="test", role=role)
+    app.dependency_overrides[get_db_session] = lambda: session
+    with TestClient(app) as client:
+        response = client.get(f"/order-genius/material-timeline?country={country}&brand=OMODA")
+    assert response.status_code == expected
+    if expected == 200:
+        assert calls == [(country, None if role in {"admin", "developer"} else set(brands))]
+    else:
+        assert calls == []
+
+
+def test_timeline_deleted_period_resumes_existing_default_and_future_quote_uses_first_order_day(db):
+    value = sku(db, "A", "single")
+    value.effective_from_date = date.today() + timedelta(days=15)
+    fob(db, "A", 1000, base=1000)
+    db.add(models.CountryTemplateFobPeriod(country_code="CH", bom_template=value.bom_template,
+        valid_from=date.today(), base_fob_eur=0, status="deleted"))
+    db.flush()
+    result = service.build_material_timeline(db, "CH", allowed_brands=None)
+    assert result["nodes"][0]["quotedSkuCount"] == 1
+    assert result["nodes"][0]["quoteDate"] == value.effective_from_date.isoformat()
+    assert result["nodes"][0]["lifecycleStatus"] == "not_yet_active"
+
+
+def test_timeline_zero_period_never_becomes_a_positive_quote(db):
+    value = sku(db, "A", "dual")
+    fob(db, "A", 1300, base=1000, surcharge=300)
+    db.add(models.CountryTemplateFobPeriod(country_code="CH", bom_template=value.bom_template,
+        valid_from=date.today(), base_fob_eur=0, status="active"))
+    db.flush()
+    result = service.build_material_timeline(db, "CH", allowed_brands=None)
+    assert result["nodes"][0]["quotedSkuCount"] == 0
+
+
+def test_timeline_base_detail_does_not_reveal_other_markets_colour_skus(db):
+    sku(db, "CH-COLOUR", "single")
+    sku(db, "NL-ONLY-COLOUR", "single")
+    fob(db, "CH-COLOUR", 1000, base=1000)
+    fob(db, "NL-ONLY-COLOUR", 1000, base=1000, country="NL")
+    result = service.build_material_timeline(db, "CH", allowed_brands={"JAECOO"})
+    assert result["nodes"][0]["materialCodes"] == ["CH-COLOUR"]
+    assert "NL-ONLY-COLOUR" not in str(result)
+
+
+def test_timeline_incomplete_relation_does_not_suppress_trustworthy_dates(db):
+    value = sku(db, "A", "single")
+    value.effective_to_date = date.today() + timedelta(days=1)
+    fob(db, "A", 1000, base=1000)
+    timeline_link(db, "A", "MISSING")
+    result = service.build_material_timeline(db, "CH", allowed_brands=None)
+    assert result["nodes"][0]["issues"]
+    assert result["events"] == [{"bomTemplate": "T**001", "kind": "end", "date": value.effective_to_date.isoformat()}]

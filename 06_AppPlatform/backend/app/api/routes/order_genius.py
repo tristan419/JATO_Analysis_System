@@ -36,6 +36,7 @@ from app.services.order_genius_service import (
     apply_order_quantity_import,
     build_matrix,
     build_matrix_batch,
+    build_material_timeline,
     build_options,
     export_matrix,
     export_pi_matrix,
@@ -2292,6 +2293,17 @@ def list_material_skus_admin(
             for r in rows
         ],
     }
+
+
+@router.get("/material-timeline")
+def get_material_timeline(
+    country: str = Query(min_length=2, max_length=2),
+    session: Session = Depends(get_db_session),
+    user=Depends(require_roles("order_filler", "editor", "admin", "developer")),
+) -> dict:
+    country = country.strip().upper()
+    validate_country_access(session, user.name, user.role, country)
+    return build_material_timeline(session, country, allowed_brands=ordering_brands(session, user))
 
 
 @router.get("/material-lifecycle")

@@ -5,12 +5,13 @@ from __future__ import annotations
 import io
 import uuid as uuid_module
 from calendar import monthrange
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.db.models import CountryTemplateFobPeriod, CountrySkuFobResolved, MaterialSkuMaster
+from app.db.models import CountryTemplateFobPeriod, CountrySkuFobResolved, MaterialSkuMaster, MaterialLifecycle
 
 from app.infra import order_genius_repository as repo
 from app.services.material_master_parser import parse_material_master_xlsx, _infer_interior_from_tail_code
@@ -650,6 +651,149 @@ def resolve_month_effective_fob(
                    + ("; choose an available orderDate for PI / PI 请选择有效下单日" if not full_month else "")),
     })
     return result
+
+
+def build_material_timeline(
+    session: Session, country_code: str, *, allowed_brands: set[str] | None,
+    today: date | None = None,
+) -> dict:
+    """Read-only model/base projection; certificate dates never supply order dates."""
+    today = today or date.today()
+    skus = repo.list_all_material_skus_for_admin(session, allowed_brands=allowed_brands, limit=None)
+    by_code = {sku.material_code: sku for sku in skus if sku.bom_template}
+    fobs, conflicts = repo.list_fobs_for_country_material_codes(
+        session, country_code, list(by_code), include_conflicts=True,
+    )
+    conflict_codes = {str(row["materialCode"]) for row in conflicts}
+    periods = session.execute(select(CountryTemplateFobPeriod).where(
+        CountryTemplateFobPeriod.country_code == country_code,
+        CountryTemplateFobPeriod.status == "active",
+        CountryTemplateFobPeriod.bom_template.in_({sku.bom_template for sku in by_code.values()}),
+    )).scalars().all()
+    schedules: dict[str, list[CountryTemplateFobPeriod]] = {}
+    for period in periods:
+        schedules.setdefault(period.bom_template, []).append(period)
+    groups: dict[str, list[MaterialSkuMaster]] = {}
+    for sku in by_code.values():
+        groups.setdefault(sku.bom_template, []).append(sku)
+    # A quote is the country-specific anchor, not an inferred model/name match.
+    visible = {template for template, members in groups.items() if
+               any(member.material_code in fobs or member.material_code in conflict_codes for member in members)
+               or any(float(period.base_fob_eur) > 0 for period in schedules.get(template, []))}
+    records = session.execute(select(MaterialLifecycle).where(
+        MaterialLifecycle.country_code == country_code,
+        MaterialLifecycle.material_code.in_(by_code),
+    )).scalars().all()
+    country_materials = set(fobs) | conflict_codes | {
+        sku.material_code for sku in by_code.values()
+        if any(float(period.base_fob_eur) > 0 for period in schedules.get(sku.bom_template, []))
+    }
+    country_materials.update(record.material_code for record in records)
+    links: set[tuple[str, str]] = set()
+    invalid_links: set[str] = set()
+    targets: dict[str, dict[str, set[str]]] = {}
+    for record in records:
+        if not record.replaced_by_code:
+            continue
+        source = by_code[record.material_code]
+        country_materials.add(source.material_code)
+        target = by_code.get(record.replaced_by_code)
+        if target is None or (source.brand or "").strip().upper() != (target.brand or "").strip().upper():
+            invalid_links.add(source.bom_template)
+        elif source.bom_template != target.bom_template:
+            country_materials.add(target.material_code)
+            targets.setdefault(source.bom_template, {}).setdefault(source.material_code, set()).add(target.bom_template)
+        else:
+            invalid_links.add(source.bom_template)
+    for template, by_material in targets.items():
+        successors = {target for values in by_material.values() for target in values}
+        if len(successors) != 1 or set(by_material) != {sku.material_code for sku in groups[template] if sku.material_code in country_materials}:
+            invalid_links.add(template)
+        elif template not in invalid_links:
+            links.add((template, next(iter(successors))))
+    successors_by_template = dict(links)
+    for template in successors_by_template:
+        path: list[str] = []
+        current = template
+        while current in successors_by_template and current not in path:
+            path.append(current)
+            current = successors_by_template[current]
+        if current in path:
+            invalid_links.update(path[path.index(current):])
+    links = {(source, target) for source, target in links if source not in invalid_links}
+    # Only explicit records for this country can expand its quoted product scope.
+    pending = list(visible)
+    neighbours: dict[str, set[str]] = {}
+    for source, target in links:
+        neighbours.setdefault(source, set()).add(target)
+        neighbours.setdefault(target, set()).add(source)
+    while pending:
+        for template in neighbours.get(pending.pop(), set()) - visible:
+            visible.add(template)
+            pending.append(template)
+    nodes: list[dict] = []
+    events: list[dict] = []
+    for template in sorted(visible):
+        members = [sku for sku in groups[template] if sku.material_code in country_materials]
+        identities = {(sku.brand or "", sku.model_name or "", sku.version or "", _extract_canonical_pt(sku)) for sku in groups[template]}
+        windows = {repo.get_lifecycle_dates(sku) for sku in groups[template]}
+        statuses = {repo.resolve_effective_lifecycle_status(sku, today) for sku in groups[template]}
+        issues = []
+        metadata_conflict = len(identities) != 1 or len(windows) != 1 or len(statuses) != 1
+        if metadata_conflict:
+            issues.append("Conflicting base metadata/dates; review BOM / 基准物料信息或日期不一致，请核对 BOM")
+        if template in invalid_links:
+            issues.append("Replacement reference unavailable; review relation / 更替引用不可用，请核对关联")
+        brand, model, version, powertrain = next(iter(identities)) if len(identities) == 1 else ("", "", "", "OTHER")
+        first, last = next(iter(windows)) if len(windows) == 1 else (None, None)
+        if first and last and first > last:
+            metadata_conflict = True
+            issues.append("Invalid order date window / 下单日期窗口无效")
+        reference = max(today, first or today)
+        ready = 0
+        reasons: set[str] = set()
+        for sku in members:
+            if not sku.is_active:
+                reasons.add("Archived material; not available for ordinary new orders / 已归档，不可普通下新单")
+                continue
+            if sku.material_code in conflict_codes:
+                reasons.add("Conflicting country FOB; review BOM / 国家报价冲突，请核对 BOM")
+                continue
+            quote = resolve_month_effective_fob(
+                session, country_code, sku, reference.year, reference.month,
+                default_fob=fobs.get(sku.material_code), periods=schedules.get(template, []),
+                uses_periods=bool(schedules.get(template)),
+                colour_pricing=repo.resolve_colour_surcharge_for_sku(session, sku, repo.resolve_effective_colour_tier(sku)),
+            )
+            if quote["isEditable"] and any(span["from"] <= reference.isoformat() <= span["to"] for span in quote["availableRanges"]):
+                ready += 1
+            else:
+                reasons.add(quote["reason"] or "No country quote on reference date / 参考日无国家报价")
+        node = {
+            "bomTemplate": template, "brand": brand, "modelName": model or "Review BOM / 核对 BOM",
+            "version": version, "powertrain": powertrain,
+            "materialCodes": sorted(sku.material_code for sku in members),
+            "lifecycleStatus": next(iter(statuses)) if len(statuses) == 1 else "review",
+            "effectiveFrom": first.isoformat() if first else None,
+            "effectiveTo": last.isoformat() if last else None,
+            "notes": sorted({sku.remark.strip() for sku in members if sku.remark and sku.remark.strip()}),
+            "issues": issues, "quoteDate": reference.isoformat(),
+            "quotedSkuCount": ready if not metadata_conflict else 0,
+            "quoteReasons": sorted(reasons),
+        }
+        nodes.append(node)
+        if not metadata_conflict:
+            for kind, day in (("start", first), ("end", last)):
+                if day and today - timedelta(days=30) <= day <= today + timedelta(days=30):
+                    events.append({"bomTemplate": template, "kind": kind, "date": day.isoformat()})
+    return {
+        "countryCode": country_code, "today": today.isoformat(),
+        "windowFrom": (today - timedelta(days=30)).isoformat(),
+        "windowTo": (today + timedelta(days=30)).isoformat(),
+        "nodes": nodes,
+        "links": [{"from": source, "to": target} for source, target in sorted(links) if source in visible and target in visible],
+        "events": sorted(events, key=lambda event: (event["date"], event["bomTemplate"], event["kind"])),
+    }
 
 
 def _historical_surcharge_review(

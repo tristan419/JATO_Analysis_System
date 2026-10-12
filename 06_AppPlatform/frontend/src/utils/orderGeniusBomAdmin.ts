@@ -1,3 +1,12 @@
+// Order Genius business palette; do not substitute Market Scan's palette.
+export const ORDER_GENIUS_POWERTRAIN_COLORS: Record<string, string> = {
+  EV: "#16a34a", BEV: "#16a34a", HEV: "#d97706", PHEV: "#2563eb", SHS: "#2563eb",
+  MHEV: "#ca8a04", ICE: "#4b5563", LPG: "#6b7280", REEV: "#0d9488", FCV: "#0891b2",
+};
+export function orderGeniusPowertrainColor(powertrain: string | null): string {
+  return ORDER_GENIUS_POWERTRAIN_COLORS[powertrain ?? ""] ?? "#9ca3af";
+}
+
 export function buildBomEditScopeKey(
   modelGroupKey: string,
   versionKey: string,
