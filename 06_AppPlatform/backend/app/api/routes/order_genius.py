@@ -46,6 +46,7 @@ from app.services.order_genius_service import (
     update_remark,
 )
 from app.services.ordering_normalization import clean_text, normalize_brand, normalize_brand_text
+from app.services.coc_fill_service import read_wvta_reference, set_wvta_reference
 from app.services.order_quantity_parser import parse_order_quantity_xlsx
 
 router = APIRouter(prefix="/order-genius", tags=["order_genius"])
@@ -2300,10 +2301,23 @@ def get_material_timeline(
     country: str = Query(min_length=2, max_length=2),
     session: Session = Depends(get_db_session),
     user=Depends(require_roles("order_filler", "editor", "admin", "developer")),
+    include_wvta: bool = False,
 ) -> dict:
     country = country.strip().upper()
     validate_country_access(session, user.name, user.role, country)
-    return build_material_timeline(session, country, allowed_brands=ordering_brands(session, user))
+    result = build_material_timeline(session, country, allowed_brands=ordering_brands(session, user))
+    if include_wvta:
+        result["wvtaReference"] = read_wvta_reference(country, result["nodes"])
+    return result
+
+
+@router.post("/wvta-reference")
+def post_wvta_reference(
+    body: dict,
+    user=Depends(require_roles("admin", "developer")),
+) -> dict:
+    return set_wvta_reference(str(body.get("uploadId") or ""), triggered_by=user.name,
+                              expected_sha256=str(body.get("sha256") or ""))
 
 
 @router.get("/material-lifecycle")

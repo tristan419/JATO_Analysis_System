@@ -4874,22 +4874,12 @@ export const api = {
     }),
   }).then((res) => ({ item: mapCocFillJob(res.item) })),
 
-  cocFillUploadAndCreateJob: async (
-    excel: File,
-    pdf: File,
-    options?: { overwriteExisting?: boolean; conflictStrategy?: string; includeResultSheet?: boolean; sheetNames?: string[] },
-  ): Promise<{ item: CocFillJob }> => {
-    const CHUNK_THRESHOLD = 50 * 1024 * 1024;
+  cocFillUploadFile: async (file: File, resumeKey?: string): Promise<string> => {
     const CHUNK_SIZE = 8 * 1024 * 1024;
-    if (excel.size < CHUNK_THRESHOLD && pdf.size < CHUNK_THRESHOLD) {
-      return api.cocFillCreateJob(excel, pdf, options);
-    }
-
-    const uploadFile = async (file: File): Promise<string> => {
       const session = await api.cocFillInitiateUpload(
         file.name,
         file.size,
-        `coc-fill-resume-${file.name}-${file.size}`,
+        resumeKey ?? `coc-fill-resume-${file.name}-${file.size}`,
       );
       const uploadId = String(session.uploadId ?? "");
       const received: number[] = Array.isArray(session.receivedChunks)
@@ -4904,10 +4894,20 @@ export const api = {
       }
       await api.cocFillCompleteUpload(uploadId);
       return uploadId;
-    };
+  },
 
-    const excelUploadId = await uploadFile(excel);
-    const pdfUploadId = await uploadFile(pdf);
+  cocFillUploadAndCreateJob: async (
+    excel: File,
+    pdf: File,
+    options?: { overwriteExisting?: boolean; conflictStrategy?: string; includeResultSheet?: boolean; sheetNames?: string[] },
+  ): Promise<{ item: CocFillJob }> => {
+    const CHUNK_THRESHOLD = 50 * 1024 * 1024;
+    if (excel.size < CHUNK_THRESHOLD && pdf.size < CHUNK_THRESHOLD) {
+      return api.cocFillCreateJob(excel, pdf, options);
+    }
+
+    const excelUploadId = await api.cocFillUploadFile(excel);
+    const pdfUploadId = await api.cocFillUploadFile(pdf);
     return api.cocFillCreateJobFromUpload(
       excelUploadId,
       pdfUploadId,
@@ -5010,8 +5010,12 @@ export const api = {
       { method: "POST", body: JSON.stringify({ notes }) },
     ).then(mapPublishBaselineResponse),
 
-  getMaterialTimeline: (country: string) => request<MaterialTimelineResponse>(
-    `/order-genius/material-timeline?${new URLSearchParams({ country })}`,
+  setWvtaReference: (uploadId: string, sha256: string) => request<{ filename: string; sha256: string; recordCount: number; reviewCount: number; cancelledCount: number }>(
+    "/order-genius/wvta-reference", { method: "POST", body: JSON.stringify({ uploadId, sha256 }) },
+  ),
+
+  getMaterialTimeline: (country: string, includeWvta = false) => request<MaterialTimelineResponse>(
+    `/order-genius/material-timeline?${new URLSearchParams({ country })}${includeWvta ? "&include_wvta=true" : ""}`,
   ),
 
   getOrderGeniusOptions: (params: {
