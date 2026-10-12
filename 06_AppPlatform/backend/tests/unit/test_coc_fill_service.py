@@ -187,7 +187,10 @@ def test_country_scope_uses_explicit_coc_markers_and_nordic_region():
     assert not service.certificate_matches_country("CH", "", "COC-波兰专用")
     assert service.certificate_matches_country("PL", "", "COC-波兰专用")
     assert service.certificate_matches_country("SE", "北欧物料号")
-    assert not service.certificate_matches_country("CH", "北欧物料号")
+    assert service.certificate_matches_country("CH", "北欧物料号")
+    assert service.certificate_matches_country("SE", "北欧专用COC")
+    assert not service.certificate_matches_country("CH", "北欧专用COC")
+    assert not service.certificate_matches_country("CH", "", "COC-NORDIC ONLY")
     assert not service.certificate_matches_country("SE", "葡萄牙专用")
 
 
