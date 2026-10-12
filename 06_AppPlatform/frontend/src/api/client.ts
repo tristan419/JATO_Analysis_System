@@ -150,6 +150,8 @@ import type {
 import type {
   BaselineVersion,
   MaterialTimelineResponse,
+  MaterialReplacementCatalog,
+  MaterialNotice,
   BomTemplateLifecycleUpdateRequest,
   BomTemplateLifecycleUpdateResponse,
   BomLifecycleReviewResponse,
@@ -5014,6 +5016,13 @@ export const api = {
     "/order-genius/wvta-reference", { method: "POST", body: JSON.stringify({ uploadId, sha256 }) },
   ),
 
+  getMaterialReplacements: () => request<MaterialReplacementCatalog>("/order-genius/material-replacements"),
+  saveMaterialReplacement: (body: { brand: string; from: string; to: string | null; note: string; rowVersion: number }) =>
+    request<{ changed: boolean; rowVersion: number }>("/order-genius/material-replacements", { method: "PUT", body: JSON.stringify(body) }),
+  getMaterialNotices: (country: string) => request<{ countryCode: string; notices: MaterialNotice[] }>(
+    `/order-genius/material-notices?country=${encodeURIComponent(country)}`),
+  readMaterialNotice: (key: string, country: string, read: boolean) => request<{ read: boolean }>(
+    `/order-genius/material-notices/${encodeURIComponent(key)}/read`, { method: "PUT", body: JSON.stringify({ country, read }) }),
   getMaterialTimeline: (country: string, includeWvta = false) => request<MaterialTimelineResponse>(
     `/order-genius/material-timeline?${new URLSearchParams({ country })}${includeWvta ? "&include_wvta=true" : ""}`,
   ),

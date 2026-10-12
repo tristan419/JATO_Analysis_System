@@ -2459,6 +2459,29 @@ class MaterialSkuRemarkHistory(Base):
     )
 
 
+class MaterialReplacement(Base):
+    """Explicit shared base relationship; never supplies order/certificate dates."""
+    __tablename__ = "material_replacement"
+    __table_args__ = (UniqueConstraint("brand", "target_template", name="uq_material_replacement_target"), {"schema": "ordering"})
+    brand: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_template: Mapped[str] = mapped_column(Text, primary_key=True)
+    target_template: Mapped[str | None] = mapped_column(Text)
+    previous_target: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    changed_by: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class MaterialNoticeRead(Base):
+    """Per-account acknowledgement of exact material reminder content."""
+    __tablename__ = "material_notice_read"
+    __table_args__ = ({"schema": "ordering"},)
+    user_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    notice_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class MaterialLifecycle(Base):
     """Country-level material validity timeline.
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client";
 import { MaterialTimelineBoard } from "../../components/orderGenius/MaterialTimelineBoard";
 import type { MaterialTimelineNode, MaterialTimelineResponse } from "../../types/orderGenius";
@@ -16,6 +16,7 @@ const dataset = (countryCode = "SE", nodes = [node("NEW")]): MaterialTimelineRes
   events: nodes.flatMap((value) => value.effectiveFrom ? [{ bomTemplate: value.bomTemplate, kind: "start" as const, date: value.effectiveFrom }] : []),
 });
 const props = { countries: ["SE"], authorizationKey: "filler-SE-JAECOO", selectionRows: [], selectionComplete: true, onViewModel: vi.fn() };
+beforeEach(() => { vi.spyOn(api, "getMaterialNotices").mockImplementation(async (country) => ({ countryCode: country, notices: [] })); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); props.onViewModel.mockClear(); });
 async function expand() {
   await waitFor(() => expect(screen.getByRole("status").textContent).not.toContain("Loading"));
@@ -23,6 +24,13 @@ async function expand() {
 }
 
 describe("Model material changes board", () => {
+  it("keeps personal reminder countries independent of the temporary timeline filter", async () => {
+    const timeline = vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country) => dataset(country));
+    render(<MaterialTimelineBoard {...props} countries={["CH"]} noticeCountries={["CH", "SE"]} />);
+    await waitFor(() => expect(api.getMaterialNotices).toHaveBeenCalledWith("SE"));
+    expect(timeline).toHaveBeenCalledWith("CH", false);
+    expect(timeline).not.toHaveBeenCalledWith("SE", false);
+  });
   it("loads certificate segments only after opt-in, without changing BOM windows or reminders", async () => {
     const record = { materialGroup: "NEW", wvtaNo: "e4*2018/858*00273*02", cocNo: "00273-02&COC002",
       validFrom: "2026-03-11", validTo: "2026-04-14", comments: "Certificate note", pageNumber: 3, tableRowNumber: 40,
@@ -134,7 +142,8 @@ describe("Model material changes board", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /Only current selection/ }));
     expect(screen.getByText("Saved relation / 已保存关联：OLD → MID → NEW")).toBeTruthy();
     expect(screen.queryByText("UNRELATED")).toBeNull();
-    expect(screen.getByText("OLD")).toBeTruthy();
+    expect(screen.getAllByText("OLD").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll(".og-timeline-chain").length).toBe(1);
   });
 
   it("disables selection filtering until the full selection has loaded", async () => {

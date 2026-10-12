@@ -13,6 +13,7 @@ from app.db import models
 from app.infra import order_genius_repository as repo
 from app.services import order_genius_service as service
 from app.services import order_genius_vehicle_service as vehicle_service
+from app.services import material_replacement_service as replacements
 from fastapi import HTTPException
 from app.api.routes import order_genius as routes
 
@@ -31,7 +32,8 @@ def db():
               models.BrandColourSwatchRule, models.CountryPaymentTermMaster,
               models.CountryMaterialFinance, models.CountryFobSourceMapping,
               models.CountryTemplateFobPeriod, models.OrderQuantityCell,
-              models.QuantityCellHistory, models.MaterialSkuRemarkHistory, models.MaterialLifecycle]
+              models.QuantityCellHistory, models.MaterialSkuRemarkHistory, models.MaterialLifecycle,
+              models.MaterialReplacement, models.MaterialNoticeRead]
     metadata = MetaData()
     for model in tables:
         table = model.__table__.to_metadata(metadata)
@@ -74,6 +76,74 @@ def fob(db, code, value, base=None, surcharge=None, term="TT", country="CH", sou
     db.add(row)
     db.flush()
     return row
+
+
+def test_explicit_base_links_accept_changed_model_and_codes_without_changing_business_data(db):
+    old = sku(db, "OLD-BW", "single", template="OLD**A", model="Old model")
+    new = sku(db, "NEW-CL", "single", template="NEW**B", model="New model")
+    old.effective_from_date, old.effective_to_date = date(2026, 1, 1), date(2026, 9, 30)
+    fob(db, old.material_code, 1000, base=1000)
+    db.commit()
+    before = (old.material_code, old.row_version, old.effective_to_date, new.material_code)
+    result = replacements.save_replacement(db, brand="JAECOO", source="OLD**A", target="NEW**B",
+        note="New hardware", expected_version=0, actor="admin", allowed_brands=None)
+    db.commit()
+    assert result == {"changed": True, "rowVersion": 1}
+    assert before == (old.material_code, old.row_version, old.effective_to_date, new.material_code)
+    projection = service.build_material_timeline(db, "CH", allowed_brands={"JAECOO"}, today=date(2026, 10, 12))
+    assert projection["links"] == [{"from": "OLD**A", "to": "NEW**B", "note": "New hardware"}]
+    assert next(node for node in projection["nodes"] if node["bomTemplate"] == "NEW**B")["materialCodes"] == []
+    assert service.build_material_timeline(db, "SE", allowed_brands=None)["nodes"] == []
+    assert service.build_material_timeline(db, "CH", allowed_brands={"OMODA"})["nodes"] == []
+    assert replacements.save_replacement(db, brand="JAECOO", source="OLD**A", target="NEW**B",
+        note="New hardware", expected_version=1, actor="admin", allowed_brands=None)["changed"] is False
+    assert repo.list_fobs_for_country_material_codes(db, "CH", [old.material_code])[old.material_code].final_fob_eur == 1000
+
+
+def test_replacement_rejects_cycles_missing_nodes_cross_brand_and_duplicate_predecessor(db):
+    for code in "ABC": sku(db, code, "single", template=code)
+    sku(db, "OTHER", "single", template="OTHER", brand="OMODA")
+    db.commit()
+    def save(source, target, allowed=None):
+        return replacements.save_replacement(db, brand="JAECOO", source=source, target=target,
+            note="", expected_version=0, actor="admin", allowed_brands=allowed)
+    save("A", "B"); db.commit()
+    for source, target, expected in [("B", "A", "cycle"), ("C", "B", "predecessor"),
+                                      ("A", "A", "itself"), ("C", "OTHER", "missing"), ("C", "ABSENT", "missing")]:
+        with pytest.raises(HTTPException, match=expected): save(source, target)
+    with pytest.raises(HTTPException) as denied: save("C", None, {"OMODA"})
+    assert denied.value.status_code == 403
+
+
+def test_personal_material_notices_are_scope_checked_and_account_local(db):
+    value = sku(db, "A", "single", template="A")
+    value.effective_from_date = date(2026, 10, 30)
+    fob(db, "A", 1000, base=1000); db.commit()
+    projection = service.build_material_timeline(db, "CH", allowed_brands=None, today=date(2026, 10, 12))
+    alice, bob = uuid4(), uuid4()
+    notices = replacements.material_notices(db, projection, user_id=alice, username="alice")
+    assert len(notices) == 1 and notices[0]["read"] is False
+    key = notices[0]["key"]
+    replacements.acknowledge_material_notice(db, key=key, user_id=alice, notices=notices, read=True); db.commit()
+    assert replacements.material_notices(db, projection, user_id=alice, username="alice")[0]["read"]
+    assert not replacements.material_notices(db, projection, user_id=bob, username="bob")[0]["read"]
+    denied = service.build_material_timeline(db, "SE", allowed_brands=None, today=date(2026, 10, 12))
+    with pytest.raises(HTTPException):
+        replacements.acknowledge_material_notice(db, key=key, user_id=alice, notices=replacements.material_notices(db, denied, user_id=alice, username="alice"), read=True)
+    value.effective_from_date = date(2026, 10, 31); db.commit()
+    updated = service.build_material_timeline(db, "CH", allowed_brands=None, today=date(2026, 10, 12))
+    assert not replacements.material_notices(db, updated, user_id=alice, username="alice")[0]["read"]
+
+
+def test_relationship_notice_excludes_actor_and_noop_does_not_renew_notice(db):
+    sku(db, "A", "single", template="A"); sku(db, "B", "single", template="B")
+    fob(db, "A", 1000, base=1000); db.commit()
+    replacements.save_replacement(db, brand="JAECOO", source="A", target="B", note="Update",
+        expected_version=0, actor="admin", allowed_brands=None); db.commit()
+    projection = service.build_material_timeline(db, "CH", allowed_brands=None)
+    assert replacements.material_notices(db, projection, user_id=uuid4(), username="admin") == []
+    notices = replacements.material_notices(db, projection, user_id=uuid4(), username="filler")
+    assert len(notices) == 1 and notices[0]["target"] == "B"
 
 
 def test_material_colour_tier_has_no_implicit_default() -> None:

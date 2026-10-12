@@ -15,6 +15,7 @@ import { animate } from "animejs";
 import { createPortal } from "react-dom";
 import { BomTemplateLifecycleEditor } from "../components/orderGenius/BomTemplateLifecycleEditor";
 import { MaterialTimelineBoard } from "../components/orderGenius/MaterialTimelineBoard";
+import { MaterialReplacementEditor } from "../components/orderGenius/MaterialReplacementEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PiInvoiceExportDialog } from "../components/PiInvoiceExportDialog";
 
@@ -3434,12 +3435,15 @@ export function OrderGeniusPage() {
       {canFillOrders && timelineCountries.length > 0 ? <MaterialTimelineBoard
         key={authorizationKey}
         countries={timelineCountries}
+        noticeCountries={isAdmin ? countries.map((item) => item.countryCode) : userCountries}
         selectionRows={combinedMatrix.rows}
         selectionComplete={!loading && !error && selectedCountries.every((country) => Boolean(matrices[country])) && combinedMatrix.rows.length >= combinedMatrix.totalRows}
         authorizationKey={authorizationKey}
         bomEditing={showBomAdmin}
+        canMaintainRelations={canMaintainBom}
         canManageReference={isAdmin}
-        onViewModel={(brand, model) => {
+        onViewModel={(brand, model, noticeCountry) => {
+          if (noticeCountry) setSelectedCountries([noticeCountry]);
           setBrandFilter(brand); setModelFilter(model); setPowertrainFilter("");
           setVersionFilter(""); setColourFilter(""); setMaterialSearch("");
         }}
@@ -8417,7 +8421,7 @@ export function BomAdminPanel({
                                           </span>
                                         </>
                                       )}
-                                      lifecycle={(
+                                      lifecycle={(<>
                                         <BomTemplateLifecycleEditor
                                           key={`${draftKey}|${ref.rowVersion}`}
                                           materialCode={ref.materialCode}
@@ -8428,7 +8432,9 @@ export function BomAdminPanel({
                                           rowVersion={ref.rowVersion}
                                           onSaved={() => { scheduleLoad(0); onFobChanged?.(); }}
                                         />
-                                      )}
+                                        <MaterialReplacementEditor brand={ref.brand} bomTemplate={bomTemplate}
+                                          onSaved={() => { scheduleLoad(0); onFobChanged?.(); }} />
+                                      </>)}
                                       countries={editCountryOptions}
                                       selectedCountryCount={bulkFobEditor.selectedCountries.length}
                                       fobDeltaEur={bulkFobEditor.deltaEur}
