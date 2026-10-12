@@ -230,7 +230,7 @@ def _comment_special_country(comments: str | None) -> str | None:
         "FR": ("法国专用", "法国专属", "FRANCE"),
         "DE": ("德国专用", "德国专属", "GERMANY"),
         "PT": ("葡萄牙专用", "葡萄牙专属", "PORTUGAL"),
-        "NORDIC": ("北欧", "NORDIC"),
+        "NORDIC": ("北欧专用COC", "北欧专属COC", "NORDIC ONLY"),
     }
     upper_text = text.upper()
     for country_code, markers in special_markers.items():
