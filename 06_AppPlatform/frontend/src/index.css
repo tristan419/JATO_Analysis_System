@@ -6519,7 +6519,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .deck-floating-drawer {
   position: fixed;
-  top: 96px;
+  top: calc(96px + var(--candidate-banner-height, 0px));
   right: clamp(16px, 2vw, 28px);
   z-index: 49;
   display: flex;
