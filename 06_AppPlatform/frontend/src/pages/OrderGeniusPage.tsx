@@ -3438,6 +3438,7 @@ export function OrderGeniusPage() {
         selectionComplete={!loading && !error && selectedCountries.every((country) => Boolean(matrices[country])) && combinedMatrix.rows.length >= combinedMatrix.totalRows}
         authorizationKey={authorizationKey}
         bomEditing={showBomAdmin}
+        canManageReference={isAdmin}
         onViewModel={(brand, model) => {
           setBrandFilter(brand); setModelFilter(model); setPowertrainFilter("");
           setVersionFilter(""); setColourFilter(""); setMaterialSearch("");

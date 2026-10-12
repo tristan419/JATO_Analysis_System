@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from datetime import date
+from dataclasses import replace
+from contextlib import nullcontext
+from types import SimpleNamespace
+import pytest
+from fastapi import HTTPException
+from app.services import coc_fill_service as service
 
 from app.services.coc_fill_service import (
     MaterialGroupRow,
@@ -91,6 +97,98 @@ def test_resolve_fill_decision_is_strict_by_default_for_multiple_candidates() ->
     assert decision.status == "ambiguous"
     assert decision.written_wvta is None
     assert decision.written_coc is None
+
+
+def _pdf_row(material="T7000Z5**MY0013", wvta="e4*2018/858*00273*03", coc="00273-03&402&104V&COC002", first="15/4/2026", last="/"):
+    return ["JAECOO", "T13J", "BEV", "Select", material, wvta, coc, "IP", "V", "Tyre", "JAECOO", "JAECOO5 EV", first, last, "Note"]
+
+
+def _parse_fake_pdf(monkeypatch, rows, lines=()):
+    import pdfplumber
+    boxes = [SimpleNamespace(cells=[(col*100, row*40, (col+1)*100, (row+1)*40) for col in range(len(values))]) for row, values in enumerate(rows)]
+    table = SimpleNamespace(extract=lambda: rows, rows=boxes)
+    page = SimpleNamespace(find_tables=lambda: [table], lines=lines)
+    monkeypatch.setattr(pdfplumber, "open", lambda _path: nullcontext(SimpleNamespace(pages=[page])))
+    return service.extract_wvta_coc_records(None)
+
+
+def test_pdf_revision_spaces_brand_and_merged_identity(monkeypatch):
+    first = _pdf_row(wvta="e4*2018/858*00273*03 Rev. 01", coc="00273-03 Rev. 01 &402&104V&COC002")
+    second = _pdf_row(material="T7000Z5**MY0031", first="7/8/2026")
+    second[:4] = [None, None, None, "Select"]
+    records = _parse_fake_pdf(monkeypatch, [first, second])
+    assert records[0].wvta_no.endswith("Rev.01") and records[0].coc_no.startswith("00273-03Rev.01&")
+    assert records[1].model == "T13J" and records[1].powertrain == "BEV"
+    assert records[1].brand == "JAECOO" and records[1].valid_from == date(2026, 8, 7)
+
+
+def test_pdf_parallel_source_lines_are_split_with_individual_cancellation(monkeypatch):
+    row = _pdf_row(material="T7000Z5**MY0013\nT7000Z5**MY0031", first="15/4/2026\n7/8/2026")
+    line = {"x0":420,"x1":480,"top":30,"bottom":30,"stroking_color":(1,0,0)}
+    records = _parse_fake_pdf(monkeypatch, [row], [line])
+    assert len(records) == 2
+    assert records[0].source_status == "recorded"
+    assert records[1].source_status == "cancelled"
+    assert records[1].valid_from == date(2026, 8, 7)
+
+
+def test_pdf_unaligned_or_reversed_source_is_review_not_usable(monkeypatch):
+    row = _pdf_row(material="T7000Z5**MY0013\nT7000Z5**MY0031", coc="00273-03&COC001\n00273-03&COC002\n00273-03&COC003")
+    records = _parse_fake_pdf(monkeypatch, [row])
+    assert {record.source_status for record in records} == {"review"}
+    decision = resolve_fill_decision(_row(), {records[0].material_group: records}, overwrite_existing=False)
+    assert decision.written_coc is None and "待核对" in decision.reason
+    records = _parse_fake_pdf(monkeypatch, [_pdf_row(first="7/8/2026", last="6/8/2026")])
+    assert records[0].source_status == "review"
+
+
+@pytest.mark.parametrize("status", ["cancelled", "review"])
+def test_unusable_source_is_never_automatically_filled(status):
+    record = replace(_record("T7000Z5**MY0013", "WVTA", "COC", valid_from=None, valid_to=None), source_status=status)
+    decision = resolve_fill_decision(_row(), {record.material_group:[record]}, overwrite_existing=False, conflict_strategy="date_country")
+    assert decision.written_wvta is None
+
+
+def test_reference_scopes_exact_brand_base_and_country_and_keeps_old_on_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "COC_MATCH_JOB_ROOT", tmp_path)
+    pdf = tmp_path / "source.pdf"; pdf.write_bytes(b"fixture")
+    monkeypatch.setattr(service, "_get_fill_assembled_path", lambda _id: pdf)
+    record = _record("T7000Z5**MY0013", "WVTA", "COC", valid_from=date(2026,3,11), valid_to=None)
+    poland = replace(record, coc_no="COC-波兰专用", comments="Note")
+    foreign = replace(record, material_group="OTHER", brand="OMODA")
+    monkeypatch.setattr(service, "extract_wvta_coc_records", lambda _path: [record,poland,foreign])
+    digest = service.sha256_hex_for_path(pdf)
+    result = service.set_wvta_reference("test-upload", triggered_by="admin", expected_sha256=digest)
+    assert result["recordCount"] == 3 and len(result["sha256"]) == 64
+    nodes = [{"bomTemplate":record.material_group, "brand":"JAECOO"}]
+    response = service.read_wvta_reference("CH", nodes)
+    assert len(response["records"]) == 1
+    assert len(service.read_wvta_reference("PL", nodes)["records"]) == 2
+    assert service.read_wvta_reference("CH", [dict(nodes[0], brand="OMODA")])["records"] == []
+    old = (tmp_path / "_wvta_reference.json").read_bytes()
+    def fail(_path): raise HTTPException(422, "Unreadable PDF")
+    monkeypatch.setattr(service, "extract_wvta_coc_records", fail)
+    with pytest.raises(HTTPException): service.set_wvta_reference("bad-upload", triggered_by="admin", expected_sha256=digest)
+    with pytest.raises(HTTPException) as error: service.set_wvta_reference("bad-upload", triggered_by="admin", expected_sha256="wrong")
+    assert error.value.status_code == 400
+    assert (tmp_path / "_wvta_reference.json").read_bytes() == old
+    assert service.read_wvta_reference("CH", [])["records"] == []
+
+
+def test_missing_and_invalid_reference_are_distinct(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "COC_MATCH_JOB_ROOT", tmp_path)
+    assert service.read_wvta_reference("CH", [])["status"] == "missing"
+    (tmp_path / "_wvta_reference.json").write_text("invalid")
+    with pytest.raises(HTTPException) as error: service.read_wvta_reference("CH", [])
+    assert error.value.status_code == 503
+
+
+def test_country_scope_uses_explicit_coc_markers_and_nordic_region():
+    assert not service.certificate_matches_country("CH", "", "COC-波兰专用")
+    assert service.certificate_matches_country("PL", "", "COC-波兰专用")
+    assert service.certificate_matches_country("SE", "北欧物料号")
+    assert not service.certificate_matches_country("CH", "北欧物料号")
+    assert not service.certificate_matches_country("SE", "葡萄牙专用")
 
 
 def test_resolve_fill_decision_uses_date_and_country_to_avoid_special_coc() -> None:

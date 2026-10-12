@@ -34,6 +34,20 @@
 .og-timeline-detail > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .og-timeline-detail p { overflow-wrap: anywhere; }
 .og-timeline-codes { max-height: 120px; overflow: auto; }
+.og-wvta-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-top: 8px; font-size: 13px; }
+.og-wvta-controls label { display: flex; align-items: center; gap: 6px; }
+.og-wvta-upload label { flex-wrap: wrap; }
+.og-wvta-upload input { max-width: 260px; }
+.og-wvta-source { overflow-wrap: anywhere; }
+.og-wvta-segments { padding-top: 76px; padding-bottom: 8px; font-size: 12px; }
+.og-wvta-segment { display: block; position: relative; width: 100%; min-height: 50px; padding: 18px 4px 4px; text-align: left; border: 0; border-bottom: 1px solid #e2e8f0; background: transparent; cursor: pointer; }
+.og-wvta-segment > i { position: absolute; top: 5px; height: 7px; background: var(--og-timeline-powertrain); opacity: .5; }
+.og-wvta-segment > i.is-open { background: transparent; border-top: 2px dashed var(--og-timeline-powertrain); }
+.og-wvta-segment > i.is-open::after { content: "→"; position: absolute; right: 0; top: -10px; }
+.og-wvta-segment > span { overflow-wrap: anywhere; }
+.og-wvta-segment.is-cancelled { color: #b91c1c; }
+.og-wvta-segment.is-review { color: #92400e; }
+.og-timeline-detail > .og-wvta-detail { display: block; border-top: 1px solid #cbd5e1; padding-top: 8px; }
 .og-timeline-pin:focus-visible, .og-timeline-node:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
 @media (max-width: 600px) {
   .og-timeline-board { padding: 10px; }

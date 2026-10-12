@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import shutil
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -15,6 +15,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from upload_toolkit.file_utils import allowed_extension
+from upload_toolkit.file_utils import sha256_hex_for_path
 from upload_toolkit.job_engine import (
     BaseJobRunner,
     list_job_payloads,
@@ -27,6 +28,7 @@ from app.core.config import COC_MATCH_JOB_ROOT
 from app.services.coc_match_service import _normalize_filename
 from app.services.workbook_table_scanner import (
     MaterialGroupRow,
+    MATERIAL_GROUP_RE,
     cell_text,
     display_names,
     extract_material_rows,
@@ -43,8 +45,8 @@ _FILL_UPLOAD_SESSION_ROOT = COC_MATCH_JOB_ROOT / "_fill_upload_sessions"
 _RUNNING_FILL_THREADS: dict[str, "CocFillJobRunner"] = {}
 _MAX_FILL_HISTORY = 50
 
-WVTA_RE = re.compile(r"e\d+\*2018/858\*[^\s]+", re.IGNORECASE)
-COC_RE = re.compile(r"\d{5}-\d{2}&[^\s]*C[O0]C[^\s]*", re.IGNORECASE)
+WVTA_RE = re.compile(r"e\d+\*2018/858\*\d+\*\d+(?:\s*(?:Rev|Corr)\.\s*\d+)*", re.IGNORECASE)
+COC_RE = re.compile(r"\d{5}[-*]\d{2}(?:\s*(?:Rev|Corr)\.\s*\d+)*\s*&[^\n]*?C[O0]C[^\n]*", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,8 @@ class WvtaCocRecord:
     comments: str | None
     page_number: int
     table_row_number: int
+    source_status: str = "recorded"
+    review_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,18 +105,19 @@ def _record_from_pdf_row(
 
     def at(offset: int) -> str | None:
         index = material_index + offset
-        if index >= len(cells):
+        if index < 0 or index >= len(cells):
             return None
         return cells[index] or None
 
+    identity = [cell for cell in cells[:material_index] if cell]
     return WvtaCocRecord(
         material_group=material_group,
-        wvta_no=wvta_match.group(0),
-        coc_no=coc_match.group(0),
-        brand=at(-4),
-        model=at(-3),
-        powertrain=at(-2),
-        version=at(-1),
+        wvta_no=re.sub(r"\s+", "", wvta_match.group(0)),
+        coc_no=re.sub(r"\s+", "", coc_match.group(0)),
+        brand=at(6) or at(-4),
+        model=identity[-3] if len(identity) >= 3 else at(-3),
+        powertrain=identity[-2] if len(identity) >= 2 else at(-2),
+        version=identity[-1] if identity else at(-1),
         sales_name=at(7),
         valid_from=parse_date(at(8), day_first=True),
         valid_to=parse_date(at(9), day_first=True),
@@ -135,23 +140,60 @@ def extract_wvta_coc_records(pdf_path: Path) -> list[WvtaCocRecord]:
     try:
         with pdfplumber.open(pdf_path) as document:
             for page_index, page in enumerate(document.pages, start=1):
-                tables = page.extract_tables()
+                tables = page.find_tables()
                 for table in tables:
-                    for row_index, row in enumerate(table, start=1):
-                        cells = [str(cell or "").replace("\n", " ").strip() for cell in row]
-                        for cell_index, cell in enumerate(cells):
-                            material = normalize_material_group(cell)
-                            if not material:
-                                continue
+                    rows = table.extract()
+                    material_index = next((i for row in rows for i, cell in enumerate(row)
+                                           if MATERIAL_GROUP_RE.search(str(cell or ""))), None)
+                    if material_index is None:
+                        continue
+                    context: dict[int, str] = {}
+                    for row_index, row in enumerate(rows, start=1):
+                        cells = [str(cell or "").strip() for cell in row]
+                        # Carry only merged identity columns, never dates/certificates/notes.
+                        for index in range(material_index):
+                            if cells[index] and "\n" not in cells[index]:
+                                if context.get(index) != cells[index]:
+                                    context = {key: value for key, value in context.items() if key <= index}
+                                context[index] = cells[index]
+                            elif not cells[index]:
+                                cells[index] = context.get(index, "")
+                        materials = MATERIAL_GROUP_RE.findall(cells[material_index])
+                        if not materials:
+                            continue
+                        count = len(materials)
+                        parts = [cell.splitlines() if cell else [""] for cell in cells]
+                        aligned = all(len(values) in (1, count) for values in parts)
+                        bbox = table.rows[row_index - 1].cells[material_index]
+                        for index, material in enumerate(materials):
+                            values = [lines[index] if len(lines) == count else " ".join(lines) for lines in parts]
                             record = _record_from_pdf_row(
-                                cells,
-                                material_index=cell_index,
-                                material_group=material,
+                                values, material_index=material_index,
+                                material_group=material.upper(),
                                 page_number=page_index,
                                 row_number=row_index,
                             )
                             if record is not None:
-                                records.append(record)
+                                reason = None
+                                if count > 1 and not aligned:
+                                    reason = "Merged source lines cannot be paired reliably / 合并源行无法可靠配对"
+                                for offset, parsed in ((8, record.valid_from), (9, record.valid_to)):
+                                    raw = values[material_index + offset] if material_index + offset < len(values) else ""
+                                    if raw not in ("", "/") and parsed is None:
+                                        reason = "Certificate date could not be parsed / 证书日期无法解析"
+                                if record.valid_from and record.valid_to and record.valid_from > record.valid_to:
+                                    reason = "Reversed certificate dates / 证书起止日期倒置"
+                                status = "review" if reason else "recorded"
+                                if aligned and bbox:
+                                    x0, top, x1, bottom = bbox
+                                    top, bottom = top + (bottom - top) * index / count, top + (bottom - top) * (index + 1) / count
+                                    for line in page.lines:
+                                        color = line.get("stroking_color")
+                                        red = isinstance(color, (tuple, list)) and len(color) == 3 and color[0] > .8 and color[1] < .2 and color[2] < .2
+                                        if red and abs(line["top"] - line["bottom"]) < .2 and x0 < line["x1"] and line["x0"] < x1 and top < line["top"] < bottom:
+                                            status, reason = "cancelled", "Red strike-through in source / 源文件红色删除线"
+                                            break
+                                records.append(replace(record, source_status=status, review_reason=reason))
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"WVTA PDF 表格解析失败: {exc}") from exc
     if not records:
@@ -166,6 +208,8 @@ _COUNTRY_ALIASES = {
     "DE": {"DE", "GERMANY", "德国"},
     "GR": {"GR", "GREECE", "希腊"},
     "GQ": {"GR", "GREECE", "希腊"},
+    "PT": {"PT", "PORTUGAL", "葡萄牙"},
+    "NORDIC": {"SE", "NO", "DK", "FI"},
 }
 
 
@@ -185,6 +229,8 @@ def _comment_special_country(comments: str | None) -> str | None:
         "IT": ("意大利专用", "意大利专属", "ITALY"),
         "FR": ("法国专用", "法国专属", "FRANCE"),
         "DE": ("德国专用", "德国专属", "GERMANY"),
+        "PT": ("葡萄牙专用", "葡萄牙专属", "PORTUGAL"),
+        "NORDIC": ("北欧", "NORDIC"),
     }
     upper_text = text.upper()
     for country_code, markers in special_markers.items():
@@ -193,14 +239,18 @@ def _comment_special_country(comments: str | None) -> str | None:
     return None
 
 
-def _record_matches_country(row: MaterialGroupRow, record: WvtaCocRecord) -> bool:
-    special_country = _comment_special_country(record.comments)
+def certificate_matches_country(country: str | None, comments: str | None, coc_no: str = "") -> bool:
+    special_country = _comment_special_country(f"{comments or ''} {coc_no}")
     if special_country is None:
         return True
-    tokens = _country_tokens(row.country)
+    tokens = _country_tokens(country)
     if not tokens:
         return False
     return bool(tokens & _COUNTRY_ALIASES.get(special_country, {special_country}))
+
+
+def _record_matches_country(row: MaterialGroupRow, record: WvtaCocRecord) -> bool:
+    return certificate_matches_country(row.country, record.comments, record.coc_no)
 
 
 def _date_ranges_overlap(
@@ -224,9 +274,9 @@ def _date_ranges_overlap(
 
 def _unique_records(records: list[WvtaCocRecord]) -> list[WvtaCocRecord]:
     unique: list[WvtaCocRecord] = []
-    seen: set[tuple[str, str, str | None]] = set()
+    seen: set[tuple] = set()
     for record in records:
-        key = (record.wvta_no, record.coc_no, record.comments)
+        key = (record.wvta_no, record.coc_no, record.comments, record.valid_from, record.valid_to, record.source_status)
         if key in seen:
             continue
         seen.add(key)
@@ -241,7 +291,8 @@ def resolve_fill_decision(
     overwrite_existing: bool,
     conflict_strategy: str = "strict",
 ) -> FillDecision:
-    candidates = records_by_material.get(row.material_group, [])
+    source_candidates = records_by_material.get(row.material_group, [])
+    candidates = [record for record in source_candidates if record.source_status == "recorded"]
     if not candidates:
         return FillDecision(
             material_group=row.material_group,
@@ -249,7 +300,7 @@ def resolve_fill_decision(
             row_number=row.row_number,
             status="not_found",
             candidate_count=0,
-            reason="PDF 已解析，但未找到精确物料号组；可能 PDF 中不存在该物料号，或物料号写法不一致。",
+            reason="源行已作废或待核对，未自动采用。" if source_candidates else "PDF 已解析，但未找到精确物料号组；可能 PDF 中不存在该物料号，或物料号写法不一致。",
             confidence=0,
             selected_record=None,
             candidate_records=(),
@@ -277,12 +328,12 @@ def resolve_fill_decision(
         matching_special = [
             record
             for record in selected_candidates
-            if _comment_special_country(record.comments) is not None
+            if _comment_special_country(f"{record.comments or ''} {record.coc_no}") is not None
             and _record_matches_country(row, record)
         ]
         generic_candidates = [
             record for record in selected_candidates
-            if _comment_special_country(record.comments) is None
+            if _comment_special_country(f"{record.comments or ''} {record.coc_no}") is None
         ]
         country_filtered = matching_special or generic_candidates
         if not country_filtered:
@@ -378,7 +429,49 @@ def _record_payload(record: WvtaCocRecord | None) -> dict[str, Any] | None:
         "comments": record.comments,
         "pageNumber": record.page_number,
         "tableRowNumber": record.table_row_number,
+        "sourceStatus": record.source_status,
+        "reviewReason": record.review_reason,
     }
+
+
+def set_wvta_reference(upload_id: str, *, triggered_by: str, expected_sha256: str) -> dict:
+    """Pin one explicitly uploaded reference; never write BOM or order dates."""
+    path = _get_fill_assembled_path(upload_id)
+    _validate_pdf_filename(path.name)
+    digest = sha256_hex_for_path(path)
+    if expected_sha256 != digest:
+        raise HTTPException(400, "Uploaded file hash does not match / 上传文件与选定PDF不一致")
+    records = extract_wvta_coc_records(path)
+    payload = {
+        "filename": path.name, "sha256": digest,
+        "uploadedBy": triggered_by, "uploadId": upload_id,
+        "records": [_record_payload(record) for record in records],
+    }
+    persist_job_state(COC_MATCH_JOB_ROOT / "_wvta_reference.json", payload)
+    return {"filename": payload["filename"], "sha256": payload["sha256"],
+            "recordCount": len(records),
+            "reviewCount": sum(record.source_status == "review" for record in records),
+            "cancelledCount": sum(record.source_status == "cancelled" for record in records)}
+
+
+def read_wvta_reference(country: str, nodes: list[dict]) -> dict:
+    path = COC_MATCH_JOB_ROOT / "_wvta_reference.json"
+    if not path.exists():
+        return {"status": "missing", "filename": None, "sha256": None, "updatedAt": None, "records": []}
+    try:
+        payload = load_job_state(path)
+        # Scope comes from the existing authorized BOM projection, never request IDs/names.
+        brands = {node["bomTemplate"]: node["brand"].strip().upper() for node in nodes}
+        records = []
+        for record in payload["records"]:
+            brand = str(record.get("brand") or "").strip().upper()
+            brand = "ICAR" if brand == "ICAUR" else brand  # Explicit source brand alias, not model inference.
+            if brand and brands.get(record["materialGroup"]) == brand and certificate_matches_country(country, record.get("comments"), record.get("cocNo", "")):
+                records.append(record)
+        return {"status": "ready", "filename": payload["filename"], "sha256": payload["sha256"],
+                "updatedAt": payload["updatedAt"], "records": records}
+    except (KeyError, ValueError, OSError, TypeError) as exc:
+        raise HTTPException(503, "WVTA reference unreadable / WVTA参考读取失败，请取消叠加或联系管理员") from exc
 
 
 def _decision_payload(decision: FillDecision) -> dict[str, Any]:

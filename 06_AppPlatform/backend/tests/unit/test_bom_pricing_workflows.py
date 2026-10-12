@@ -1382,6 +1382,42 @@ def test_timeline_http_uses_saved_country_brand_and_existing_role_guard(monkeypa
         assert calls == []
 
 
+@pytest.mark.parametrize("role,expected", [("viewer",403),("order_filler",403),("editor",403),("admin",200),("developer",200)])
+def test_wvta_reference_upload_uses_existing_admin_role_guard(monkeypatch, role, expected):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.core.security import UserContext, get_current_user
+    calls = []
+    def save(upload_id, *, triggered_by, expected_sha256):
+        calls.append((upload_id, triggered_by, expected_sha256))
+        return {"recordCount":1}
+    monkeypatch.setattr(routes, "set_wvta_reference", save)
+    app = FastAPI(); app.include_router(routes.router)
+    app.dependency_overrides[get_current_user] = lambda: UserContext(name="test", role=role)
+    with TestClient(app) as client:
+        response = client.post("/order-genius/wvta-reference", json={"uploadId":"source", "sha256":"digest"})
+    assert response.status_code == expected
+    assert calls == ([("source","test","digest")] if expected == 200 else [])
+
+
+def test_timeline_wvta_opt_in_keeps_bom_projection_unchanged(db, monkeypatch):
+    value = sku(db, "A", "single", template="T7000Z5**MY0031")
+    value.effective_from = date(2026,10,20); value.effective_to = date(2026,11,1)
+    fob(db, "A", 1000, base=1000); db.commit()
+    calls = []
+    def read(country, nodes):
+        calls.append((country, [node["bomTemplate"] for node in nodes]))
+        return {"status":"ready", "records":[{"validFrom":"2026-03-11"}]}
+    monkeypatch.setattr(routes, "read_wvta_reference", read)
+    user = SimpleNamespace(name="admin", role="admin")
+    plain = routes.get_material_timeline("CH", db, user)
+    assert calls == []
+    overlay = routes.get_material_timeline("CH", db, user, True)
+    assert calls == [("CH", [value.bom_template])]
+    assert {key:val for key,val in overlay.items() if key != "wvtaReference"} == plain
+    assert value.effective_from == date(2026,10,20) and not db.dirty
+
+
 def test_timeline_deleted_period_resumes_existing_default_and_future_quote_uses_first_order_day(db):
     value = sku(db, "A", "single")
     value.effective_from_date = date.today() + timedelta(days=15)

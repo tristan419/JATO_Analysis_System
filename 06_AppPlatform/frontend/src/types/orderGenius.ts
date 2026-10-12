@@ -23,6 +23,26 @@ export interface MaterialTimelineResponse {
   nodes: MaterialTimelineNode[];
   links: Array<{ from: string; to: string }>;
   events: Array<{ bomTemplate: string; kind: "start" | "end"; date: string }>;
+  wvtaReference?: {
+    status: "missing" | "ready";
+    filename: string | null;
+    sha256: string | null;
+    updatedAt: string | null;
+    records: WvtaReferenceRecord[];
+  };
+}
+
+export interface WvtaReferenceRecord {
+  materialGroup: string;
+  wvtaNo: string;
+  cocNo: string;
+  validFrom: string | null;
+  validTo: string | null;
+  comments: string | null;
+  pageNumber: number;
+  tableRowNumber: number;
+  sourceStatus: "recorded" | "cancelled" | "review";
+  reviewReason: string | null;
 }
 
 export interface OrderGeniusOptions {

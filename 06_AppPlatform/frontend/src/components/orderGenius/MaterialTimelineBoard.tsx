@@ -1,9 +1,10 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { api } from "../../api/client";
-import type { MaterialSkuMatrixRow, MaterialTimelineNode, MaterialTimelineResponse } from "../../types/orderGenius";
+import type { MaterialSkuMatrixRow, MaterialTimelineNode, MaterialTimelineResponse, WvtaReferenceRecord } from "../../types/orderGenius";
 import { orderGeniusPowertrainColor } from "../../utils/orderGeniusBomAdmin";
 import { compareProductModels } from "../../utils/orderGeniusProductSort";
 import "./MaterialTimelineBoard.css";
+import { WvtaReferenceUpload } from "./WvtaReferenceUpload";
 
 interface Props {
   countries: string[];
@@ -11,10 +12,11 @@ interface Props {
   selectionRows: Array<MaterialSkuMatrixRow & { _countryCode?: string }>;
   selectionComplete: boolean;
   bomEditing?: boolean;
+  canManageReference?: boolean;
   onViewModel: (brand: string, model: string) => void;
 }
 type LoadState = { scope: string; status: "loading" | "error" | "ready"; data: MaterialTimelineResponse[] };
-type NodeRef = { country: string; node: MaterialTimelineNode };
+type NodeRef = { country: string; node: MaterialTimelineNode; certificate?: WvtaReferenceRecord };
 interface ModelGroup { key: string; country: string; brand: string; model: string; nodes: MaterialTimelineNode[]; events: MaterialTimelineResponse["events"] }
 const STATUS: Record<string, string> = {
   active: "Active / 生效", phase_out: "Phase out / 即将结束",
@@ -22,31 +24,35 @@ const STATUS: Record<string, string> = {
 };
 const dayNumber = (day: string): number => Date.parse(`${day}T00:00:00Z`) / 86400000;
 
-export function MaterialTimelineBoard({ countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, onViewModel }: Props) {
+export function MaterialTimelineBoard({ countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, canManageReference = false, onViewModel }: Props) {
+  const [showWvta, setShowWvta] = useState(false);
+  const [expandedModels, setExpandedModels] = useState<string[]>([]);
   const countryKey = [...new Set(countries)].sort().join(",");
-  const scope = `${authorizationKey}|${countryKey}`;
+  const scope = `${authorizationKey}|${countryKey}|${showWvta}`;
   const [load, setLoad] = useState<LoadState>({ scope, status: "loading", data: [] });
   const [revision, setRevision] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const [onlySelection, setOnlySelection] = useState(false);
   const [focusModel, setFocusModel] = useState<string | null>(null);
   const [selected, setSelected] = useState<NodeRef | null>(null);
+  useEffect(() => { setExpandedModels([]); }, [authorizationKey, countryKey]);
   useEffect(() => {
     let current = true;
     setLoad({ scope, status: "loading", data: [] });
     setSelected(null); setFocusModel(null);
     if (bomEditing) return () => { current = false; };
     const requested = countryKey ? countryKey.split(",") : [];
-    void Promise.all(requested.map((country) => api.getMaterialTimeline(country))).then((data) => {
+    void Promise.all(requested.map((country) => api.getMaterialTimeline(country, showWvta))).then((data) => {
       if (!current) return;
-      if (data.some((item, index) => item.countryCode !== requested[index] || item.today !== data[0].today)) {
+      if (data.some((item, index) => item.countryCode !== requested[index] || item.today !== data[0].today
+        || (showWvta && item.wvtaReference?.sha256 !== data[0].wvtaReference?.sha256))) {
         setLoad({ scope, status: "error", data: [] });
         return;
       }
       setLoad({ scope, status: "ready", data });
     }).catch(() => { if (current) setLoad({ scope, status: "error", data: [] }); });
     return () => { current = false; };
-  }, [scope, countryKey, revision, bomEditing]);
+  }, [scope, countryKey, revision, bomEditing, showWvta]);
 
   // Never render a previous country's response during a new request.
   const data = load.scope === scope && load.status === "ready" ? load.data : [];
@@ -95,7 +101,9 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
   }
   const notices = [...noticeMap.values()];
   const dated = data.flatMap((item) => [item.windowFrom, item.windowTo,
-    ...item.nodes.flatMap((node) => [node.effectiveFrom, node.effectiveTo].filter((value): value is string => value !== null))]);
+    ...item.nodes.flatMap((node) => [node.effectiveFrom, node.effectiveTo].filter((value): value is string => value !== null)),
+    ...(showWvta ? (item.wvtaReference?.records ?? []).filter((record) => record.sourceStatus === "recorded")
+      .flatMap((record) => [record.validFrom, record.validTo].filter((value): value is string => value !== null)) : [])]);
   const left = Math.min(...dated.map(dayNumber));
   const right = Math.max(...dated.map(dayNumber));
   const position = (day: string): number => Math.max(0, Math.min(100, 100 * (dayNumber(day) - left) / Math.max(1, right - left)));
@@ -115,8 +123,15 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
       <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setRevision(revision + 1)}>Reload / 重读</button>
     </div>
     {load.scope === scope && load.status === "error" ? <p role="alert">Unable to read this scope. Reload or sign in again to check current permissions / 当前范围读取失败，请重读或重新登录核对权限。</p> : null}
+    {expanded ? <div className="og-wvta-controls">
+      <label><input type="checkbox" checked={showWvta} onChange={(event) => setShowWvta(event.currentTarget.checked)} /> Show WVTA reference / 叠加WVTA参考（不改变BOM下单日期）</label>
+      {canManageReference ? <WvtaReferenceUpload onSaved={() => setRevision((value) => value + 1)} /> : null}
+    </div> : null}
     {expanded && !busy && load.status === "ready" ? <div className="og-timeline-content">
       <p>As of / 按今天 {data[0]?.today} · {data[0]?.windowFrom} – {data[0]?.windowTo} · Not the selected order month / 不随选品月份</p>
+      {showWvta ? <p className="og-wvta-source">{data[0]?.wvtaReference?.status === "ready"
+        ? `Reference / 参考：${data[0].wvtaReference.filename} · SHA256 ${data[0].wvtaReference.sha256} · ${data[0].wvtaReference.updatedAt}`
+        : "No WVTA reference configured / 尚未配置WVTA参考，请联系管理员；BOM日期不变。"}</p> : null}
       <label><input type="checkbox" checked={onlySelection} disabled={!selectionComplete && !onlySelection} onChange={(event) => {
         setOnlySelection(event.currentTarget.checked); setFocusModel(null); setSelected(null);
       }} /> Only current selection products, including linked history / 仅当前选品产品及已关联历史</label>
@@ -151,8 +166,9 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
             }
             branches.push(branch);
           }
-          return <details className="og-timeline-model" key={group.key} open={focusModel === `${group.brand}|${group.model}` || undefined}>
-            <summary>{group.country} · {group.brand} · {group.model} · {group.nodes.length} bases / 基准物料</summary>
+          return <details className="og-timeline-model" key={group.key} open={focusModel === `${group.brand}|${group.model}` || expandedModels.includes(group.key)}>
+            <summary onClick={(event) => { event.preventDefault(); setExpandedModels((values) => values.includes(group.key) ? values.filter((key) => key !== group.key) : [...values, group.key]); }}>
+              {group.country} · {group.brand} · {group.model} · {group.nodes.length} bases / 基准物料</summary>
             <div className="og-timeline-axis"><span>Base / 基准物料</span><div>{[0, 25, 50, 75, 100].map((percent) => <span key={percent} style={{ left: `${percent}%` }}>
               {new Date((left + (right - left) * percent / 100) * 86400000).toISOString().slice(0, 10)}
             </span>)}</div></div>
@@ -173,6 +189,17 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
                     onClick={() => setSelected({ country: group.country, node })} /> : null)}
                   <span className="og-timeline-dates">{node.effectiveFrom ?? "Start unknown / 起始未设"} → {node.effectiveTo ?? "End not set / 截止未设"}</span>
                   {!node.effectiveFrom && !node.effectiveTo ? <span className="og-timeline-undated">Dates not maintained / 日期待维护</span> : null}
+                  {showWvta && item?.wvtaReference?.status === "ready" ? <div className="og-wvta-segments">
+                    {item.wvtaReference.records.filter((record) => record.materialGroup === node.bomTemplate).map((record, index) => <button
+                      type="button" className={`og-wvta-segment is-${record.sourceStatus}`} key={`${record.pageNumber}-${record.tableRowNumber}-${index}`}
+                      onClick={() => setSelected({ country: group.country, node, certificate: record })}>
+                      {record.sourceStatus === "recorded" && record.validFrom ? <i className={record.validTo ? "" : "is-open"}
+                        style={{ left: `${position(record.validFrom)}%`, width: `${Math.max(.25, (record.validTo ? position(record.validTo) : 100) - position(record.validFrom))}%` }} /> : null}
+                      <span>WVTA · {record.wvtaNo} · {record.validFrom ?? "Start not recorded / 起始未记录"} → {record.validTo ?? "End not recorded / 截止未记录"}
+                        {record.sourceStatus !== "recorded" ? ` · ${record.sourceStatus === "cancelled" ? "Cancelled / 源行作废" : "Review / 待核对"}` : ""}</span>
+                    </button>)}
+                    {!item.wvtaReference.records.some((record) => record.materialGroup === node.bomTemplate) ? <span>No exact certificate match / 无精确证书记录，不猜测日期。</span> : null}
+                  </div> : null}
                 </div>
               </div>)}
             </div>)}
@@ -188,6 +215,13 @@ export function MaterialTimelineBoard({ countries, authorizationKey, selectionRo
         {selectedNode.quoteReasons.map((reason) => <p key={reason}>{reason}</p>)}
         <p>Notes / 备注：{selectedNode.notes.join("；") || "Not maintained / 未维护"}</p>
         <p className="og-timeline-codes">{selectedNode.materialCodes.join(" · ")}</p>
+        {selected.certificate ? <div className="og-wvta-detail">
+          <strong>Certificate reference only / 仅证书参考：{selected.certificate.sourceStatus}</strong>
+          <p>{selected.certificate.wvtaNo} · {selected.certificate.cocNo}</p>
+          <p>{selected.certificate.validFrom ?? "Not recorded / 未记录"} → {selected.certificate.validTo ?? "End not recorded / 截止未记录"}</p>
+          <p>Source / 来源：{data.find((item) => item.countryCode === selected.country)?.wvtaReference?.filename} · P{selected.certificate.pageNumber} · row / 行 {selected.certificate.tableRowNumber}</p>
+          <p>{selected.certificate.comments} {selected.certificate.reviewReason}</p>
+        </div> : null}
         <button type="button" className="btn btn-sm btn-primary" disabled={!selectedNode.brand} onClick={() => onViewModel(selectedNode.brand, selectedNode.modelName)}>View model selection / 查看车型选品</button>
       </div> : null}
       </> : null}
