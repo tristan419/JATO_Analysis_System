@@ -66,6 +66,7 @@ export function MaterialReplacementEditor({ brand, bomTemplate, onSaved }: Props
         <label>Find base / 搜索基准物料<input value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         <p>Drag a source card onto its successor, or choose below. / 从旧版卡片拖到新版，或用下方选择；不会自动保存。</p>
         <div className="og-replacement-canvas">
+          {catalog && query && nodes.length === 0 ? <p role="status">No matching base / 未找到基准物料：{query}。请先维护缺失BOM；不能跳过中间版本或按证书自动新增。</p> : null}
           {nodes.map((node) => <button key={node.bomTemplate} type="button" draggable
             style={{ borderLeftColor: orderGeniusPowertrainColor(node.powertrain) }}
             className={draft.from === node.bomTemplate ? "is-source" : draft.to === node.bomTemplate ? "is-target" : ""}
