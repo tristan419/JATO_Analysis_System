@@ -2317,7 +2317,7 @@ def list_all_material_skus_for_admin(
     country_code: str | None = None,
     brand: str | None = None,
     search: str | None = None,
-    limit: int = 500,
+    limit: int | None = 500,
     allowed_brands: set[str] | None = None,
 ) -> list[MaterialSkuMaster]:
     """List SKUs with optional filters for the BOM admin panel.
@@ -2342,7 +2342,8 @@ def list_all_material_skus_for_admin(
         MaterialSkuMaster.is_active.desc(),
         MaterialSkuMaster.row_version.desc(),
     )
-    stmt = stmt.limit(limit * 2)  # fetch extra to account for dedup
+    if limit is not None:
+        stmt = stmt.limit(limit * 2)  # fetch extra to account for dedup
     all_rows = list(session.execute(stmt).scalars().all())
 
     # Deduplicate: one row per material_code, preferring active + highest version
@@ -2353,7 +2354,7 @@ def list_all_material_skus_for_admin(
             continue
         seen.add(row.material_code)
         deduped.append(row)
-        if len(deduped) >= limit:
+        if limit is not None and len(deduped) >= limit:
             break
 
     # Re-sort by brand/model/version for display

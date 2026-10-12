@@ -149,6 +149,7 @@ import type {
 } from "../types/hermes";
 import type {
   BaselineVersion,
+  MaterialTimelineResponse,
   BomTemplateLifecycleUpdateRequest,
   BomTemplateLifecycleUpdateResponse,
   BomLifecycleReviewResponse,
@@ -5008,6 +5009,10 @@ export const api = {
       `/order-genius/material-master-uploads/${uploadId}/publish`,
       { method: "POST", body: JSON.stringify({ notes }) },
     ).then(mapPublishBaselineResponse),
+
+  getMaterialTimeline: (country: string) => request<MaterialTimelineResponse>(
+    `/order-genius/material-timeline?${new URLSearchParams({ country })}`,
+  ),
 
   getOrderGeniusOptions: (params: {
     country: string;

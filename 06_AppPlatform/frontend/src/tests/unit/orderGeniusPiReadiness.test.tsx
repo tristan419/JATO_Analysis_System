@@ -58,6 +58,10 @@ const savedQuantity: QuantityCellResponse = { orderQuantityCellId: "q", countryC
 beforeEach(() => {
   authState.user.role = "admin";
   authState.user.brands = [];
+  vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country) => ({
+    countryCode: country, today: "2026-10-12", windowFrom: "2026-09-12", windowTo: "2026-11-11",
+    nodes: [], links: [], events: [],
+  }));
   vi.spyOn(api, "getOrderGeniusCountries").mockResolvedValue({ items: [{ countryCode: "CH", countryName: "Switzerland", paymentTermCode: "TT", paymentMethod: "TT", lcDays: null }] });
   vi.spyOn(api, "getOrderGeniusFobCountries").mockResolvedValue({ countries: ["CH"] });
   vi.spyOn(api, "getOrderGeniusOptions").mockResolvedValue({ countryCode: "CH", paymentTermCode: "TT", brands: [], models: [], powertrains: [], versions: [], colours: [], materialCodes: [] });
@@ -92,6 +96,7 @@ describe("quantity save → PI readiness", () => {
     expect(screen.queryByText(/selected countries do not have BOM FOB/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Open BOM Admin" })).toBeNull();
     expect(screen.queryByRole("tab", { name: /BOM Admin/ })).toBeNull();
+    expect(api.getMaterialTimeline).not.toHaveBeenCalled();
   });
   it("exposes the existing CBU route in the BOM tools", async () => {
     await openOctober();
