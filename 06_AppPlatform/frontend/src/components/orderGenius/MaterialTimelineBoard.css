@@ -54,7 +54,8 @@
 .og-lineage-axis > div > span:first-child { transform: none; }
 .og-lineage-axis > div > span:last-child { transform: translateX(-100%); }
 .og-lineage-tree { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 28px; }
-.og-lineage-root { align-self: center; display: grid; gap: 6px; padding: 12px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; overflow-wrap: anywhere; }
+.og-lineage-root { position: relative; align-self: center; display: grid; gap: 6px; padding: 12px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; overflow-wrap: anywhere; }
+.og-lineage-root::after { content: ""; position: absolute; top: 50%; left: 100%; width: 28px; height: 1px; background: #cbd5e1; pointer-events: none; }
 .og-lineage-root small { color: #64748b; }
 .og-lineage-branches { position: relative; border-left: 1px solid #cbd5e1; }
 .og-lineage-branch { position: relative; margin: 0; padding: 8px 0 18px; min-width: 0; }
