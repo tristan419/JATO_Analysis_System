@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { PiInvoiceContext, PiInvoiceOptions, PiOrderHeader } from "../types/orderGeniusVehicle";
+import type { PiInvoiceContext, PiInvoiceOptions, PiOrderHeader, PiTemplateCatalog } from "../types/orderGeniusVehicle";
 import { ConfirmDialog, type ConfirmDialogError } from "./ConfirmDialog";
+import { PiInvoiceTemplateManager } from "./PiInvoiceTemplateManager";
 
 const EMPTY_COUNTRIES: readonly string[] = [];
 interface Props {
@@ -15,6 +16,10 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
   const [pis, setPis] = useState<PiOrderHeader[]>([]);
   const [selected, setSelected] = useState(piCode ?? "");
   const [context, setContext] = useState<PiInvoiceContext | null>(null);
+  const [catalog, setCatalog] = useState<PiTemplateCatalog | null>(null);
+  const [templateId, setTemplateId] = useState("");
+  const [manage, setManage] = useState(false);
+  const [revision, setRevision] = useState(0);
   const [options, setOptions] = useState<PiInvoiceOptions | null>(null);
   const [freight, setFreight] = useState("");
   const [insurance, setInsurance] = useState("");
@@ -42,22 +47,37 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
 
   useEffect(() => {
     let cancelled = false;
-    setContext(null); setOptions(null); setError(null);
-    setFreight(""); setInsurance(""); setHandling("0");
+    setCatalog(null); setTemplateId(""); setContext(null); setOptions(null); setError(null);
     if (!selected) return;
-    void api.getPiInvoiceContext(selected).then((next) => {
+    void api.getPiInvoiceTemplates(selected).then((next) => {
+      if (cancelled) return;
+      setCatalog(next); setTemplateId(next.items[0]?.id ?? "");
+      if (!next.items.length) fail(new Error("No matching template. Upload your country's XLSX / 无匹配模板，请上传本国XLSX模板"));
+    }).catch((cause: unknown) => { if (!cancelled) fail(cause); });
+    return () => { cancelled = true; };
+  }, [selected, revision]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setContext(null); setOptions(null);
+    setFreight(""); setInsurance(""); setHandling("0");
+    if (!selected || !templateId) return;
+    setError(null);
+    void api.getPiInvoiceContext(selected, templateId).then((next) => {
       if (!cancelled) { setContext(next); setOptions(next.defaults); }
     }).catch((cause: unknown) => { if (!cancelled) fail(cause); });
     return () => { cancelled = true; };
-  }, [selected]);
+  }, [selected, templateId]);
 
   async function download(): Promise<void> {
     if (!context || !options || busy) return;
     const amounts: Record<"freightEur" | "insuranceEur" | "handlingEur", string> = {
       freightEur: freight, insuranceEur: insurance, handlingEur: handling,
     };
-    const payload: PiInvoiceOptions = { ...options };
+    const payload: PiInvoiceOptions = { ...options, templateId };
+    if (context.templateRevision) payload.templateRevision = context.templateRevision;
     for (const key of ["freightEur", "insuranceEur", "handlingEur"] as const) {
+      if (context.charges && !context.charges.includes(key)) continue;
       const text = amounts[key].trim();
       if (!text) continue;
       const value = Number(text);
@@ -82,6 +102,7 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
     finally { setBusy(false); }
   }
 
+  if (manage && catalog) return <PiInvoiceTemplateManager key={selected} piCode={selected} initial={catalog} onClose={() => { setManage(false); setRevision((value) => value + 1); }} />;
   return <ConfirmDialog title="Export PI" description="Complete saved PI · historical FOB unchanged / 导出完整已保存 PI，不更改成交价"
     cancelLabel="Close" confirmLabel="Download XLSX" loadingLabel="Exporting..." submitting={busy}
     confirmDisabled={!context || !options} error={error} onCancel={onClose} onConfirm={() => void download()}>
@@ -89,13 +110,17 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
       {!pis.length ? <option value="">No saved PI in this country / month</option> : null}
       {pis.map((header) => <option key={header.piCode} value={header.piCode}>{header.piCode}</option>)}
     </select></label> : <p>{piCode}</p>}
+    {catalog ? <p><label>PI template / 导出模板<select aria-label="PI template" value={templateId} disabled={busy} onChange={(event) => setTemplateId(event.target.value)}>
+      {!catalog.items.length ? <option value="">No matching template / 无匹配模板</option> : null}
+      {catalog.items.map((item, index) => <option key={item.id} value={item.id}>{item.name} · {item.owner}{index === 0 ? " · Default" : ""}</option>)}
+    </select></label> <button type="button" disabled={busy} onClick={() => setManage(true)}>Manage templates / 管理模板</button></p> : null}
     {context && options ? <>
       <p>{context.templateName} · {context.unitCount} vehicles · {context.lineCount} PI lines</p>
       <p><strong>{context.buyerName}</strong><br />{context.buyerAddress}{context.buyerEmail ? <><br />{context.buyerEmail}</> : null}</p>
       <details><summary>Template details / 模板固定资料</summary>
         <p>{context.sellerName}<br />{context.sellerAddress}<br />{context.priceTerm} · {context.paymentTerm}</p>
         <pre className="pi-invoice-bank-details">{context.bankDetails}</pre>
-        <p>Fixed details are reused each month; template management is a later step / 固定资料每月复用，模板管理页后续提供</p>
+        <p>Fixed details are reused; date, reference and ports are reviewed each export / 固定资料复用，日期、编号及港口每次核对。</p>
       </details>
       <div className="pi-invoice-export-fields">
         {(["invoiceDate", "referenceNo", "portOfShipment", "portOfDischarge"] as const).map((key) => <label key={key}>
@@ -103,9 +128,9 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
           <input type={key === "invoiceDate" ? "date" : "text"} value={options[key]} disabled={busy}
             onChange={(event) => setOptions({ ...options, [key]: event.target.value })} />
         </label>)}
-        <label>Freight / 运费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Blank: saved vehicle costs" value={freight} disabled={busy} onChange={(event) => setFreight(event.target.value)} /></label>
-        <label>Insurance / 保费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Blank: saved vehicle costs" value={insurance} disabled={busy} onChange={(event) => setInsurance(event.target.value)} /></label>
-        {context.templateKey === "CH_OJ" ? <label>Handling Charges / 操作费 (EUR / unit)<input type="number" min="0" step="0.01" value={handling} disabled={busy} onChange={(event) => setHandling(event.target.value)} /></label> : null}
+        {!context.charges || context.charges.includes("freightEur") ? <label>Freight / 运费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Blank: saved vehicle costs" value={freight} disabled={busy} onChange={(event) => setFreight(event.target.value)} /></label> : null}
+        {!context.charges || context.charges.includes("insuranceEur") ? <label>Insurance / 保费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Blank: saved vehicle costs" value={insurance} disabled={busy} onChange={(event) => setInsurance(event.target.value)} /></label> : null}
+        {context.templateKey === "CH_OJ" || context.charges?.includes("handlingEur") ? <label>Handling Charges / 操作费 (EUR / unit)<input type="number" min="0" step="0.01" value={handling} disabled={busy} onChange={(event) => setHandling(event.target.value)} /></label> : null}
       </div>
       <p>Missing saved costs / 未填费用：Freight {context.missingFreightUnits} · Insurance {context.missingInsuranceUnits}. Entered costs override every unit for this file only; blank preserves each unit / 本次填写的费用统一用于本文件，留空保留每车费用。不写回订单。</p>
       <p>Check ports before each export, especially when the LC destination differs / 每次导出请核对港口，尤其 LC 目的港不同的情况。</p>

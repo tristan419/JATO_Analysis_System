@@ -9,6 +9,8 @@ export type PiStatus =
   | "cancelled";
 
 export interface PiInvoiceOptions {
+  templateId?: string;
+  templateRevision?: string;
   invoiceDate: string;
   referenceNo: string;
   portOfShipment: string;
@@ -19,6 +21,8 @@ export interface PiInvoiceOptions {
 }
 
 export interface PiInvoiceContext {
+  templateRevision?: string;
+  charges?: PiTemplateCharge[];
   piCode: string;
   templateKey: string;
   templateName: string;
@@ -35,6 +39,54 @@ export interface PiInvoiceContext {
   missingFreightUnits: number;
   missingInsuranceUnits: number;
   defaults: PiInvoiceOptions;
+}
+
+export type PiTemplateCharge = "freightEur" | "insuranceEur" | "handlingEur";
+export type PiTemplateField = "sellerName" | "sellerAddress" | "buyerName" | "buyerAddress" | "buyerEmail" | "bankDetails" | "priceTerm" | "paymentTerm" | "invoiceDate" | "referenceNo" | "portOfShipment" | "portOfDischarge";
+export type PiTemplateColumn = "number" | "modelName" | "version" | "powertrain" | "exteriorColorName" | "interiorColorName" | "materialCode" | "quantity" | "fobEur" | "fobAmount" | PiTemplateCharge | "total";
+export interface PiTemplateConfig {
+  sheetName: string;
+  headerRow: number;
+  dataStart: number;
+  totalRow: number;
+  columns: Partial<Record<PiTemplateColumn, string>>;
+  fields: Partial<Record<PiTemplateField, { cell: string; value: string; prefix: string }>>;
+  charges: PiTemplateCharge[];
+  currency: "EUR";
+}
+export interface PiTemplateAnalysis extends PiTemplateConfig {
+  sha256: string;
+  sheets: string[];
+  sourceCells: { cell: string; value: string }[];
+}
+export interface PiInvoiceTemplate {
+  id: string;
+  owner: string;
+  name: string;
+  country: string;
+  brands: string[];
+  shared: boolean;
+  system?: boolean;
+  sha256?: string;
+  config?: PiTemplateConfig;
+}
+export interface PiTemplateCatalog {
+  items: PiInvoiceTemplate[];
+  owner: string;
+  owners: string[];
+  actor: string;
+  admin: boolean;
+  country: string;
+  brands: string[];
+}
+export interface PiTemplateSave {
+  id?: string;
+  name: string;
+  country: string;
+  brands: string[];
+  shared: boolean;
+  sha256: string;
+  config: PiTemplateConfig;
 }
 
 export type AllocationStatus =

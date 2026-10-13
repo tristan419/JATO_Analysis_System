@@ -24,6 +24,53 @@ async function expand() {
 }
 
 describe("Model material changes board", () => {
+  it("uses one model ruler for two saved branches and collapses unlinked bases by default", async () => {
+    const data = dataset("SE", [node("A1"), node("A2"), node("B1"), node("B2"), node("UNLINKED")]);
+    data.links = [{ from: "A1", to: "A2", note: "Battery upgrade" }, { from: "B1", to: "B2" }];
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
+    render(<MaterialTimelineBoard {...props} />); await expand();
+    expect(document.querySelectorAll(".og-lineage-axis")).toHaveLength(1);
+    expect(document.querySelectorAll(".og-lineage-branch")).toHaveLength(2);
+    expect(document.querySelector(".og-lineage-pending")?.hasAttribute("open")).toBe(false);
+    expect(document.querySelectorAll(".og-timeline-version-details")).toHaveLength(0);
+    fireEvent.click(screen.getByText(/^SE · JAECOO · JAECOO5 BEV · 2 chains/));
+    fireEvent.click(screen.getByRole("button", { name: "A1 → A2 · Note / 备注" }));
+    expect(screen.getByRole("region", { name: "Material change detail" }).textContent).toContain("Battery upgrade");
+    fireEvent.change(screen.getByRole("combobox", { name: "Time zoom" }), { target: { value: "2" } });
+    expect((document.querySelector(".og-lineage-map") as HTMLElement).style.minWidth).toBe("1600px");
+  });
+
+  it("retains overlapping windows and does not stretch missing dates into an invented period", async () => {
+    const data = dataset("SE", [node("OLD"), node("NEW"), node("FUTURE", { effectiveFrom: null, effectiveTo: null })]);
+    data.links = [{ from: "OLD", to: "NEW" }, { from: "NEW", to: "FUTURE" }];
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
+    render(<MaterialTimelineBoard {...props} />); await expand();
+    const versions = [...document.querySelectorAll<HTMLElement>(".og-lineage-version")];
+    expect(versions).toHaveLength(2);
+    expect(versions.map((version) => version.style.top)).toEqual(["0px", "84px"]);
+    expect(screen.getByText(/FUTURE · Start not set/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "FUTURE starts" })).toBeNull();
+  });
+
+  it("does not link a colliding base code from another brand", async () => {
+    const data = dataset("SE", [node("A"), node("B", { brand: "OMODA", modelName: "OMODA5 BEV" })]);
+    data.links = [{ from: "A", to: "B" }];
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
+    render(<MaterialTimelineBoard {...props} />); await expand();
+    expect(document.querySelectorAll(".og-lineage-branch")).toHaveLength(0);
+  });
+
+  it("shows only a known boundary pin for an open BOM window", async () => {
+    const data = dataset("SE", [node("OLD"), node("OPEN", { effectiveFrom: "2026-10-01", effectiveTo: null })]);
+    data.links = [{ from: "OLD", to: "OPEN" }];
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
+    render(<MaterialTimelineBoard {...props} />); await expand();
+    expect(screen.getByRole("button", { name: "OPEN starts 2026-10-01" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^OPEN ends/ })).toBeNull();
+    expect(document.querySelectorAll(".og-lineage-period")).toHaveLength(1);
+    expect(screen.getByText(/OPEN · 2026-10-01 → End not set/)).toBeTruthy();
+  });
+
   it("keeps personal reminder countries independent of the temporary timeline filter", async () => {
     const timeline = vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country) => dataset(country));
     render(<MaterialTimelineBoard {...props} countries={["CH"]} noticeCountries={["CH", "SE"]} />);
@@ -123,7 +170,7 @@ describe("Model material changes board", () => {
     vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset("SE", [node("UNKNOWN", { effectiveFrom: null, effectiveTo: null })]));
     render(<MaterialTimelineBoard {...props} />);
     await expand();
-    expect(screen.getByText("Relation not maintained / 关联未维护")).toBeTruthy();
+    expect(screen.getByText(/Relation not maintained \/ 关联未维护/)).toBeTruthy();
     expect(screen.getByText("Dates not maintained / 日期待维护")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("0 models");
     expect(screen.queryByRole("button", { name: /UNKNOWN starts/ })).toBeNull();

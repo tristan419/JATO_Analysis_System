@@ -193,6 +193,10 @@ import type {
   BulkVehicleUpdateResult,
   PiOrderDetail,
   PiInvoiceContext,
+  PiTemplateAnalysis,
+  PiTemplateCatalog,
+  PiTemplateSave,
+  PiInvoiceTemplate,
   PiInvoiceOptions,
   PiOrderFilters,
   PiOrderHeader,
@@ -5337,8 +5341,30 @@ export const api = {
       `/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}`,
     ),
 
-  getPiInvoiceContext: (piCode: string) =>
-    request<PiInvoiceContext>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice`),
+  getPiInvoiceContext: (piCode: string, templateId?: string) =>
+    request<PiInvoiceContext>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/${templateId ? `invoice-context/${encodeURIComponent(templateId)}` : "invoice"}`),
+
+  getPiInvoiceTemplates: (piCode: string, owner = "") =>
+    request<PiTemplateCatalog>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice-templates${owner ? `?owner=${encodeURIComponent(owner)}` : ""}`),
+
+  previewPiTemplate: (piCode: string, file: File) => {
+    const body = new FormData(); body.append("file", file);
+    return request<PiTemplateAnalysis>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice-templates/preview`, { method: "POST", body });
+  },
+
+  savePiTemplate: (piCode: string, payload: PiTemplateSave, file?: File) => {
+    const path = `/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice-templates`;
+    if (payload.id) return request<PiInvoiceTemplate>(`${path}/${encodeURIComponent(payload.id)}`, { method: "PATCH", body: JSON.stringify(payload) });
+    if (!file) return Promise.reject(new Error("Select the template file / 请选择模板文件"));
+    const body = new FormData(); body.append("file", file); body.append("metadata", JSON.stringify(payload));
+    return request<PiInvoiceTemplate>(path, { method: "POST", body });
+  },
+
+  copyPiTemplate: (piCode: string, id: string) => request<PiInvoiceTemplate>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice-templates/${encodeURIComponent(id)}/copy`, { method: "POST" }),
+
+  deletePiTemplate: (piCode: string, id: string) => request<{ deleted: boolean }>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice-templates/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  orderPiTemplates: (piCode: string, ids: string[], owner: string) => request<{ saved: boolean }>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice-template-order`, { method: "PUT", body: JSON.stringify({ ids, owner }) }),
 
   exportPiInvoice: (piCode: string, options: PiInvoiceOptions) =>
     requestBlob(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice`, {
