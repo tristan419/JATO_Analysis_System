@@ -93,10 +93,23 @@ def test_custom_invoice_uses_saved_snapshots_cached_formulas_and_footer_mapping(
     assert cached["I13"].value == 208.46
     assert cached["H13"].value == 200.22
     assert cached["D13"].value == 2
+    assert ws["D13"].number_format == "#,##0"
+    assert ws["I13"].number_format == "#,##0.00"
     assert ws["A14"].value == "Port of Shipment: Loading"
     assert ws["F2"].value == "PI-CZ-202609-001"
     assert ws.column_dimensions["B"].width == 28
     assert pi == before and template["path"].read_bytes() == content
+
+
+def test_custom_total_format_is_preserved(source):
+    content, payload = source
+    wb = openpyxl.load_workbook(BytesIO(content)); wb.active["I13"].number_format = '"EUR "#,##0.00'
+    output = BytesIO(); wb.save(output); content = output.getvalue()
+    payload["sha256"] = hashlib.sha256(content).hexdigest()
+    record = templates.save(content, payload, "alice", False)
+    template = templates.load_template(record["id"], "alice", False, "CZ", {"OMODA"})
+    ws = openpyxl.load_workbook(exporter.generate_pi_invoice_excel(detail(), {}, template)).active
+    assert ws["I13"].number_format == '"EUR "#,##0.00'
 
 
 def test_table_shrinks_footer_moves_and_zero_overrides_do_not_mutate_pi(source):

@@ -42,6 +42,8 @@ const links = [{ from: 'OLD-A', to: 'NEW-A', note: 'Battery upgrade' }, { from: 
       await model.locator(':scope > summary').click();
       assert.equal(await model.locator('.og-lineage-axis').count(), 1);
       assert.equal(await model.locator('.og-lineage-branch').count(), 2);
+      const connector = await model.locator('.og-lineage-root').evaluate(element => ({ content: getComputedStyle(element, '::after').content, width: getComputedStyle(element, '::after').width }));
+      assert.equal(connector.content, '""'); assert.equal(connector.width, '28px');
       assert.equal(await model.locator('.og-lineage-pending').evaluate(element => element.open), false);
       await model.getByRole('button', { name: 'OLD-A ends 2026-10-29', exact: true }).click();
       await board.getByRole('region', { name: 'Material change detail' }).filter({ hasText: 'OLD-A' }).waitFor();

@@ -498,6 +498,8 @@ def _render_mapped_invoice(template: dict, context: dict, fields: dict, invoice_
         if field in columns:
             letter = config["columns"][field]
             cell = ws.cell(total_row, columns[field], f"=SUM({letter}{start}:{letter}{total_row - 1})")
+            if cell.number_format == "General":
+                cell.number_format = "#,##0" if field == "quantity" else "#,##0.00"
             cached[cell.coordinate] = context["unitCount"] if field == "quantity" else sum(cached[f"{letter}{row}"] for row in range(start, total_row))
     label = next((col for col in range(1, max_col + 1) if col not in columns.values()), 1)
     if ws.cell(total_row, label).__class__.__name__ != "MergedCell" and label not in {columns[key] for key in ("quantity", "total")}:
