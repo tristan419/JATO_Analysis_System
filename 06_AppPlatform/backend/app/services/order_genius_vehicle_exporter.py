@@ -153,8 +153,23 @@ def _excel_value(value: object) -> object:
     return value
 
 
-def pi_invoice_context(detail: dict) -> dict:
+def pi_invoice_context(detail: dict, template: dict | None = None) -> dict:
     """Offer fixed template information; opening this preview never writes orders."""
+    if template:
+        fields = template["config"]["fields"]
+        header = detail["header"]
+        values = {key: field["value"] for key, field in fields.items()}
+        charges = template["config"]["charges"]
+        return {"piCode": header["piCode"], "templateKey": template["id"], "templateName": template["name"],
+                **{key: values.get(key, "") for key in ("buyerName", "buyerAddress", "buyerEmail", "sellerName", "sellerAddress", "bankDetails", "priceTerm", "paymentTerm")},
+                "unitCount": len(detail["vehicles"]), "lineCount": len(detail["lines"]), "charges": charges,
+                "missingFreightUnits": sum(v.get("freightEur") is None for v in detail["vehicles"]) if "freightEur" in charges else 0,
+                "missingInsuranceUnits": sum(v.get("insuranceEur") is None for v in detail["vehicles"]) if "insuranceEur" in charges else 0,
+                "templateRevision": template["updatedAt"],
+                "defaults": {"invoiceDate": header.get("orderDate") or date.today().isoformat(),
+                             "referenceNo": header.get("officialPiNo") or header["piCode"],
+                             "portOfShipment": values.get("portOfShipment", ""),
+                             "portOfDischarge": header.get("portOfDischarge") or values.get("portOfDischarge", "")}}
     header = detail["header"]
     country = str(header.get("orderingAccountCode") or header["countryCode"]).upper()
     profiles_path = PI_TEMPLATE_ROOT / "profiles.json"
@@ -204,11 +219,8 @@ def _invoice_money(value: object, label: str, *, positive: bool = False) -> Deci
     return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def generate_pi_invoice_excel(detail: dict, options: dict) -> io.BytesIO:
-    """Fill a clean country template exclusively from saved PI snapshots."""
-    context = pi_invoice_context(detail)
-    country = context["templateKey"][:2]
-    header = detail["header"]
+def _invoice_groups(detail: dict, options: dict, charges: list[str]) -> dict:
+    """Single saved-snapshot quantity/cost validation shared by both layouts."""
     vehicles = detail["vehicles"]
     counts = {line["piLineCode"]: 0 for line in detail["lines"]}
     grouped: dict[tuple, int] = {}
@@ -218,14 +230,18 @@ def generate_pi_invoice_excel(detail: dict, options: dict) -> io.BytesIO:
             raise ValueError("PI vehicle / line mismatch / 车辆与 PI 明细不一致，请重新读取")
         counts[code] += 1
         fob = _invoice_money(vehicle.get("fobEur"), "FOB", positive=True)
-        freight = _invoice_money(options.get("freightEur", vehicle.get("freightEur")), "Freight / 运费")
-        insurance = _invoice_money(options.get("insuranceEur", vehicle.get("insuranceEur")), "Insurance / 保费")
+        freight = _invoice_money(options.get("freightEur", vehicle.get("freightEur")), "Freight / 运费") if "freightEur" in charges else Decimal(0)
+        insurance = _invoice_money(options.get("insuranceEur", vehicle.get("insuranceEur")), "Insurance / 保费") if "insuranceEur" in charges else Decimal(0)
         key = (vehicle.get("modelName"), vehicle.get("version"), vehicle.get("powertrain"),
                vehicle.get("exteriorColorName"), vehicle.get("exteriorColorCode"),
                vehicle.get("interiorColorName"), vehicle.get("materialCode"), fob, freight, insurance)
         grouped[key] = grouped.get(key, 0) + 1
     if not vehicles or any(counts[line["piLineCode"]] != line["quantity"] for line in detail["lines"]):
         raise ValueError("PI vehicle quantity is incomplete / PI 车辆数量与明细不一致，请重新读取")
+    return grouped
+
+
+def _invoice_fields(context: dict, options: dict) -> tuple:
     defaults = context["defaults"]
     try:
         invoice_date = date.fromisoformat(str(options.get("invoiceDate", defaults["invoiceDate"])))
@@ -237,7 +253,22 @@ def generate_pi_invoice_excel(detail: dict, options: dict) -> io.BytesIO:
     fields = {key: value.strip() for key, value in fields.items()}
     if any(not value or len(value) > 300 for value in fields.values()):
         raise ValueError("Check reference number and ports / 请填写有效的 PI 编号及港口")
+    return invoice_date, fields
+
+
+def generate_pi_invoice_excel(detail: dict, options: dict, template: dict | None = None) -> io.BytesIO:
+    """Fill a clean country template exclusively from saved PI snapshots."""
+    context = pi_invoice_context(detail, template)
+    charges = template["config"]["charges"] if template else ["freightEur", "insuranceEur", "handlingEur"]
+    grouped = _invoice_groups(detail, options, charges)
+    invoice_date, fields = _invoice_fields(context, options)
     handling = _invoice_money(options.get("handlingEur", 0), "Handling Charges / 操作费")
+    if template:
+        if "handlingEur" not in charges and handling:
+            raise ValueError("Template excludes handling / 模板不计操作费")
+        return _render_mapped_invoice(template, context, fields, invoice_date, grouped, handling)
+    country = context["templateKey"][:2]
+    vehicles = detail["vehicles"]
     if country == "SE" and handling:
         raise ValueError("SE template has no handling charge column / SE 模板不含操作费")
 
@@ -359,8 +390,12 @@ def generate_pi_invoice_excel(detail: dict, options: dict) -> io.BytesIO:
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.print_title_rows = "26:27"
+    return _save_invoice(wb, cached)
+
+def _save_invoice(wb, cached: dict) -> io.BytesIO:
     output = io.BytesIO()
     wb.save(output)
+    wb.close()
     # openpyxl keeps live formulas but cannot write their calculated cache.
     # Cache only the totals computed above; Excel still recalculates on edits.
     result = io.BytesIO()
@@ -377,3 +412,100 @@ def generate_pi_invoice_excel(detail: dict, options: dict) -> io.BytesIO:
             target.writestr(item, content)
     result.seek(0)
     return result
+
+
+def _render_mapped_invoice(template: dict, context: dict, fields: dict, invoice_date: date,
+                           grouped: dict, handling: Decimal) -> io.BytesIO:
+    """Preserve confirmed header/footer layout; replace all example details."""
+    from openpyxl.utils import column_index_from_string
+    from app.services.pi_invoice_templates import validate_config
+    config = validate_config(template["path"].read_bytes(), template["config"])
+    wb = openpyxl.load_workbook(template["path"], keep_links=False)
+    ws = wb[config["sheetName"]]
+    start, old_total = config["dataStart"], config["totalRow"]
+    columns = {key: column_index_from_string(value) for key, value in config["columns"].items()}
+    total_row, delta = start + len(grouped), len(grouped) - (old_total - start)
+    max_row, max_col = ws.max_row, ws.max_column
+    styles = [copy(ws.cell(start, col)._style) for col in range(1, max_col + 1)]
+    height = ws.row_dimensions[start].height or 32
+    footer_cells = [copy(cell) for row in ws.iter_rows(min_row=old_total, max_row=max_row) for cell in row if cell.__class__.__name__ != "MergedCell"]
+    footer_heights = {row: ws.row_dimensions[row].height for row in range(old_total, max_row + 1)}
+    footer_merges = [copy(merged) for merged in ws.merged_cells.ranges if merged.min_row >= old_total]
+    for merged in list(ws.merged_cells.ranges):
+        if merged.max_row >= start:
+            ws.unmerge_cells(str(merged))
+    ws.delete_rows(start, max_row - start + 1)
+    for old in footer_cells:
+        cell = ws.cell(old.row + delta, old.column)
+        cell._style, cell.alignment = copy(old._style), copy(old.alignment)
+        if old.row > old_total:
+            cell.value = old.value
+            cell.data_type = old.data_type
+    for old_row, row_height in footer_heights.items():
+        ws.row_dimensions[old_row + delta].height = row_height
+    for merged in footer_merges:
+        ws.merge_cells(start_row=merged.min_row + delta, end_row=merged.max_row + delta,
+                       start_column=merged.min_col, end_column=merged.max_col)
+    for key, field in config["fields"].items():
+        old = ws[field["cell"]]
+        row = old.row + (delta if old.row > old_total else 0)
+        cell = ws.cell(row, old.column)
+        value = invoice_date if key == "invoiceDate" else fields.get(key, field["value"])
+        cell.value = value if key == "invoiceDate" and not field["prefix"] else field["prefix"] + str(value)
+        if isinstance(cell.value, str):
+            cell.data_type = "s"
+        if key == "invoiceDate" and not field["prefix"]:
+            cell.number_format = "yyyy-mm-dd"
+    cached = {}
+    for index, (key, quantity) in enumerate(grouped.items()):
+        model, version, powertrain, colour, code, interior, material, fob, freight, insurance = key
+        row = start + index
+        values = dict(number=index + 1, modelName=model or "-", version=version or "-", powertrain=powertrain or "-",
+                      exteriorColorName=f"{colour or code or '-'}" + (f" ({code})" if colour and code and code not in str(colour) else ""),
+                      interiorColorName=interior or "-", materialCode=material, quantity=quantity, fobEur=fob,
+                      freightEur=freight, insuranceEur=insurance, handlingEur=handling)
+        for col in range(1, max_col + 1):
+            ws.cell(row, col)._style = copy(styles[col - 1])
+        for field, col in columns.items():
+            if field in {"total", "fobAmount"}:
+                continue
+            cell = ws.cell(row, col, values[field])
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
+        q, f = f'{config["columns"]["quantity"]}{row}', f'{config["columns"]["fobEur"]}{row}'
+        components = "+".join([f, *(f'{config["columns"][charge]}{row}' for charge in config["charges"])])
+        for field, formula, amount in (("fobAmount", f"=ROUND({f}*{q},2)", fob * quantity),
+                                     ("total", f"=ROUND(({components})*{q},2)", (fob + freight + insurance + (handling if "handlingEur" in config["charges"] else 0)) * quantity)):
+            if field in columns:
+                cell = ws.cell(row, columns[field], formula)
+                cell.number_format = "#,##0.00"
+                cached[cell.coordinate] = amount.quantize(Decimal("0.01"))
+        ws.row_dimensions[row].height = height
+    keys = list(grouped)
+    for field, size in (("modelName", 1), ("version", 2)):
+        if field not in columns:
+            continue
+        run = 0
+        for end in range(1, len(keys) + 1):
+            if end < len(keys) and keys[end][:size] == keys[run][:size]:
+                continue
+            if str(keys[run][size - 1] or "").strip() and end - run > 1:
+                ws.merge_cells(start_row=start + run, end_row=start + end - 1,
+                               start_column=columns[field], end_column=columns[field])
+            run = end
+    for field in ("quantity", "fobAmount", "total"):
+        if field in columns:
+            letter = config["columns"][field]
+            cell = ws.cell(total_row, columns[field], f"=SUM({letter}{start}:{letter}{total_row - 1})")
+            cached[cell.coordinate] = context["unitCount"] if field == "quantity" else sum(cached[f"{letter}{row}"] for row in range(start, total_row))
+    label = next((col for col in range(1, max_col + 1) if col not in columns.values()), 1)
+    if ws.cell(total_row, label).__class__.__name__ != "MergedCell" and label not in {columns[key] for key in ("quantity", "total")}:
+        ws.cell(total_row, label, "Total")
+    ws.auto_filter.ref = None
+    wb.defined_names.clear()
+    ws.print_area = f"A1:{get_column_letter(max_col)}{max_row + delta}"
+    ws.print_title_rows = f'{config["headerRow"]}:{start - 1}'
+    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    return _save_invoice(wb, cached)

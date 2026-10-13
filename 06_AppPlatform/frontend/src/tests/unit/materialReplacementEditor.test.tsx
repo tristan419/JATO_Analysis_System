@@ -54,10 +54,11 @@ describe("Explicit material relationship maintenance", () => {
     const notice: MaterialNotice = { key: "key", countryCode: "SE", kind: "start", date: "2026-10-30", bomTemplate: "NEW", brand: "JAECOO", modelName: "JAECOO5 BEV", target: null, note: "", read: false };
     const request = vi.spyOn(api, "getMaterialNotices").mockImplementation(async () => ({ countryCode: "SE", notices: [{ ...notice }] }));
     const mark = vi.spyOn(api, "readMaterialNotice").mockImplementation(async () => { notice.read = true; return { read: true }; });
-    render(<MaterialNotices countries={["SE"]} authorizationKey="filler" revision={0} onViewModel={vi.fn()} />);
-    await screen.findByText(/1 unread/);
+    render(<MaterialNotices countries={["SE"]} authorizationKey="filler" revision={0} defaultExpanded onViewModel={vi.fn()} />);
+    await screen.findByText(/^My material reminders.*1 unread changes/);
+    fireEvent.click(screen.getByText(/^JAECOO · JAECOO5 BEV · 1 changes/));
     fireEvent.click(screen.getByRole("button", { name: /Mark read/ }));
-    await screen.findByText(/0 unread/);
+    await screen.findByText(/^My material reminders.*0 unread changes/);
     expect(mark).toHaveBeenCalledWith("key", "SE", true);
     expect(request).toHaveBeenCalledTimes(2);
     expect(screen.getByText(/NEW/)).toBeTruthy();

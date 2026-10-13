@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session
@@ -50,6 +50,9 @@ from app.services.order_genius_vehicle_service import (
 )
 from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
 from app.services.order_genius_vehicle_exporter import generate_pi_invoice_excel, pi_invoice_context
+from app.services import pi_invoice_templates as invoice_templates
+from app.db.models import User
+from app.core.security import ORDERING_BRANDS
 
 router = APIRouter(
     prefix="/order-genius/vehicle-allocation",
@@ -466,13 +469,156 @@ def _invoice_detail(session: Session, user: UserContext, pi_code: str) -> dict:
     return detail
 
 
+def _template_scope(session: Session, user: UserContext, pi_code: str) -> tuple:
+    detail = _invoice_detail(session, user, pi_code)
+    country = str(detail["header"].get("orderingAccountCode") or detail["header"]["countryCode"]).upper()
+    brands = {str(line.get("brand") or "").upper() for line in detail["lines"]}
+    if not brands <= set(ORDERING_BRANDS):
+        raise HTTPException(409, "PI brand identity missing or unknown / PI品牌身份缺失或未知")
+    _validate_country(session, user, country)
+    for brand in brands:
+        validate_brand_access(session, user, brand)
+    if not brands or "" in brands:
+        raise HTTPException(409, "PI brand identity missing / PI品牌身份缺失")
+    return detail, country, brands
+
+
+def _selected_template(session: Session, user: UserContext, pi_code: str, template_id: str = "") -> dict | None:
+    _, country, brands = _template_scope(session, user, pi_code)
+    if not template_id:
+        items = invoice_templates.catalog(user.name, is_admin(user.role), country, brands)["items"]
+        template_id = items[0]["id"] if items else ""
+    if user.role == "viewer" and template_id and template_id != f"{country}_OJ":
+        raise HTTPException(403, "Personal PI templates require a business role / 个人PI模板需业务角色")
+    if not template_id or template_id == f"{country}_OJ":
+        return None
+    return invoice_templates.load_template(template_id, user.name, is_admin(user.role), country, brands)
+
+
+def _template_error(exc: Exception) -> HTTPException:
+    return HTTPException(403 if isinstance(exc, PermissionError) else 404 if isinstance(exc, FileNotFoundError) else 409,
+                         "Template file missing / 模板文件缺失，请重新上传" if isinstance(exc, FileNotFoundError) else str(exc))
+
+
+@router.get("/pi/{pi_code}/invoice-templates")
+def list_invoice_templates(pi_code: str, owner: str = "", session: Session = Depends(get_db_session),
+                           user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    _, country, brands = _template_scope(session, user, pi_code)
+    try:
+        return {**invoice_templates.catalog(user.name, is_admin(user.role), country, brands, owner),
+                "country": country, "brands": sorted(brands), "admin": is_admin(user.role), "actor": user.name}
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise _template_error(exc) from exc
+
+
+@router.post("/pi/{pi_code}/invoice-templates/preview")
+async def parse_invoice_template(pi_code: str, file: UploadFile = File(...), session: Session = Depends(get_db_session),
+                                 user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    _template_scope(session, user, pi_code)
+    try:
+        return invoice_templates.analyse(await file.read(invoice_templates.MAX_TEMPLATE_BYTES + 1))
+    except ValueError as exc:
+        raise _template_error(exc) from exc
+    finally:
+        await file.close()
+
+
+def _save_template_for_pi(session: Session, user: UserContext, pi_code: str, content: bytes, payload: dict) -> dict:
+    _, country, pi_brands = _template_scope(session, user, pi_code)
+    brands = payload.get("brands")
+    if payload.get("country") != country or not isinstance(brands, list) or not all(isinstance(brand, str) for brand in brands) or not pi_brands <= set(brands):
+        raise ValueError("Template must cover this PI country and all brands / 模板须覆盖该PI国家及全部品牌")
+    if not set(brands) <= set(ORDERING_BRANDS):
+        raise ValueError("Unknown template brand / 模板品牌未知")
+    for brand in brands:
+        validate_brand_access(session, user, brand)
+    if payload.get("id"):
+        invoice_templates.load_template(payload["id"], user.name, is_admin(user.role), country, pi_brands)
+    return invoice_templates.save(content, payload, user.name, is_admin(user.role))
+
+
+@router.post("/pi/{pi_code}/invoice-templates")
+async def import_invoice_template(pi_code: str, metadata: str = Form(...), file: UploadFile = File(...),
+                                  session: Session = Depends(get_db_session),
+                                  user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    try:
+        payload = json.loads(metadata)
+        if not isinstance(payload, dict):
+            raise ValueError("Invalid template metadata / 模板资料无效")
+        return _save_template_for_pi(session, user, pi_code, await file.read(invoice_templates.MAX_TEMPLATE_BYTES + 1), payload)
+    except (ValueError, PermissionError, FileNotFoundError, KeyError) as exc:
+        raise _template_error(exc) from exc
+    finally:
+        await file.close()
+
+
+@router.patch("/pi/{pi_code}/invoice-templates/{template_id}")
+def update_invoice_template(pi_code: str, template_id: str, body: dict, session: Session = Depends(get_db_session),
+                            user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    try:
+        _, country, brands = _template_scope(session, user, pi_code)
+        source = invoice_templates.load_template(template_id, user.name, is_admin(user.role), country, brands)
+        return _save_template_for_pi(session, user, pi_code, source["path"].read_bytes(), {**body, "id": template_id})
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise _template_error(exc) from exc
+
+
+@router.post("/pi/{pi_code}/invoice-templates/{template_id}/copy")
+def copy_invoice_template(pi_code: str, template_id: str, session: Session = Depends(get_db_session),
+                          user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    try:
+        _, country, brands = _template_scope(session, user, pi_code)
+        source = invoice_templates.load_template(template_id, user.name, is_admin(user.role), country, brands)
+        return _save_template_for_pi(session, user, pi_code, source["path"].read_bytes(),
+                                     {**source, "id": "", "name": source["name"][:93] + " (copy)", "brands": sorted(brands), "shared": False})
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise _template_error(exc) from exc
+
+
+@router.delete("/pi/{pi_code}/invoice-templates/{template_id}")
+def delete_invoice_template(pi_code: str, template_id: str, session: Session = Depends(get_db_session),
+                            user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    _, country, brands = _template_scope(session, user, pi_code)
+    try:
+        invoice_templates.remove(template_id, user.name, is_admin(user.role), country, brands)
+        return {"deleted": True}
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise _template_error(exc) from exc
+
+
+@router.put("/pi/{pi_code}/invoice-template-order")
+def order_invoice_templates(pi_code: str, body: dict, session: Session = Depends(get_db_session),
+                            user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    _, country, brands = _template_scope(session, user, pi_code)
+    try:
+        owner = body.get("owner", "")
+        if owner and owner != user.name:
+            if not is_admin(user.role):
+                raise PermissionError("Only admin can manage another owner / 仅管理员可管理其他账号")
+            if not session.query(User).filter(User.username == owner).first():
+                raise ValueError("Target account does not exist / 目标账号不存在")
+        invoice_templates.reorder(user.name, is_admin(user.role), country, brands, body.get("ids"), body.get("owner", ""))
+        return {"saved": True}
+    except (ValueError, PermissionError) as exc:
+        raise _template_error(exc) from exc
+
+
 @router.get("/pi/{pi_code}/invoice")
 def preview_pi_invoice(pi_code: str, session: Session = Depends(get_db_session),
                        user: UserContext = Depends(require_min_role("viewer"))) -> dict:
     try:
-        return pi_invoice_context(_invoice_detail(session, user, pi_code))
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        return pi_invoice_context(_invoice_detail(session, user, pi_code), _selected_template(session, user, pi_code))
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise _template_error(exc) from exc
+
+
+@router.get("/pi/{pi_code}/invoice-context/{template_id}")
+def selected_invoice_context(pi_code: str, template_id: str, session: Session = Depends(get_db_session),
+                              user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    try:
+        return pi_invoice_context(_invoice_detail(session, user, pi_code), _selected_template(session, user, pi_code, template_id))
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise _template_error(exc) from exc
 
 
 @router.post("/pi/{pi_code}/invoice")
@@ -481,9 +627,12 @@ def export_pi_invoice(pi_code: str, body: dict,
                       user: UserContext = Depends(require_min_role("viewer"))) -> StreamingResponse:
     try:
         detail = _invoice_detail(session, user, pi_code)
-        buf = generate_pi_invoice_excel(detail, body)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        template = _selected_template(session, user, pi_code, body.get("templateId", ""))
+        if template and body.get("templateRevision") != template["updatedAt"]:
+            raise ValueError("Template changed since preview; reload before exporting / 模板自预览后有变化，请重读再导出")
+        buf = generate_pi_invoice_excel(detail, body, template)
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise _template_error(exc) from exc
     # Use the saved canonical identifier, not arbitrary request text, as a filename.
     filename = f"Proforma_{detail['header']['piCode']}.xlsx"
     return StreamingResponse(buf, media_type=XLSX_MEDIA_TYPE,
