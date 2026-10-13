@@ -69,7 +69,7 @@ it("admin can explicitly switch to another owner's list", async () => {
   render(<PiInvoiceTemplateManager piCode="PI" initial={{ ...catalog, admin: true }} onClose={vi.fn()} />);
   fireEvent.change(screen.getByLabelText("Manage template owner"), { target: { value: "bob" } });
   await waitFor(() => expect(api.getPiInvoiceTemplates).toHaveBeenCalledWith("PI", "bob"));
-  expect((screen.getByLabelText("Manage template owner") as HTMLSelectElement).value).toBe("bob");
+  await waitFor(() => expect((screen.getByLabelText("Manage template owner") as HTMLSelectElement).value).toBe("bob"));
 });
 
 it("requires explicit confirmation to delete only the owned source", async () => {
