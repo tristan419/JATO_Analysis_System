@@ -72,6 +72,16 @@ it("uses the account's top compatible template and offers upload when none exist
   expect(api.getPiInvoiceContext).not.toHaveBeenCalled();
   expect((screen.getByRole("button", { name: "Download XLSX" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByRole("button", { name: "Manage templates / 管理模板" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Manage templates / 管理模板" }));
+  expect(screen.getByLabelText("Upload PI template")).toBeTruthy();
+});
+
+it("explains the independent template entry when this country has no saved PI", async () => {
+  vi.mocked(api.getVehicleAllocationPis).mockResolvedValue({ items: [], total: 0 });
+  render(<PiInvoiceExportDialog countries={["BG"]} onClose={vi.fn()} />);
+  await screen.findByText(/Use Import \/ Export → PI Templates/);
+  expect(api.getPiInvoiceTemplates).not.toHaveBeenCalled();
+  expect((screen.getByRole("button", { name: "Download XLSX" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it("a damaged top template stays selected and never silently falls back", async () => {

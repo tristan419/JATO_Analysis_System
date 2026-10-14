@@ -102,7 +102,7 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
     finally { setBusy(false); }
   }
 
-  if (manage && catalog) return <PiInvoiceTemplateManager key={selected} piCode={selected} initial={catalog} onClose={() => { setManage(false); setRevision((value) => value + 1); }} />;
+  if (manage && catalog) return <PiInvoiceTemplateManager key={selected} initial={catalog} onClose={() => { setManage(false); setRevision((value) => value + 1); }} />;
   return <ConfirmDialog title="Export PI" description="Complete saved PI · historical FOB unchanged / 导出完整已保存 PI，不更改成交价"
     cancelLabel="Close" confirmLabel="Download XLSX" loadingLabel="Exporting..." submitting={busy}
     confirmDisabled={!context || !options} error={error} onCancel={onClose} onConfirm={() => void download()}>
@@ -110,6 +110,7 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
       {!pis.length ? <option value="">No saved PI in this country / month</option> : null}
       {pis.map((header) => <option key={header.piCode} value={header.piCode}>{header.piCode}</option>)}
     </select></label> : <p>{piCode}</p>}
+    {!selected ? <p>No saved PI to export. Use Import / Export → PI Templates to upload a template first / 暂无已保存PI可导出；可先从导入导出 → PI模板上传模板，无需创建PI。</p> : null}
     {catalog ? <p><label>PI template / 导出模板<select aria-label="PI template" value={templateId} disabled={busy} onChange={(event) => setTemplateId(event.target.value)}>
       {!catalog.items.length ? <option value="">No matching template / 无匹配模板</option> : null}
       {catalog.items.map((item, index) => <option key={item.id} value={item.id}>{item.name} · {item.owner}{index === 0 ? " · Default" : ""}</option>)}

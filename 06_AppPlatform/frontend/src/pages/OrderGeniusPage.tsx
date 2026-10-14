@@ -18,9 +18,10 @@ import { MaterialTimelineBoard } from "../components/orderGenius/MaterialTimelin
 import { MaterialReplacementEditor } from "../components/orderGenius/MaterialReplacementEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PiInvoiceExportDialog } from "../components/PiInvoiceExportDialog";
+import { PiInvoiceTemplateManager } from "../components/PiInvoiceTemplateManager";
 
 import { api, apiUrl, AUTH_FAILURE_EVENT } from "../api/client";
-import { useAuth } from "../contexts/AuthContext";
+import { ORDERING_BRANDS, useAuth } from "../contexts/AuthContext";
 import { OrderingBrandNotice } from "../components/RoleUpgradeModal";
 import { isAdminRole } from "../utils/pageNavigation";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
@@ -2312,6 +2313,7 @@ export function OrderGeniusPage() {
   const [mergeExport, setMergeExport] = useState(false);
   const [showPiExportOptions, setShowPiExportOptions] = useState(false);
   const [showInvoiceExport, setShowInvoiceExport] = useState(false);
+  const [showPiTemplates, setShowPiTemplates] = useState(false);
   const [piExportFreightEur, setPiExportFreightEur] = useState("");
   const [piExportInsuranceEur, setPiExportInsuranceEur] = useState("");
   const [piExportDomesticFreightEur, setPiExportDomesticFreightEur] = useState("");
@@ -2808,6 +2810,9 @@ export function OrderGeniusPage() {
                 disabled={selectedCountries.length === 0}>
           Export PI
         </button>
+        {canFillOrders ? <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowPiTemplates(true)}>
+          PI Templates / PI模板
+        </button> : null}
         <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowPiExportOptions((open) => !open)}
                 disabled={combinedMatrix.totalRows === 0}>
           Export PI data
@@ -3412,6 +3417,10 @@ export function OrderGeniusPage() {
       {showInvoiceExport ? <PiInvoiceExportDialog countries={selectedCountries}
         month={selectedMonth == null ? undefined : `${selectedYear}-${String(selectedMonth).padStart(2, "0")}`}
         onClose={() => setShowInvoiceExport(false)} /> : null}
+      {showPiTemplates && canFillOrders ? <PiInvoiceTemplateManager key={authorizationKey}
+        countries={isAdmin ? countries.map((item) => item.countryCode) : userCountries}
+        brands={isAdmin ? [...ORDERING_BRANDS] : user?.brands ?? []} defaultCountry={primaryCountry}
+        onClose={() => setShowPiTemplates(false)} /> : null}
 
       {missingFobCountryCodes.length > 0 ? (
         <div className="order-genius-missing-fob-alert" role="alert">

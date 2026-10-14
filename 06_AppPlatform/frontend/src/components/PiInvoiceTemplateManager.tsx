@@ -19,10 +19,46 @@ const COLUMNS: { key: PiTemplateColumn; label: string }[] = [
   { key: "freightEur", label: "Unit freight" }, { key: "insuranceEur", label: "Unit insurance" },
   { key: "handlingEur", label: "Unit handling" }, { key: "total", label: "Total amount*" },
 ];
-interface Props { piCode: string; initial: PiTemplateCatalog; onClose: () => void }
+type Props = { initial: PiTemplateCatalog; onClose: () => void } | {
+  countries: string[]; brands: string[]; defaultCountry?: string; onClose: () => void;
+};
 interface Draft { payload: PiTemplateSave; file?: File; cells: { cell: string; value: string }[] }
 
-export function PiInvoiceTemplateManager({ piCode, initial, onClose }: Props) {
+export function PiInvoiceTemplateManager(props: Props) {
+  return "initial" in props ? <TemplateEditor {...props} /> : <TemplateScopePicker {...props} />;
+}
+
+function TemplateScopePicker({ countries, brands, defaultCountry, onClose }: Extract<Props, { countries: string[] }>) {
+  const [country, setCountry] = useState(countries.includes(defaultCountry ?? "") ? defaultCountry ?? "" : countries[0] ?? "");
+  const [selectedBrands, setSelectedBrands] = useState<string[]>([]);
+  const [catalog, setCatalog] = useState<PiTemplateCatalog | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ConfirmDialogError | null>(null);
+  async function open(): Promise<void> {
+    if (busy || !country || !selectedBrands.length) return;
+    setBusy(true); setError(null);
+    try { setCatalog(await api.getInvoiceTemplates({ country, brands: selectedBrands })); }
+    catch (cause: unknown) { setError({ title: "Cannot load templates / 无法读取模板", message: cause instanceof Error ? cause.message : String(cause) }); }
+    finally { setBusy(false); }
+  }
+  if (catalog) return <TemplateEditor initial={catalog} onClose={() => { setCatalog(null); setError(null); }} />;
+  return <ConfirmDialog title="PI Templates / PI模板" description="Upload before creating a PI / 无需先创建PI即可上传模板"
+    cancelLabel="Close" confirmLabel="Open templates / 打开模板" loadingLabel="Loading..." submitting={busy}
+    confirmDisabled={!country || !selectedBrands.length} error={error} onCancel={onClose} onConfirm={() => void open()}>
+    <label>Country / 国家<select aria-label="Template country" value={country} disabled={busy} onChange={(event) => { setCountry(event.target.value); setError(null); }}>
+      {!countries.length ? <option value="">No countries assigned / 尚未分配国家</option> : null}
+      {countries.map((code) => <option key={code}>{code}</option>)}
+    </select></label>
+    <fieldset disabled={busy}><legend>Brands / 品牌（可多选）</legend>{brands.map((brand) => <label key={brand} style={{ marginRight: 12 }}>
+      <input type="checkbox" checked={selectedBrands.includes(brand)} onChange={(event) => {
+        setSelectedBrands(event.target.checked ? [...selectedBrands, brand] : selectedBrands.filter((value) => value !== brand)); setError(null);
+      }} />{brand}
+    </label>)}</fieldset>
+    <p>Templates are personal unless explicitly shared. This does not create a PI or change prices / 模板默认个人，主动共享后他人才可用；不会创建PI或修改价格。</p>
+  </ConfirmDialog>;
+}
+
+function TemplateEditor({ initial, onClose }: { initial: PiTemplateCatalog; onClose: () => void }) {
   const [catalog, setCatalog] = useState(initial);
   const [items, setItems] = useState(initial.items);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -34,15 +70,16 @@ export function PiInvoiceTemplateManager({ piCode, initial, onClose }: Props) {
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState<ConfirmDialogError | null>(null);
   const fail = (cause: unknown) => setError({ title: "Template action failed / 模板操作失败", message: cause instanceof Error ? cause.message : String(cause) });
+  const scope = { country: catalog.country, brands: catalog.brands };
 
   async function reload(owner = catalog.owner): Promise<void> {
-    const next = await api.getPiInvoiceTemplates(piCode, owner);
+    const next = await api.getInvoiceTemplates(scope, owner);
     setCatalog(next); setItems(next.items); setDirtyOrder(false);
   }
   async function parse(file: File): Promise<void> {
     setBusy(true); setError(null); setDraft(null); setReview(false); setFeedback("");
     try {
-      const analysis = await api.previewPiTemplate(piCode, file);
+      const analysis = await api.previewPiTemplate(scope, file);
       const { sha256, sourceCells, sheets: _sheets, ...config } = analysis;
       setDraft({ file, cells: sourceCells, payload: { name: file.name.replace(/\.xlsx$/i, ""), country: catalog.country,
         brands: catalog.brands, shared: false, sha256, config } });
@@ -72,7 +109,7 @@ export function PiInvoiceTemplateManager({ piCode, initial, onClose }: Props) {
     if (!review) { setReview(true); setError(null); return; }
     setBusy(true); setError(null);
     try {
-      const saved = await api.savePiTemplate(piCode, draft.payload, draft.file);
+      const saved = await api.savePiTemplate(draft.payload, draft.file);
       // A successful write is never retried merely because the following read failed.
       setDraft(null); setReview(false); setFeedback("Saved. Reloading list / 已保存，正在重读列表");
       try { await reload(saved.owner); setFeedback("Saved and refreshed / 已保存并刷新"); }
@@ -83,7 +120,7 @@ export function PiInvoiceTemplateManager({ piCode, initial, onClose }: Props) {
   async function saveOrder(): Promise<void> {
     setBusy(true); setError(null);
     try {
-      await api.orderPiTemplates(piCode, items.map((item) => item.id), catalog.owner);
+      await api.orderPiTemplates(scope, items.map((item) => item.id), catalog.owner);
       setDirtyOrder(false); setFeedback(`Order saved for ${catalog.owner} / 已保存该账号排序；顶部为默认`);
     } catch (cause: unknown) { fail(cause); }
     finally { setBusy(false); }
@@ -91,7 +128,7 @@ export function PiInvoiceTemplateManager({ piCode, initial, onClose }: Props) {
   async function copy(template: PiInvoiceTemplate): Promise<void> {
     setBusy(true); setError(null);
     try {
-      await api.copyPiTemplate(piCode, template.id);
+      await api.copyPiTemplate(scope, template.id);
       setFeedback("Personal copy saved / 已保存为自己的个人副本");
       try { await reload(catalog.actor); } catch (cause: unknown) { fail(cause); }
     } catch (cause: unknown) { fail(cause); }
@@ -101,7 +138,7 @@ export function PiInvoiceTemplateManager({ piCode, initial, onClose }: Props) {
     if (!deleteTarget || busy) return;
     setBusy(true); setError(null);
     try {
-      await api.deletePiTemplate(piCode, deleteTarget.id);
+      await api.deletePiTemplate(scope, deleteTarget.id);
       setDeleteTarget(null); setFeedback("Template deleted. Re-upload original file to restore / 模板已删除，可重新上传原文件恢复");
       try { await reload(); } catch (cause: unknown) { fail(cause); }
     } catch (cause: unknown) { fail(cause); }
@@ -128,6 +165,7 @@ export function PiInvoiceTemplateManager({ piCode, initial, onClose }: Props) {
       </select></label> : null}
       <label>Upload XLSX / 上传自己的模板<input aria-label="Upload PI template" type="file" accept=".xlsx" disabled={busy || dirtyOrder}
         onChange={(event) => { const file = event.target.files?.[0]; if (file) void parse(file); event.target.value = ""; }} /></label>
+      {!items.length ? <p>No matching templates yet. Upload the first XLSX above / 暂无匹配模板，请从上方上传第一份XLSX。</p> : null}
       <p>One worksheet, one PI table, EUR; no macros or external links. Existing example orders are replaced, not imported / 单工作表、单PI明细表、EUR；不支持宏/外链，旧示例订单不会导入。</p>
       <ol className="pi-template-list">{items.map((item, index) => <li key={item.id} draggable={!busy} onDragStart={() => setDragged(item.id)}
         onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); move(dragged, item.id); }}>
