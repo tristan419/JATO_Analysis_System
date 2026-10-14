@@ -19,6 +19,9 @@ FIELDS = ("sellerName", "sellerAddress", "buyerName", "buyerAddress", "buyerEmai
           "priceTerm", "paymentTerm", "invoiceDate", "referenceNo", "portOfShipment", "portOfDischarge")
 REQUIRED_FIELDS = {"sellerName", "buyerName", "buyerAddress", "bankDetails", "priceTerm", "paymentTerm",
                    "invoiceDate", "referenceNo", "portOfShipment", "portOfDischarge"}
+FIELD_LABELS = dict(zip(FIELDS, ("Seller / 卖方", "Seller address / 卖方地址", "Buyer / 买方", "Buyer address / 买方地址",
+    "Buyer email / 买方邮箱", "Bank details / 银行资料", "Price term / 价格条款", "Payment term / 付款条款",
+    "Invoice date / 发票日期", "Reference / PI编号", "Loading port / 装运港", "Discharge port / 卸货港")))
 COLUMNS = ("number", "modelName", "version", "powertrain", "exteriorColorName", "interiorColorName", "materialCode",
            "quantity", "fobEur", "fobAmount", "freightEur", "insuranceEur", "handlingEur", "total")
 ALIASES = {
@@ -94,15 +97,34 @@ def analyse(content: bytes, sheet_name: str = "") -> dict:
                  for cell in row if cell.value is not None and cell.data_type != "f" and not (start and total and start <= cell.row <= total)]
         fields = {key: {"cell": "", "value": "", "prefix": ""} for key in FIELDS}
         # Label-based candidates only. Every candidate is explicitly reviewed before saving.
-        patterns = {"buyerName": r"^(?:m/s|buyer)\s*[:：]", "buyerAddress": r"^address\s*[:：]", "buyerEmail": r"^email\s*[:：]",
+        patterns = {"sellerName": r"^(?:seller|beneficiary)\s*[:：]", "sellerAddress": r"^seller address\s*[:：]",
+                    "buyerName": r"^(?:m/s|buyer)\s*[:：]", "buyerAddress": r"^address\s*[:：]", "buyerEmail": r"^email\s*[:：]",
+                    "bankDetails": r"^bank details\s*(?:[:：]|$)", "priceTerm": r"^price(?: term)?\s*(?:[:：]|$)", "paymentTerm": r"^payment(?: term)?\s*(?:[:：]|$)",
                     "invoiceDate": r"^(?:date|invoice date)\s*[:：]?", "referenceNo": r"^(?:ref\.?\s*no|invoice no)\s*[:：]?",
                     "portOfShipment": r"(?:port of shipment|loading port)\s*[:：]", "portOfDischarge": r"(?:port of discharge|discharge port)\s*[:：]"}
         for key, pattern in patterns.items():
-            matches = [cell for cell in cells if re.search(pattern, cell["value"], re.I)]
+            labelled = [(cell, re.sub(r"^\s*\d+\s*[-.)]\s*", "", cell["value"]).strip()) for cell in cells]
+            matches = [(cell, value) for cell, value in labelled if re.search(pattern, value, re.I)]
             if len(matches) == 1:
-                value = matches[0]["value"]
-                prefix = value[:re.search(r"[:：]", value).end()] + " " if re.search(r"[:：]", value) else ""
-                fields[key] = {"cell": matches[0]["cell"], "value": value[len(prefix.rstrip()):].strip(), "prefix": prefix}
+                source, text = matches[0]
+                match = re.search(pattern, text, re.I)
+                value = text[match.end():].strip()
+                if value:
+                    prefix_end = source["value"].find(value)
+                    fields[key] = {"cell": source["cell"], "value": value, "prefix": source["value"][:prefix_end]}
+                    continue
+                cell = sheet[source["cell"]]
+                end = next((merged.max_col for merged in sheet.merged_cells.ranges if cell.coordinate in merged), cell.column)
+                adjacent = next((sheet.cell(cell.row, col) for col in range(end + 1, sheet.max_column + 1)
+                                 if sheet.cell(cell.row, col).value is not None), None)
+                if adjacent is not None and adjacent.data_type != "f" and not any(
+                        re.search(other, str(adjacent.value).strip(), re.I) for other in patterns.values()):
+                    fields[key] = {"cell": adjacent.coordinate, "value": str(adjacent.value), "prefix": ""}
+        # Show the source calculation for review, never infer charges or save sample costs.
+        if start and best.get("total"):
+            formula = sheet[f'{best["total"]}{start}']
+            if formula.data_type == "f":
+                cells.append({"cell": formula.coordinate, "value": str(formula.value)})
         return {"sha256": hashlib.sha256(content).hexdigest(), "sheets": workbook.sheetnames,
                 "sheetName": sheet.title, "headerRow": header_row, "dataStart": start, "totalRow": total,
                 "columns": best, "fields": fields, "sourceCells": cells,
@@ -135,6 +157,11 @@ def validate_config(content: bytes, config: dict) -> dict:
         fields = config.get("fields", {})
         if not isinstance(fields, dict) or set(fields) - set(FIELDS):
             raise ValueError("Invalid template fields / 模板字段无效")
+        missing = [FIELD_LABELS[key] for key in FIELDS if key in REQUIRED_FIELDS and (
+            not isinstance(fields.get(key), dict) or not str(fields[key].get("cell") or "").strip() or
+            (key not in {"invoiceDate", "referenceNo", "portOfShipment", "portOfDischarge"} and not str(fields[key].get("value") or "").strip()))]
+        if missing:
+            raise ValueError("Complete required fields / 请补齐必填字段：" + "; ".join(missing))
         addresses, clean_fields = set(), {}
         max_column, max_row = sheet.max_column, sheet.max_row
         for key in FIELDS:
@@ -142,8 +169,6 @@ def validate_config(content: bytes, config: dict) -> dict:
             if not isinstance(field, dict):
                 raise ValueError("Invalid field mapping / 字段映射无效")
             address = str(field.get("cell") or "").upper().strip()
-            if key in REQUIRED_FIELDS and (not address or (key not in {"invoiceDate", "referenceNo", "portOfShipment", "portOfDischarge"} and not str(field.get("value") or "").strip())):
-                raise ValueError(f"Confirm {key} and its cell / 请确认{key}及单元格")
             if not address:
                 continue
             if not re.fullmatch(r"[A-Z]{1,2}[1-9][0-9]{0,3}", address) or address in addresses:

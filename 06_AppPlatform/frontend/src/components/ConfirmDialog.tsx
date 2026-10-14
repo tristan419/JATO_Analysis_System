@@ -180,8 +180,12 @@ export function ConfirmDialog({
 
         <div className="confirm-dialog-body">
           {children}
+        </div>
+
+        <footer className="confirm-dialog-footer" style={error ? { flexWrap: "wrap" } : undefined}>
           {error ? (
-            <section className="confirm-dialog-error" role="alert" aria-live="assertive">
+            <section className="confirm-dialog-error" role="alert" aria-live="assertive"
+              style={{ flexBasis: "100%", maxHeight: "20vh", overflowY: "auto", overflowWrap: "anywhere" }}>
               <strong>{error.title}</strong>
               <p>{error.message}</p>
               {error.details?.length ? (
@@ -207,9 +211,6 @@ export function ConfirmDialog({
               ) : null}
             </section>
           ) : null}
-        </div>
-
-        <footer className="confirm-dialog-footer">
           <button
             ref={cancelButtonRef}
             type="button"

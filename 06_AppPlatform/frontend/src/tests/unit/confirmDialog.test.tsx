@@ -170,6 +170,9 @@ describe("ConfirmDialog", () => {
     });
 
     const alert = screen.getByRole("alert");
+    expect(alert.closest(".confirm-dialog-footer")).toBeTruthy();
+    expect(alert.closest(".confirm-dialog-body")).toBeNull();
+    expect(alert.style.maxHeight).toBe("20vh");
     expect(alert.textContent).toContain("Candidate 生成失败");
     expect(alert.textContent).toContain("上传数据未通过历史分类校验。");
     expect(alert.textContent).toContain("规则");
