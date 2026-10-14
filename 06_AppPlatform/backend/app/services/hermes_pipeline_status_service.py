@@ -431,7 +431,12 @@ def list_pipeline_statuses(
     expected_pipeline_ids: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     expected = list(expected_pipeline_ids or EXPECTED_PIPELINE_IDS)
-    records = _read_standard_status_files()
+    status_directory_unreadable = False
+    try:
+        records = _read_standard_status_files()
+    except PermissionError:
+        records = {}
+        status_directory_unreadable = True
     for pipeline_id, record in _legacy_scheduled_status_records().items():
         records.setdefault(pipeline_id, record)
     for pipeline_id, record in _jato_monthly_update_job_status().items():
@@ -441,7 +446,11 @@ def list_pipeline_statuses(
 
     if include_missing:
         for pipeline_id in expected:
-            records.setdefault(pipeline_id, _missing_record(pipeline_id))
+            missing = _missing_record(pipeline_id)
+            if status_directory_unreadable:
+                missing["message"] = "Standard pipeline status directory is not readable by this runtime."
+                missing["statusPath"] = "hermes/reports/pipeline_status"
+            records.setdefault(pipeline_id, missing)
 
     ordered = sorted(records.values(), key=lambda item: str(item.get("pipelineId") or ""))
     return ordered
