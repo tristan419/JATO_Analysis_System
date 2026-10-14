@@ -1,14 +1,18 @@
 """Common-layout examples only; no customer or bank data in fixtures."""
 import hashlib
+import json
 from copy import deepcopy
 from io import BytesIO
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 import openpyxl
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from app.core.security import UserContext
+from app.core.security import get_current_user
 from app.api.routes import order_genius_vehicle_allocation as route
 from app.services import pi_invoice_templates as templates
 from app.services import order_genius_vehicle_exporter as exporter
@@ -155,9 +159,81 @@ def test_changed_source_and_damaged_top_template_never_fall_back(source, monkeyp
 
 def test_scope_is_rechecked_before_any_template_write(source, monkeypatch):
     content, payload = source
-    monkeypatch.setattr(route, "_template_scope", Mock(side_effect=HTTPException(403, "Revoked")))
-    with pytest.raises(HTTPException): route._save_template_for_pi(Mock(), UserContext("order_filler", "alice"), "PI", content, payload)
+    monkeypatch.setattr(route, "_management_scope", Mock(side_effect=HTTPException(403, "Revoked")))
+    with pytest.raises(HTTPException): route._save_template(Mock(), UserContext("order_filler", "alice"), content, payload)
     assert not templates.records()
+
+
+def test_country_library_can_save_before_any_pi_exists(source, monkeypatch):
+    content, payload = source
+    session = Mock()
+    account = SimpleNamespace(primary_country_code="BG", secondary_country_codes=[], brands=["OMODA", "JAECOO"])
+    session.query.return_value.filter.return_value.first.return_value = account
+    user = UserContext("order_filler", "alice")
+    monkeypatch.setattr(route, "_invoice_detail", Mock(side_effect=AssertionError("Must not read a PI")))
+    assert route.list_scoped_invoice_templates("BG", "OMODA,JAECOO", "", session, user)["items"] == []
+    saved = route._save_template(session, user, content, {**payload, "country": "BG"})
+    assert route.list_scoped_invoice_templates("BG", "OMODA,JAECOO", "", session, user)["items"][0]["id"] == saved["id"]
+    account.brands = []
+    with pytest.raises(HTTPException) as exc:
+        route._save_template(session, user, content, {**payload, "country": "BG"})
+    assert exc.value.status_code == 403
+    assert len(templates.records()) == 1
+
+
+@pytest.mark.parametrize("country,brands,status", [("", ["OMODA"], 400), ("BGR", ["OMODA"], 400),
+    ("BG", [], 400), ("BG", ["unknown"], 400), ("BG", ["OMODA", "CHERY"], 403), ("CH", ["OMODA"], 403)])
+def test_management_scope_rejects_empty_unknown_or_unassigned_targets(country, brands, status):
+    session = Mock()
+    session.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
+        primary_country_code="BG", secondary_country_codes=[], brands=["OMODA"])
+    with pytest.raises(HTTPException) as exc:
+        route._management_scope(session, UserContext("order_filler", "alice"), country, brands)
+    assert exc.value.status_code == status
+
+
+def test_scoped_http_upload_edit_copy_order_and_revoke_without_pi(source, monkeypatch):
+    content, payload = source
+    payload = {**payload, "country": "BG"}
+    session = Mock()
+    account = SimpleNamespace(primary_country_code="BG", secondary_country_codes=[], brands=["OMODA", "JAECOO"])
+    session.query.return_value.filter.return_value.first.return_value = account
+    app = FastAPI(); app.include_router(route.router)
+    user = UserContext("order_filler", "alice")
+    app.dependency_overrides[route.get_db_session] = lambda: session
+    app.dependency_overrides[get_current_user] = lambda: user
+    monkeypatch.setattr(route, "_invoice_detail", Mock(side_effect=AssertionError("No PI required")))
+    path = "/order-genius/vehicle-allocation/invoice-templates"
+    query = "?country=BG&brands=OMODA,JAECOO"
+    with TestClient(app) as client:
+        assert client.get(path + query).json()["items"] == []
+        preview = client.post(path + "/preview" + query, files={"file": ("BG.xlsx", content)})
+        assert preview.status_code == 200 and preview.json()["sha256"] == payload["sha256"]
+        assert not templates.records()
+        saved = client.post(path, data={"metadata": json.dumps(payload)}, files={"file": ("BG.xlsx", content)})
+        assert saved.status_code == 200
+        record = saved.json(); template_id = record["id"]
+        assert client.patch(path + "/" + template_id, json={**payload, "name": "Updated"}).status_code == 200
+        copy = client.post(path + "/" + template_id + "/copy" + query)
+        assert copy.status_code == 200 and copy.json()["shared"] is False
+        ids = [copy.json()["id"], template_id]
+        ordered = client.put("/order-genius/vehicle-allocation/invoice-template-order", json={
+            "country": "BG", "brands": payload["brands"], "ids": ids, "owner": "alice"})
+        assert ordered.status_code == 200
+        assert [item["id"] for item in client.get(path + query).json()["items"]] == ids
+        assert client.get(path + query + "&owner=bob").status_code == 403
+        assert client.get(path + "?country=BG&brands=OMODA,CHERY").status_code == 403
+        account.brands = []
+        assert client.post(path + "/preview" + query, files={"file": ("BG.xlsx", content)}).status_code == 403
+        assert client.patch(path + "/" + template_id, json=payload).status_code == 403
+        assert client.delete(path + "/" + template_id + query).status_code == 403
+        assert len(templates.records()) == 2
+        account.brands = payload["brands"]
+        assert client.delete(path + "/" + template_id + query).status_code == 200
+        user = UserContext("viewer", "alice")
+        assert client.get(path + query).status_code == 403
+        user = UserContext("developer", "admin")
+        assert client.get(path + "?country=BG&brands=CHERY").status_code == 200
 
 
 def test_no_macros_external_links_multiple_worksheets_or_bad_xlsx(source):

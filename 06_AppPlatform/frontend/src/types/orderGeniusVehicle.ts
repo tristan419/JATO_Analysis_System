@@ -70,20 +70,20 @@ export interface PiInvoiceTemplate {
   sha256?: string;
   config?: PiTemplateConfig;
 }
-export interface PiTemplateCatalog {
+export interface PiTemplateScope {
+  country: string;
+  brands: string[];
+}
+export interface PiTemplateCatalog extends PiTemplateScope {
   items: PiInvoiceTemplate[];
   owner: string;
   owners: string[];
   actor: string;
   admin: boolean;
-  country: string;
-  brands: string[];
 }
-export interface PiTemplateSave {
+export interface PiTemplateSave extends PiTemplateScope {
   id?: string;
   name: string;
-  country: string;
-  brands: string[];
   shared: boolean;
   sha256: string;
   config: PiTemplateConfig;

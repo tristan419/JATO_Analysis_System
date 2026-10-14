@@ -87,6 +87,20 @@ async function openOctober() {
 }
 
 describe("quantity save → PI readiness", () => {
+  it("keeps PI templates reachable with no matrix rows, quantities or saved PI", async () => {
+    const response = await api.getOrderGeniusMatrixBatch({ countries: ["CH"], year: 2026 });
+    vi.mocked(api.getOrderGeniusMatrixBatch).mockResolvedValue({ ...response,
+      matrices: { CH: { ...response.matrices.CH, rows: [], totalRows: 0 } } });
+    render(<OrderGeniusPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /Import \/ Export/ }));
+    const button = await screen.findByRole("button", { name: "PI Templates / PI模板" });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(button);
+    expect(await screen.findByLabelText("Template country")).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "OMODA" })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "CHERY" })).toBeTruthy();
+  });
+
   it("keeps a no-brand request actionable without a missing-FOB overlay or BOM entry", async () => {
     authState.user.role = "order_filler";
     vi.mocked(api.getOrderGeniusFobCountries).mockResolvedValue({ countries: [] });

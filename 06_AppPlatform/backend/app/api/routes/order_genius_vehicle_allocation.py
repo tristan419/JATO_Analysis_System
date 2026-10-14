@@ -500,10 +500,22 @@ def _template_error(exc: Exception) -> HTTPException:
                          "Template file missing / 模板文件缺失，请重新上传" if isinstance(exc, FileNotFoundError) else str(exc))
 
 
-@router.get("/pi/{pi_code}/invoice-templates")
-def list_invoice_templates(pi_code: str, owner: str = "", session: Session = Depends(get_db_session),
-                           user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
-    _, country, brands = _template_scope(session, user, pi_code)
+def _management_scope(session: Session, user: UserContext, country: str, brands: list[str]) -> tuple[str, set[str]]:
+    country = str(country or "").strip().upper()
+    if len(country) != 2 or not country.isascii() or not country.isalpha():
+        raise HTTPException(400, "Choose one country / 请选择一个国家")
+    if not isinstance(brands, list) or not brands or not all(isinstance(brand, str) for brand in brands):
+        raise HTTPException(400, "Choose at least one brand / 请至少选择一个品牌")
+    selected = {brand.strip().upper() for brand in brands}
+    if not selected <= set(ORDERING_BRANDS):
+        raise HTTPException(400, "Unknown template brand / 模板品牌未知")
+    _validate_country(session, user, country)
+    for brand in selected:
+        validate_brand_access(session, user, brand)
+    return country, selected
+
+
+def _template_catalog(user: UserContext, country: str, brands: set[str], owner: str) -> dict:
     try:
         return {**invoice_templates.catalog(user.name, is_admin(user.role), country, brands, owner),
                 "country": country, "brands": sorted(brands), "admin": is_admin(user.role), "actor": user.name}
@@ -511,11 +523,25 @@ def list_invoice_templates(pi_code: str, owner: str = "", session: Session = Dep
         raise _template_error(exc) from exc
 
 
-@router.post("/pi/{pi_code}/invoice-templates/preview")
-async def parse_invoice_template(pi_code: str, file: UploadFile = File(...), session: Session = Depends(get_db_session),
+@router.get("/pi/{pi_code}/invoice-templates")
+def list_invoice_templates(pi_code: str, owner: str = "", session: Session = Depends(get_db_session),
+                           user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    _, country, brands = _template_scope(session, user, pi_code)
+    return _template_catalog(user, country, brands, owner)
+
+
+@router.get("/invoice-templates")
+def list_scoped_invoice_templates(country: str, brands: str, owner: str = "", session: Session = Depends(get_db_session),
+                                  user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    country, selected = _management_scope(session, user, country, brands.split(","))
+    return _template_catalog(user, country, selected, owner)
+
+
+@router.post("/invoice-templates/preview")
+async def parse_invoice_template(country: str, brands: str, file: UploadFile = File(...), session: Session = Depends(get_db_session),
                                  user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
-    _template_scope(session, user, pi_code)
     try:
+        _management_scope(session, user, country, brands.split(","))
         return invoice_templates.analyse(await file.read(invoice_templates.MAX_TEMPLATE_BYTES + 1))
     except ValueError as exc:
         raise _template_error(exc) from exc
@@ -523,73 +549,66 @@ async def parse_invoice_template(pi_code: str, file: UploadFile = File(...), ses
         await file.close()
 
 
-def _save_template_for_pi(session: Session, user: UserContext, pi_code: str, content: bytes, payload: dict) -> dict:
-    _, country, pi_brands = _template_scope(session, user, pi_code)
-    brands = payload.get("brands")
-    if payload.get("country") != country or not isinstance(brands, list) or not all(isinstance(brand, str) for brand in brands) or not pi_brands <= set(brands):
-        raise ValueError("Template must cover this PI country and all brands / 模板须覆盖该PI国家及全部品牌")
-    if not set(brands) <= set(ORDERING_BRANDS):
-        raise ValueError("Unknown template brand / 模板品牌未知")
-    for brand in brands:
-        validate_brand_access(session, user, brand)
+def _save_template(session: Session, user: UserContext, content: bytes, payload: dict) -> dict:
+    country, brands = _management_scope(session, user, payload.get("country"), payload.get("brands"))
     if payload.get("id"):
-        invoice_templates.load_template(payload["id"], user.name, is_admin(user.role), country, pi_brands)
-    return invoice_templates.save(content, payload, user.name, is_admin(user.role))
+        invoice_templates.load_template(payload["id"], user.name, is_admin(user.role), country, brands)
+    return invoice_templates.save(content, {**payload, "country": country, "brands": sorted(brands)}, user.name, is_admin(user.role))
 
 
-@router.post("/pi/{pi_code}/invoice-templates")
-async def import_invoice_template(pi_code: str, metadata: str = Form(...), file: UploadFile = File(...),
+@router.post("/invoice-templates")
+async def import_invoice_template(metadata: str = Form(...), file: UploadFile = File(...),
                                   session: Session = Depends(get_db_session),
                                   user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
     try:
         payload = json.loads(metadata)
         if not isinstance(payload, dict):
             raise ValueError("Invalid template metadata / 模板资料无效")
-        return _save_template_for_pi(session, user, pi_code, await file.read(invoice_templates.MAX_TEMPLATE_BYTES + 1), payload)
+        return _save_template(session, user, await file.read(invoice_templates.MAX_TEMPLATE_BYTES + 1), payload)
     except (ValueError, PermissionError, FileNotFoundError, KeyError) as exc:
         raise _template_error(exc) from exc
     finally:
         await file.close()
 
 
-@router.patch("/pi/{pi_code}/invoice-templates/{template_id}")
-def update_invoice_template(pi_code: str, template_id: str, body: dict, session: Session = Depends(get_db_session),
+@router.patch("/invoice-templates/{template_id}")
+def update_invoice_template(template_id: str, body: dict, session: Session = Depends(get_db_session),
                             user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
     try:
-        _, country, brands = _template_scope(session, user, pi_code)
+        country, brands = _management_scope(session, user, body.get("country"), body.get("brands"))
         source = invoice_templates.load_template(template_id, user.name, is_admin(user.role), country, brands)
-        return _save_template_for_pi(session, user, pi_code, source["path"].read_bytes(), {**body, "id": template_id})
+        return _save_template(session, user, source["path"].read_bytes(), {**body, "id": template_id})
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         raise _template_error(exc) from exc
 
 
-@router.post("/pi/{pi_code}/invoice-templates/{template_id}/copy")
-def copy_invoice_template(pi_code: str, template_id: str, session: Session = Depends(get_db_session),
+@router.post("/invoice-templates/{template_id}/copy")
+def copy_invoice_template(template_id: str, country: str, brands: str, session: Session = Depends(get_db_session),
                           user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
     try:
-        _, country, brands = _template_scope(session, user, pi_code)
-        source = invoice_templates.load_template(template_id, user.name, is_admin(user.role), country, brands)
-        return _save_template_for_pi(session, user, pi_code, source["path"].read_bytes(),
-                                     {**source, "id": "", "name": source["name"][:93] + " (copy)", "brands": sorted(brands), "shared": False})
+        country, selected = _management_scope(session, user, country, brands.split(","))
+        source = invoice_templates.load_template(template_id, user.name, is_admin(user.role), country, selected)
+        return _save_template(session, user, source["path"].read_bytes(),
+                              {**source, "id": "", "name": source["name"][:93] + " (copy)", "brands": sorted(selected), "shared": False})
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         raise _template_error(exc) from exc
 
 
-@router.delete("/pi/{pi_code}/invoice-templates/{template_id}")
-def delete_invoice_template(pi_code: str, template_id: str, session: Session = Depends(get_db_session),
+@router.delete("/invoice-templates/{template_id}")
+def delete_invoice_template(template_id: str, country: str, brands: str, session: Session = Depends(get_db_session),
                             user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
-    _, country, brands = _template_scope(session, user, pi_code)
+    country, selected = _management_scope(session, user, country, brands.split(","))
     try:
-        invoice_templates.remove(template_id, user.name, is_admin(user.role), country, brands)
+        invoice_templates.remove(template_id, user.name, is_admin(user.role), country, selected)
         return {"deleted": True}
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         raise _template_error(exc) from exc
 
 
-@router.put("/pi/{pi_code}/invoice-template-order")
-def order_invoice_templates(pi_code: str, body: dict, session: Session = Depends(get_db_session),
+@router.put("/invoice-template-order")
+def order_invoice_templates(body: dict, session: Session = Depends(get_db_session),
                             user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
-    _, country, brands = _template_scope(session, user, pi_code)
+    country, brands = _management_scope(session, user, body.get("country"), body.get("brands"))
     try:
         owner = body.get("owner", "")
         if owner and owner != user.name:
