@@ -10981,6 +10981,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .confirm-dialog-overlay {
   position: fixed;
   inset: 0;
+  top: var(--confirm-banner-height, 0px);
   z-index: 1200;
   display: grid;
   place-items: center;
@@ -11023,7 +11024,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(760px, 100%);
-  max-height: min(820px, calc(100vh - 48px));
+  max-height: min(820px, calc(100dvh - var(--confirm-banner-height, 0px) - 48px));
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.54);
   border-radius: 16px;
@@ -11284,7 +11285,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
   }
 
   .confirm-dialog {
-    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - var(--confirm-banner-height, 0px) - 24px);
     border-radius: 14px;
   }
 

@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 
@@ -48,6 +49,13 @@ afterEach(() => {
 });
 
 describe("ConfirmDialog", () => {
+  it("uses the existing measured banner height in generic desktop and narrow dialog CSS", () => {
+    const css = readFileSync("src/index.css", "utf8");
+    const overlay = css.slice(css.indexOf(".confirm-dialog-overlay {"), css.indexOf(".confirm-dialog-overlay.bom-colour-confirmation"));
+    expect(overlay).toContain("top: var(--confirm-banner-height, 0px)");
+    expect(css).toContain("min(820px, calc(100dvh - var(--confirm-banner-height, 0px) - 48px))");
+    expect(css).toContain("max-height: calc(100dvh - var(--confirm-banner-height, 0px) - 24px)");
+  });
   it("measures the actual Candidate banner and tracks its wrapping without global layout state", () => {
     const banner = document.createElement("aside");
     banner.className = "candidate-environment-banner";
