@@ -106,7 +106,7 @@ CORE_PATHS=(
   "hermes/reports/answer_audit_report.md"
   "hermes/reports/evidence_ledger_report.md"
   "hermes/reports/pipeline_health.json"
-  "hermes/evidence_ledger.jsonl"
+  "hermes/reports/runtime/evidence_ledger.jsonl"
   "hermes/answer_audit.jsonl"
   "03_Scripts/logs/scheduled_fetch_status.json"
 )

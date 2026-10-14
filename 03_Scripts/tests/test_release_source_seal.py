@@ -45,6 +45,7 @@ def sealed_tree(tmp_path: Path) -> tuple[Path, Path]:
     ordinary.parent.mkdir(parents=True)
     ordinary.write_text("VALUE = 1\n", encoding="utf-8")
     (root / "06_AppPlatform/frontend").mkdir(parents=True)
+    (root / "hermes/reports").mkdir(parents=True)
     manifest = tmp_path / "expected-seal.json"
     result = subprocess.run(
         [
@@ -79,6 +80,43 @@ def _verify(root: Path, manifest: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+
+
+def test_hermes_candidate_runtime_is_separate(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "06_AppPlatform/backend"))
+    from app.core.config import resolve_hermes_runtime_root
+    active = tmp_path / "active/hermes/reports/runtime"
+    candidate = tmp_path / "candidate"
+    monkeypatch.delenv("APP_HERMES_RUNTIME_ROOT", raising=False)
+    assert resolve_hermes_runtime_root(tmp_path / "active") == active
+    monkeypatch.setenv("APP_HERMES_RUNTIME_ROOT", str(candidate))
+    assert resolve_hermes_runtime_root(tmp_path / "active") == candidate
+    assert resolve_hermes_runtime_root(tmp_path / "new-release") == candidate
+    assert not active.exists() and not candidate.exists()  # Resolution does not write.
+
+
+@pytest.mark.parametrize("configured", (False, True))
+def test_hermes_evidence_script_uses_runtime_default(tmp_path, monkeypatch, configured):
+    import importlib.util
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "03_Scripts/hermes"))
+    spec = importlib.util.spec_from_file_location(
+        "evidence_writer_test", REPO_ROOT / "03_Scripts/hermes/hermes_evidence_writer.py",
+    )
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    monkeypatch.setattr(writer, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(writer, "run", lambda _: {"evidence": [], "skipped": [], "typeCounts": {}})
+    monkeypatch.setattr(sys, "argv", ["hermes_evidence_writer.py"])
+    monkeypatch.delenv("APP_HERMES_RUNTIME_ROOT", raising=False)
+    runtime = tmp_path / "candidate" if configured else tmp_path / "hermes/reports/runtime"
+    if configured:
+        monkeypatch.setenv("APP_HERMES_RUNTIME_ROOT", str(runtime))
+    monkeypatch.chdir(tmp_path)
+    writer.main()
+    assert (runtime / "evidence_ledger.jsonl").is_file()
+    assert not (tmp_path / "hermes/evidence_ledger.jsonl").exists()
 
 
 def _runtime_arguments() -> list[str]:

@@ -2,7 +2,7 @@
 """Hermes Phase 5.2 — Evidence Ledger Writer.
 
 Extract structured evidence from known artifact types into:
-  hermes/evidence_ledger.jsonl
+  hermes/reports/runtime/evidence_ledger.jsonl
 
 Deterministic — no LLM. Does not guess schema. Does not invent claims.
 
@@ -24,6 +24,8 @@ from typing import Any
 from hermes_registry_loader import load_all_registries
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "06_AppPlatform" / "backend"))
+from app.core.config import resolve_hermes_runtime_root
 
 EVIDENCE_TYPES = {
     "jato_fact",
@@ -337,7 +339,7 @@ def run(registry_dir: str | None = None) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hermes Evidence Ledger Writer")
     parser.add_argument("--registry-dir", default=None)
-    parser.add_argument("--out", default="hermes/evidence_ledger.jsonl")
+    parser.add_argument("--out", default=None)
     parser.add_argument("--report", default="hermes/reports/evidence_ledger_report.md")
     args = parser.parse_args()
     os.chdir(REPO_ROOT)
@@ -345,7 +347,7 @@ def main() -> None:
     results = run(args.registry_dir)
 
     # Write JSONL
-    out_path = Path(args.out)
+    out_path = Path(args.out) if args.out else resolve_hermes_runtime_root(REPO_ROOT) / "evidence_ledger.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as fh:
         for e in results["evidence"]:

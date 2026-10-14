@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.config import resolve_hermes_runtime_root
+
 _project_root: Path | None = None
 
 
@@ -36,7 +38,7 @@ def _features_path() -> Path:
 
 
 def _evidence_ledger_path() -> Path:
-    return _root() / "hermes" / "evidence_ledger.jsonl"
+    return resolve_hermes_runtime_root(_root()) / "evidence_ledger.jsonl"
 
 
 def _gaps_path() -> Path:

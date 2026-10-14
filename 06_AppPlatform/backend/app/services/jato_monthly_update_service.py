@@ -29,6 +29,7 @@ from app.core.config import (
     JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES,
     JATO_MONTHLY_UPDATE_UPLOAD_MAX_BYTES,
     PROJECT_ROOT,
+    resolve_hermes_runtime_root,
 )
 from app.services.hermes_pipeline_status_service import write_pipeline_status
 
@@ -5581,7 +5582,7 @@ def _write_jato_publish_cache_invalidation_evidence(
     cache_invalidation: dict[str, Any],
     active_paths: dict[str, Path],
 ) -> None:
-    ledger_path = PROJECT_ROOT / "hermes" / "evidence_ledger.jsonl"
+    ledger_path = resolve_hermes_runtime_root(PROJECT_ROOT) / "evidence_ledger.jsonl"
     stamp = published_at.strftime("%Y%m%dT%H%M%SZ")
     record = {
         "evidenceId": f"evidence.jato_monthly_update.cache_invalidation.{job_id}.{stamp}",

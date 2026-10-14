@@ -323,7 +323,7 @@ class TestSync:
         md = tmp_path / "Markdown_Readme" / "features" / "test-feature.md"
         assert md.is_file()
         assert feats[0]["docs"] == ["Markdown_Readme/features/test-feature.md"]
-        ev = tmp_path / "hermes" / "evidence_ledger.jsonl"
+        ev = tmp_path / "hermes" / "reports" / "runtime" / "evidence_ledger.jsonl"
         assert ev.is_file()
 
     def test_sync_prefers_specific_inferred_feature_over_generic_links(self, tmp_path):

@@ -99,7 +99,7 @@ def generate(snapshot_dir: str) -> dict:
         }
 
     # Evidence
-    ev = _read_jsonl(base / "hermes" / "evidence_ledger.jsonl")
+    ev = _read_jsonl(base / "hermes" / "reports" / "runtime" / "evidence_ledger.jsonl")
     result["summary"]["evidenceLedger"] = {"recordCount": len(ev)}
 
     # Answer audit

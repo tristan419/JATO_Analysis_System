@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.config import resolve_hermes_runtime_root
+
 _project_root: Path | None = None
 
 PHASES = ["PRD", "Implemented", "Tested", "Deployed", "Verified", "Resolved"]
@@ -63,7 +65,7 @@ def _dev_events_path() -> Path:
 
 
 def _evidence_ledger_path() -> Path:
-    return _hermes_dir() / "evidence_ledger.jsonl"
+    return resolve_hermes_runtime_root(_root()) / "evidence_ledger.jsonl"
 
 
 def _gaps_path() -> Path:
@@ -71,7 +73,7 @@ def _gaps_path() -> Path:
 
 
 def _sentinel_notifications_path() -> Path:
-    return _hermes_dir() / "sentinel_notifications.jsonl"
+    return resolve_hermes_runtime_root(_root()) / "sentinel_notifications.jsonl"
 
 
 def _devsync_features_path() -> Path:

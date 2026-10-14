@@ -29,8 +29,8 @@ def test_execute_writes_activity_and_evidence(tmp_path, monkeypatch):
     assert result["exitCode"] == 0
     assert result["actor"] == "tester"
     assert "cost ok" in result["stdout"]
-    activity_lines = (tmp_path / "hermes" / "activity_log.jsonl").read_text(encoding="utf-8").splitlines()
-    evidence_lines = (tmp_path / "hermes" / "evidence_ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    activity_lines = (tmp_path / "hermes" / "reports" / "runtime" / "activity_log.jsonl").read_text(encoding="utf-8").splitlines()
+    evidence_lines = (tmp_path / "hermes" / "reports" / "runtime" / "evidence_ledger.jsonl").read_text(encoding="utf-8").splitlines()
     activity = json.loads(activity_lines[-1])
     evidence = json.loads(evidence_lines[-1])
     assert activity["runId"] == result["runId"]
@@ -68,7 +68,7 @@ def test_runner_lock_blocks_concurrent_run(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_project_root", tmp_path)
     monkeypatch.setenv("HERMES_RUN_ENABLED", "true")
     _write_script(tmp_path, "hermes_cost_report.py", "print('should not run')\n")
-    lock = tmp_path / "hermes" / "run_locks" / "ops_runner.lock"
+    lock = tmp_path / "hermes" / "reports" / "runtime" / "run_locks" / "ops_runner.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text(json.dumps({"runId": "run_existing", "commandId": "cost-report"}), encoding="utf-8")
     os.utime(lock, None)

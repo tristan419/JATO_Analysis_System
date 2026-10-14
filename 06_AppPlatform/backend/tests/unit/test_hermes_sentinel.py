@@ -5,6 +5,53 @@ from pathlib import Path
 from app.services import hermes_sentinel_service as sentinel
 
 
+def test_runtime_writers_do_not_mutate_release_source(monkeypatch, tmp_path):
+    import importlib.util
+    from app.core.config import resolve_hermes_runtime_root
+    from app.services import hermes_devsync_service as devsync
+    from app.services import hermes_history_service as history
+    from app.services import hermes_ops_runner_service as runner
+    from app.services import jato_monthly_update_service as monthly
+
+    helper = Path(__file__).resolve().parents[4] / "03_Scripts/deploy/verify_release_source_seal.py"
+    spec = importlib.util.spec_from_file_location("runtime_source_seal_test", helper)
+    seal = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(seal)
+    for relative in seal.SOURCE_CRITICAL_FILES:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("sealed source\n")
+    (tmp_path / "hermes/reports").mkdir(parents=True)
+    script = tmp_path / "03_Scripts/hermes/hermes_cost_report.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("print('cost ok')\n")
+    before = seal.build_manifest(tmp_path)
+    monkeypatch.delenv("APP_HERMES_RUNTIME_ROOT", raising=False)
+    for service in (devsync, history, runner, sentinel):
+        monkeypatch.setattr(service, "_project_root", tmp_path)
+    runtime = resolve_hermes_runtime_root(tmp_path)
+    ledger = runtime / "evidence_ledger.jsonl"
+    assert all(service._evidence_ledger_path() == ledger for service in (devsync, history, runner))
+    runner._write_jsonl(ledger, {"evidenceId": "first"})
+    sentinel._write_notifications([{"id": "first"}])
+    sentinel._write_notification_state({"first": {"status": "acked"}})
+    assert history._sentinel_notifications_path() == sentinel._notifications_path()
+    assert seal.build_manifest(tmp_path) == before
+    monkeypatch.setenv("HERMES_RUN_ENABLED", "true")
+    assert runner.execute_hermes_command("cost-report", actor="tester")["status"] == "success"
+    sentinel._write_notifications([{"id": "second"}])  # Atomic 0600 replacement.
+    monkeypatch.setattr(monthly, "PROJECT_ROOT", tmp_path)
+    monthly._write_jato_publish_cache_invalidation_evidence(
+        job_id="test-job", published_at=datetime.now(timezone.utc), triggered_by="tester",
+        cache_invalidation={}, active_paths={},
+    )
+    assert "runtime_cache_invalidation" in ledger.read_text()
+    assert not (tmp_path / "hermes/evidence_ledger.jsonl").exists()
+    assert not (tmp_path / "hermes/sentinel_notifications.jsonl").exists()
+    assert not (tmp_path / "hermes/activity_log.jsonl").exists()
+    assert seal.build_manifest(tmp_path) == before
+
+
 def _ok_probe(name: str) -> dict:
     return {"probe": name, "overall": "ok", "findings": []}
 
@@ -64,7 +111,7 @@ def test_set_notification_status_supports_mailbox_states(monkeypatch, tmp_path: 
     archived = sentinel.set_notification_status(created["id"], "archived")
     assert archived is not None
     assert archived["status"] == "archived"
-    assert (tmp_path / "hermes" / "sentinel_notification_state.json").is_file()
+    assert (tmp_path / "hermes" / "reports" / "runtime" / "sentinel_notification_state.json").is_file()
     assert sentinel.get_notifications(status="new") == []
     assert sentinel.get_notifications(status="archived")[0]["id"] == created["id"]
 
