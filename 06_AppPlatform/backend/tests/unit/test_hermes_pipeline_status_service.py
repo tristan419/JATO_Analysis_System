@@ -2,6 +2,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from app.services import hermes_pipeline_status_service as pipeline_status
 
 
@@ -20,6 +22,49 @@ def test_missing_status_is_synthetic_record(monkeypatch, tmp_path: Path):
     assert record["status"] == "missing"
     assert health["type"] == "pipeline_msrp_dryrun_missing"
     assert health["overall"] == "warning"
+
+
+def test_unreadable_status_directory_warns_and_preserves_available_sources(monkeypatch, tmp_path: Path):
+    _set_root(monkeypatch, tmp_path)
+    status_dir = pipeline_status._status_dir()
+    status_dir.mkdir(parents=True)
+    original_glob = Path.glob
+
+    def denied_glob(path, pattern):
+        if path == status_dir:
+            raise PermissionError("isolated runtime cannot read private status directory")
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", denied_glob)
+    monkeypatch.setattr(pipeline_status, "_legacy_scheduled_status_records", lambda: {
+        "country_news_sync": pipeline_status.normalize_pipeline_status_record({
+            "pipelineId": "country_news_sync", "status": "success", "lastRunAt": datetime.now(timezone.utc),
+        }),
+    })
+    records = {record["pipelineId"]: record for record in pipeline_status.list_pipeline_statuses()}
+    missing = records["msrp_dryrun"]
+    assert missing["status"] == "missing"
+    assert "not readable" in missing["message"]
+    assert missing["statusPath"] == "hermes/reports/pipeline_status"
+    assert pipeline_status.classify_pipeline_health(missing)["overall"] == "warning"
+    assert records["country_news_sync"]["status"] == "success"
+    assert [r["pipelineId"] for r in pipeline_status.list_pipeline_statuses(include_missing=False)] == [
+        "country_news_sync",
+    ]
+
+
+def test_pipeline_status_write_permission_failure_is_not_suppressed(monkeypatch, tmp_path: Path):
+    _set_root(monkeypatch, tmp_path)
+    original_mkdir = Path.mkdir
+
+    def denied_mkdir(path, *args, **kwargs):
+        if path == pipeline_status._status_dir():
+            raise PermissionError("write denied")
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", denied_mkdir)
+    with pytest.raises(PermissionError, match="write denied"):
+        pipeline_status.write_pipeline_status({"pipelineId": "msrp_dryrun", "status": "success"})
 
 
 def test_write_and_read_success_status(monkeypatch, tmp_path: Path):
