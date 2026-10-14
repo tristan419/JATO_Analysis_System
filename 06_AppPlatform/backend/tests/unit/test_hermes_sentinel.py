@@ -64,7 +64,7 @@ def test_set_notification_status_supports_mailbox_states(monkeypatch, tmp_path: 
     archived = sentinel.set_notification_status(created["id"], "archived")
     assert archived is not None
     assert archived["status"] == "archived"
-    assert (tmp_path / "hermes" / "sentinel_notification_state.json").is_file()
+    assert (tmp_path / "hermes" / "reports" / "runtime" / "sentinel_notification_state.json").is_file()
     assert sentinel.get_notifications(status="new") == []
     assert sentinel.get_notifications(status="archived")[0]["id"] == created["id"]
 

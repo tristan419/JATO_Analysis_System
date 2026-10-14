@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.config import resolve_hermes_runtime_root
+
 _project_root: Path | None = None
 _notification_state_lock = threading.RLock()
 _notification_facts_lock = threading.Lock()
@@ -30,11 +32,11 @@ def _root() -> Path:
 
 
 def _notifications_path() -> Path:
-    return _root() / "hermes" / "sentinel_notifications.jsonl"
+    return resolve_hermes_runtime_root(_root()) / "sentinel_notifications.jsonl"
 
 
 def _notification_state_path() -> Path:
-    return _root() / "hermes" / "sentinel_notification_state.json"
+    return resolve_hermes_runtime_root(_root()) / "sentinel_notification_state.json"
 
 
 def _write_text_atomic(path: Path, text: str) -> None:
@@ -363,7 +365,7 @@ def probe_gaps() -> dict[str, Any]:
 
 def probe_evidence() -> dict[str, Any]:
     """Check evidence ledger freshness."""
-    p = _root() / "hermes" / "evidence_ledger.jsonl"
+    p = resolve_hermes_runtime_root(_root()) / "evidence_ledger.jsonl"
     findings: list[dict] = []
     if not p.is_file():
         return {"probe": "evidence", "overall": "warning",
@@ -405,7 +407,7 @@ def probe_gha() -> dict[str, Any]:
     findings: list[dict] = []
 
     # Check if recent sync evidence exists
-    p = _root() / "hermes" / "evidence_ledger.jsonl"
+    p = resolve_hermes_runtime_root(_root()) / "evidence_ledger.jsonl"
     has_sync_evidence = False
     if p.is_file():
         for line in p.read_text().strip().split("\n"):

@@ -110,6 +110,16 @@ PROJECT_ROOT = Path(
 ).resolve()
 
 
+def resolve_hermes_runtime_root(project_root: Path | None = None) -> Path:
+    """Keep mutable Hermes ledgers in the existing durable reports directory."""
+    base_root = project_root or PROJECT_ROOT
+    configured = os.getenv("APP_HERMES_RUNTIME_ROOT", "").strip()
+    runtime = Path(configured) if configured else base_root / "hermes" / "reports" / "runtime"
+    if not runtime.is_absolute():
+        runtime = base_root / runtime
+    return runtime.resolve()
+
+
 def resolve_msrp_governance_evidence_root(
     evidence_root: str | Path | None = None,
     *,

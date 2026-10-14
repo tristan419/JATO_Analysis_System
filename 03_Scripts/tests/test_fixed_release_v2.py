@@ -1041,6 +1041,7 @@ def test_successive_prepares_replace_fifo_sandbox_and_publish_snapshot_time(
     assert len(candidate_values["APP_JWT_SECRET"]) == 64
     slot_values = candidate_env_path.read_text(encoding="utf-8")
     assert "APP_COC_LIBRARY_ROOT=/var/cache/jato-candidate/coc_library\n" in slot_values
+    assert "APP_HERMES_RUNTIME_ROOT=/var/cache/jato-candidate/hermes\n" in slot_values
     assert "PATH=/opt/jato/tools/coc/bin:" in slot_values
     assert preview["databaseSnapshotAt"] == candidate_values["APP_CANDIDATE_SNAPSHOT_AT"]
     assert preview["databaseName"] == candidate_values["APP_CANDIDATE_SANDBOX_DATABASE"]
@@ -2190,6 +2191,7 @@ def test_update_active_uses_reviewed_candidate_and_keeps_candidate(tmp_path: Pat
     assert "APP_RELEASE_ROLE=active" in active_env
     assert "APP_COC_MATCH_JOB_ROOT=/var/cache/jato-candidate" not in active_env
     assert "APP_COC_LIBRARY_ROOT=" not in active_env
+    assert f"APP_HERMES_RUNTIME_ROOT={cfg.legacy_active_root}/hermes/reports/runtime\n" in active_env
     assert "/opt/jato/tools/coc/bin" not in active_env
     assert f"APP_JATO_MONTHLY_ACTIVE_SLOT_FILE={cfg.active_slot_file}" in active_env
     assert f"APP_JATO_MONTHLY_DEPLOYMENT_MARKER={cfg.deployment_marker}" in active_env

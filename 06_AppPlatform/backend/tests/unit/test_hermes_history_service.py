@@ -31,7 +31,7 @@ def test_history_events_normalize_devsync_evidence_and_sentinel(tmp_path, monkey
             "createdAt": "2026-06-12T08:00:00Z",
         }
     ])
-    _write_jsonl(tmp_path / "hermes" / "evidence_ledger.jsonl", [
+    _write_jsonl(tmp_path / "hermes" / "reports" / "runtime" / "evidence_ledger.jsonl", [
         {
             "evidenceId": "ev_1",
             "evidenceType": "test",
@@ -40,7 +40,7 @@ def test_history_events_normalize_devsync_evidence_and_sentinel(tmp_path, monkey
             "createdAt": "2026-06-12T08:10:00Z",
         }
     ])
-    _write_jsonl(tmp_path / "hermes" / "sentinel_notifications.jsonl", [
+    _write_jsonl(tmp_path / "hermes" / "reports" / "runtime" / "sentinel_notifications.jsonl", [
         {
             "id": "notif_1",
             "severity": "high",

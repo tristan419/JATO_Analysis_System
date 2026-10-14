@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
+from app.core.config import resolve_hermes_runtime_root
+
 
 _project_root: Path | None = None
 
@@ -138,15 +140,15 @@ def _scripts_dir() -> Path:
 
 
 def _activity_log_path() -> Path:
-    return _hermes_dir() / "activity_log.jsonl"
+    return resolve_hermes_runtime_root(_root()) / "activity_log.jsonl"
 
 
 def _evidence_ledger_path() -> Path:
-    return _hermes_dir() / "evidence_ledger.jsonl"
+    return resolve_hermes_runtime_root(_root()) / "evidence_ledger.jsonl"
 
 
 def _lock_path() -> Path:
-    return _hermes_dir() / "run_locks" / "ops_runner.lock"
+    return resolve_hermes_runtime_root(_root()) / "run_locks" / "ops_runner.lock"
 
 
 def _now() -> datetime:
@@ -321,7 +323,7 @@ def _evidence_record(activity: dict[str, Any]) -> dict[str, Any]:
         "evidenceId": f"evidence.hermes_run.{run_id}",
         "evidenceType": "hermes_run",
         "claim": f"Hermes Ops Runner executed {command_id} with status {status} and exit code {exit_code}.",
-        "sourceRef": f"hermes/activity_log.jsonl::{run_id}",
+        "sourceRef": f"hermes/reports/runtime/activity_log.jsonl::{run_id}",
         "artifactId": "artifact.hermes.activity_log",
         "confidence": 1.0,
         "supportCount": 1,

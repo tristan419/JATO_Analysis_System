@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
+from app.core.config import resolve_hermes_runtime_root
 from app.core.security import ROLE_LEVEL, get_current_user, require_min_role
 from app.services.hermes_cost_ledger_service import (
     build_daily_cost_heatmap,
@@ -39,7 +40,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[5]
 HERMES_DIR = PROJECT_ROOT / "hermes"
 SCRIPTS_DIR = PROJECT_ROOT / "03_Scripts" / "hermes"
 REPORTS_DIR = HERMES_DIR / "reports"
-ACTIVITY_LOG = HERMES_DIR / "activity_log.jsonl"
+ACTIVITY_LOG = resolve_hermes_runtime_root(PROJECT_ROOT) / "activity_log.jsonl"
 BUDGET_DAILY_CNY = 20
 BUDGET_MONTHLY_CNY = 500
 ALERT_EMAIL = "tristanlyk@gmail.com"
@@ -1447,7 +1448,7 @@ def hermes_source_detail(source_id: str, _=Depends(require_min_role("viewer"))) 
 
     # Linked evidence from ledger
     evidence: list[dict] = []
-    ev_path = HERMES_DIR / "evidence_ledger.jsonl"
+    ev_path = resolve_hermes_runtime_root(HERMES_DIR.parent) / "evidence_ledger.jsonl"
     if ev_path.is_file():
         for line in ev_path.read_text().strip().split("\n"):
             if line.strip():
@@ -1750,7 +1751,7 @@ def hermes_evidence_ledger(
         - JSONL file missing → ``{totalCount:0, records:[], byType:{}, rangeStart:"", rangeEnd:""}``
         - No entries in lookback → ``records:[]``, ``byType:{}``, range fields ``""``
     """
-    path = HERMES_DIR / "evidence_ledger.jsonl"
+    path = resolve_hermes_runtime_root(HERMES_DIR.parent) / "evidence_ledger.jsonl"
     if not path.is_file():
         return {"totalCount": 0, "records": [], "byType": {}, "rangeStart": "", "rangeEnd": ""}
     entries: list[dict] = []

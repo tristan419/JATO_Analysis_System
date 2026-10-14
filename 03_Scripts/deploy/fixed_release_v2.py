@@ -1201,6 +1201,10 @@ class FixedReleaseController:
             "APP_RELEASE_SHA": identity.commit_sha,
             "APP_RELEASE_ARCHIVE_SHA256": identity.archive_sha256,
             "APP_PROJECT_ROOT": f"/opt/jato/slots/{slot}/current",
+            "APP_HERMES_RUNTIME_ROOT": str(
+                self.config.legacy_active_root / "hermes" / "reports" / "runtime"
+                if active else CANDIDATE_RUNTIME_ROOT / "hermes"
+            ),
             "PYTHONPATH": f"/opt/jato/slots/{slot}/current/06_AppPlatform/backend",
             "PYTHONDONTWRITEBYTECODE": "1",
             "APP_BACKEND_WORKERS": "2",

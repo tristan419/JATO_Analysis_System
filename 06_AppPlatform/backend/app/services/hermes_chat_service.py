@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.config import resolve_hermes_runtime_root
+
 # ── Intent definitions ───────────────────────────────────────────────
 
 INTENT_DEFS: list[dict[str, Any]] = [
@@ -176,7 +178,7 @@ def _load_overview() -> dict[str, Any]:
 
 def _load_evidence_summary(days: int = 7) -> dict[str, Any]:
     from app.api.routes.hermes import HERMES_DIR
-    path = HERMES_DIR / "evidence_ledger.jsonl"
+    path = resolve_hermes_runtime_root(HERMES_DIR.parent) / "evidence_ledger.jsonl"
     if not path.is_file():
         return {"totalCount": 0, "recentCount": 0, "byType": {}}
     entries: list[dict] = []

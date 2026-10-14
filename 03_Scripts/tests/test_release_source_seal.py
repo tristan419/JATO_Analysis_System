@@ -45,6 +45,10 @@ def sealed_tree(tmp_path: Path) -> tuple[Path, Path]:
     ordinary.parent.mkdir(parents=True)
     ordinary.write_text("VALUE = 1\n", encoding="utf-8")
     (root / "06_AppPlatform/frontend").mkdir(parents=True)
+    (root / "hermes/reports").mkdir(parents=True)
+    script = root / "03_Scripts/hermes/hermes_cost_report.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("print('cost ok')\n", encoding="utf-8")
     manifest = tmp_path / "expected-seal.json"
     result = subprocess.run(
         [
@@ -79,6 +83,78 @@ def _verify(root: Path, manifest: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def test_hermes_runtime_writes_preserve_source_seal(sealed_tree, monkeypatch):
+    from app.core.config import resolve_hermes_runtime_root
+    from app.services import hermes_devsync_service as devsync
+    from app.services import hermes_history_service as history
+    from app.services import hermes_ops_runner_service as runner
+    from app.services import hermes_sentinel_service as sentinel
+    from app.services import jato_monthly_update_service as monthly
+    from datetime import datetime, timezone
+
+    root, manifest = sealed_tree
+    monkeypatch.delenv("APP_HERMES_RUNTIME_ROOT", raising=False)
+    for service in (devsync, history, runner, sentinel):
+        monkeypatch.setattr(service, "_project_root", root)
+    runtime = resolve_hermes_runtime_root(root)
+    ledger = runtime / "evidence_ledger.jsonl"
+    assert devsync._evidence_ledger_path() == history._evidence_ledger_path() == runner._evidence_ledger_path() == ledger
+    runner._write_jsonl(ledger, {"evidenceId": "first"})
+    sentinel._write_notifications([{"id": "first"}])
+    sentinel._write_notification_state({"first": {"status": "acked"}})
+    assert history._sentinel_notifications_path() == sentinel._notifications_path()
+    assert ledger.is_file() and sentinel._notifications_path().is_file()
+    assert not (root / "hermes/evidence_ledger.jsonl").exists()
+    assert not (root / "hermes/sentinel_notifications.jsonl").exists()
+    assert _verify(root, manifest).returncode == 0
+    # A second write, including atomic 0600 replacement, must still pass.
+    runner._write_jsonl(ledger, {"evidenceId": "second"})
+    sentinel._write_notifications([{"id": "second"}])
+    monkeypatch.setenv("HERMES_RUN_ENABLED", "true")
+    assert runner.execute_hermes_command("cost-report", actor="tester")["status"] == "success"
+    assert runner._activity_log_path().parent == runtime
+    assert not (root / "hermes/activity_log.jsonl").exists()
+    monkeypatch.setattr(monthly, "PROJECT_ROOT", root)
+    monthly._write_jato_publish_cache_invalidation_evidence(
+        job_id="test-job", published_at=datetime.now(timezone.utc), triggered_by="tester",
+        cache_invalidation={}, active_paths={},
+    )
+    assert "runtime_cache_invalidation" in ledger.read_text()
+    assert _verify(root, manifest).returncode == 0
+
+
+def test_hermes_candidate_runtime_is_separate(tmp_path, monkeypatch):
+    from app.core.config import resolve_hermes_runtime_root
+    active = tmp_path / "active/hermes/reports/runtime"
+    candidate = tmp_path / "candidate"
+    monkeypatch.delenv("APP_HERMES_RUNTIME_ROOT", raising=False)
+    assert resolve_hermes_runtime_root(tmp_path / "active") == active
+    monkeypatch.setenv("APP_HERMES_RUNTIME_ROOT", str(candidate))
+    assert resolve_hermes_runtime_root(tmp_path / "active") == candidate
+    assert resolve_hermes_runtime_root(tmp_path / "new-release") == candidate
+    assert not active.exists() and not candidate.exists()  # Resolution does not write.
+
+
+@pytest.mark.parametrize("configured", (False, True))
+def test_hermes_evidence_script_uses_runtime_default(tmp_path, monkeypatch, configured):
+    import importlib.util
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "03_Scripts/hermes"))
+    spec = importlib.util.spec_from_file_location("evidence_writer_test", REPO_ROOT / "03_Scripts/hermes/hermes_evidence_writer.py")
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    monkeypatch.setattr(writer, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(writer, "run", lambda _: {"evidence": [], "skipped": [], "typeCounts": {}})
+    monkeypatch.setattr(sys, "argv", ["hermes_evidence_writer.py"])
+    monkeypatch.delenv("APP_HERMES_RUNTIME_ROOT", raising=False)
+    runtime = tmp_path / "candidate" if configured else tmp_path / "hermes/reports/runtime"
+    if configured:
+        monkeypatch.setenv("APP_HERMES_RUNTIME_ROOT", str(runtime))
+    monkeypatch.chdir(tmp_path)
+    writer.main()
+    assert (runtime / "evidence_ledger.jsonl").is_file()
+    assert not (tmp_path / "hermes/evidence_ledger.jsonl").exists()
 
 
 def _runtime_arguments() -> list[str]:

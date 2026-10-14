@@ -1121,6 +1121,10 @@ class TestGaps:
 # ── /hermes/evidence-ledger ──────────────────────────────────────────
 
 class TestEvidenceLedger:
+    @pytest.fixture(autouse=True)
+    def runtime_ledger(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("APP_HERMES_RUNTIME_ROOT", str(tmp_path))
+
     def _make_entry(self, created_at: str, etype: str = "fact") -> dict:
         return {"createdAt": created_at, "type": etype, "fact": "test fact"}
 
