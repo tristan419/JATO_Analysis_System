@@ -7,12 +7,19 @@ import type { PiTemplateCatalog, PiTemplateConfig } from "../../types/orderGeniu
 
 vi.mock("../../api/client", () => ({ api: { getInvoiceTemplates: vi.fn(), previewPiTemplate: vi.fn(), savePiTemplate: vi.fn(), orderPiTemplates: vi.fn(), copyPiTemplate: vi.fn(), deletePiTemplate: vi.fn() } }));
 const config: PiTemplateConfig = { sheetName: "Sheet1", headerRow: 10, dataStart: 11, totalRow: 13,
-  columns: { modelName: "B", quantity: "D", fobEur: "E", total: "I" }, fields: { buyerName: { cell: "A3", value: "Buyer", prefix: "" } }, charges: [], currency: "EUR" };
+  columns: { modelName: "B", quantity: "D", fobEur: "E", total: "I", freightEur: "F", insuranceEur: "G" }, fields: {
+    sellerName: { cell: "A1", value: "Seller", prefix: "" }, buyerName: { cell: "A3", value: "Buyer", prefix: "" },
+    buyerAddress: { cell: "A4", value: "Address", prefix: "" }, bankDetails: { cell: "A5", value: "Bank", prefix: "" },
+    priceTerm: { cell: "A6", value: "CFR", prefix: "" }, paymentTerm: { cell: "A7", value: "LC", prefix: "" },
+    invoiceDate: { cell: "F1", value: "", prefix: "" }, referenceNo: { cell: "F2", value: "", prefix: "" },
+    portOfShipment: { cell: "A14", value: "Loading", prefix: "" }, portOfDischarge: { cell: "A15", value: "Discharge", prefix: "" },
+  }, charges: [], currency: "EUR" };
 const catalog: PiTemplateCatalog = { actor: "alice", owner: "alice", owners: ["alice", "bob"], admin: false, country: "CZ", brands: ["OMODA"],
   items: [{ id: "first", name: "Mine", owner: "alice", country: "CZ", brands: ["OMODA"], shared: false, sha256: "digest", config },
     { id: "second", name: "Shared", owner: "bob", country: "CZ", brands: ["OMODA"], shared: true, sha256: "digest", config }] };
 const scope = { country: catalog.country, brands: catalog.brands };
 beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.mocked(api.getInvoiceTemplates).mockResolvedValue(catalog);
   vi.mocked(api.previewPiTemplate).mockResolvedValue({ ...config, sha256: "digest", sheets: ["Sheet1"], sourceCells: [{ cell: "A3", value: "Buyer" }] });
@@ -22,6 +29,10 @@ beforeEach(() => {
   vi.mocked(api.deletePiTemplate).mockResolvedValue({ deleted: true });
 });
 afterEach(() => { cleanup(); vi.resetAllMocks(); vi.unstubAllGlobals(); });
+function review(): void {
+  fireEvent.click(screen.getByLabelText(/I confirm the total calculation/));
+  fireEvent.click(screen.getByRole("button", { name: "Review before saving / 保存前核对" }));
+}
 
 it("upload is personal until explicit share and cannot save before reviewing", async () => {
   render(<PiInvoiceTemplateManager initial={catalog} onClose={vi.fn()} />);
@@ -29,7 +40,7 @@ it("upload is personal until explicit share and cannot save before reviewing", a
   fireEvent.change(screen.getByLabelText("Upload PI template"), { target: { files: [file] } });
   await screen.findByRole("button", { name: "Review before saving / 保存前核对" });
   expect((screen.getByLabelText(/Share to country/) as HTMLInputElement).checked).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "Review before saving / 保存前核对" }));
+  review();
   expect(api.savePiTemplate).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Save template / 保存模板" }));
   await waitFor(() => expect(api.savePiTemplate).toHaveBeenCalledWith({ name: "CZ", country: "CZ", brands: ["OMODA"], shared: false, sha256: "digest", config }, file));
@@ -40,7 +51,7 @@ it("retains a failed save draft and does not retry a saved write on refresh fail
   render(<PiInvoiceTemplateManager initial={catalog} onClose={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Edit / 编辑" }));
   fireEvent.change(screen.getByLabelText("Template name"), { target: { value: "Changed" } });
-  fireEvent.click(screen.getByRole("button", { name: "Review before saving / 保存前核对" }));
+  review();
   fireEvent.click(screen.getByRole("button", { name: "Save template / 保存模板" }));
   await screen.findByText("Save failed");
   expect((screen.getByLabelText("Template name") as HTMLInputElement).value).toBe("Changed");
@@ -117,4 +128,51 @@ it("cancelling before opening a scope performs no request or write", () => {
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(close).toHaveBeenCalledOnce();
   expect(api.getInvoiceTemplates).not.toHaveBeenCalled(); expect(api.savePiTemplate).not.toHaveBeenCalled();
+});
+
+it("lists every missing field before confirmation and can locate the input", async () => {
+  const incomplete = { ...config, fields: { ...config.fields, sellerName: { cell: "", value: "", prefix: "" }, bankDetails: { cell: "", value: "", prefix: "" } } };
+  vi.mocked(api.previewPiTemplate).mockResolvedValue({ ...incomplete, sha256: "digest", sheets: ["Sheet1"], sourceCells: [{ cell: "A1", value: "Original seller" }] });
+  render(<PiInvoiceTemplateManager initial={catalog} onClose={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("Upload PI template"), { target: { files: [new File(["xlsx"], "RO.xlsx")] } });
+  await screen.findByLabelText("Template name");
+  fireEvent.click(screen.getByRole("button", { name: "Review before saving / 保存前核对" }));
+  expect(screen.getByText("Mapping incomplete / 映射未完成")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Bank details.*选择有效/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /Seller.*填入完整原文/ }));
+  expect(document.activeElement).toBe(screen.getByLabelText("sellerName value"));
+  expect(api.savePiTemplate).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("Source sellerName"), { target: { value: "A1" } });
+  expect((screen.getByLabelText("sellerName cell") as HTMLTextAreaElement).value).toBe("A1");
+  expect((screen.getByLabelText("sellerName value") as HTMLTextAreaElement).value).toBe("Original seller");
+  expect(screen.queryByRole("button", { name: /Seller.*填入完整原文/ })).toBeNull();
+});
+
+it("requires deliberate FOB-only confirmation and changing charges invalidates it", () => {
+  render(<PiInvoiceTemplateManager initial={catalog} onClose={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit / 编辑" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review before saving / 保存前核对" }));
+  expect(screen.getByRole("button", { name: /明确确认合计费用/ })).toBeTruthy();
+  review();
+  expect(screen.getByRole("button", { name: "Save template / 保存模板" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Change mapping / 返回调整" }));
+  expect((screen.getByLabelText("buyerName value") as HTMLTextAreaElement).value).toBe("Buyer");
+  fireEvent.click(screen.getByLabelText("freightEur"));
+  expect((screen.getByLabelText(/I confirm the total calculation/) as HTMLInputElement).checked).toBe(false);
+  expect(screen.getByText(/本次公式.*运费/)).toBeTruthy();
+});
+
+it("shows the original formula, rejects overlapping columns and highlights saved template", async () => {
+  vi.mocked(api.previewPiTemplate).mockResolvedValue({ ...config, sha256: "digest", sheets: ["Sheet1"], sourceCells: [{ cell: "I11", value: "=(E11+F11+G11)*D11" }] });
+  render(<PiInvoiceTemplateManager initial={catalog} onClose={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("Upload PI template"), { target: { files: [new File(["xlsx"], "RO.xlsx")] } });
+  await screen.findByText("=(E11+F11+G11)*D11", { selector: "code" });
+  fireEvent.change(screen.getByLabelText("Column total"), { target: { value: "E" } });
+  review();
+  expect(screen.getByRole("button", { name: /Total amount.*不重复/ })).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Column total"), { target: { value: "I" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review before saving / 保存前核对" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save template / 保存模板" }));
+  await screen.findByText(/Saved and refreshed/);
+  expect(screen.getByText("Mine").closest("li")?.textContent).toContain("刚保存");
 });

@@ -65,6 +65,82 @@ def test_analysis_recognizes_table_and_never_saves(source):
     assert not templates.records()
 
 
+@pytest.fixture
+def split_label_invoice(source):
+    """Real two-row/merged-label layout, with all commercial identities removed."""
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "PI-EXAMPLE"
+    for address, value in {"A1": "Example sales company", "A3": "Example seller address", "B9": "M/S: Example buyer",
+        "B10": "Address：Example buyer address", "I9": "Date:", "J9": "2026-10-09", "I10": "Ref. No:", "J10": "old-ref",
+        "A21": "5-Price", "C21": "CIF Value EUR", "A22": "6- Payment", "C22": "Example payment conditions",
+        "A24": "8- Bank Details:", "C24": "Example complete bank details", "A60": "Total",
+        "A61": "10-Port of Shipment:Example loading", "A62": "11-Port of Discharge:Example discharge"}.items():
+        ws[address] = value
+    for address, label in {"B26": "Description of Goods", "F26": "QTY", "G26": "FOB Per Unit EUR", "H26": "Total FOB",
+        "I26": "Freight EUR", "J26": "Insurance EUR", "K26": "Handing Charges EUR", "L26": "TOTAL CIF EUR",
+        "B27": "Model", "C27": "Version", "D27": "Colour", "E27": "Material Code"}.items():
+        ws[address] = label
+    for merge in ("A1:L1", "A3:L3", "B9:E9", "B10:E10", "J9:L9", "J10:L10", "A21:B21", "C21:L21",
+                  "A22:B22", "C22:L22", "A24:B24", "C24:L24", "B26:E26", "A59:K59", "A60:E60"):
+        ws.merge_cells(merge)
+    for col in "FGHIJKL": ws.merge_cells(f"{col}26:{col}27")
+    for row in range(28, 59):
+        for col, value in {"H": f"=G{row}*F{row}", "I": 1700, "J": 20, "K": 0,
+                           "L": f"=(G{row}+I{row}+J{row}+K{row})*F{row}"}.items(): ws[f"{col}{row}"] = value
+    for col in "FHL": ws[f"{col}60"] = f"=SUM({col}28:{col}58)"
+    stream = BytesIO(); wb.save(stream)
+    return stream.getvalue()
+
+
+def test_split_labels_use_actual_value_cells_and_leave_unlabelled_identity_for_review(split_label_invoice):
+    parsed = templates.analyse(split_label_invoice)
+    assert (parsed["headerRow"], parsed["dataStart"], parsed["totalRow"]) == (26, 28, 60)
+    assert {key: parsed["fields"][key]["cell"] for key in ("bankDetails", "priceTerm", "paymentTerm", "invoiceDate", "referenceNo")} == {
+        "bankDetails": "C24", "priceTerm": "C21", "paymentTerm": "C22", "invoiceDate": "J9", "referenceNo": "J10"}
+    assert parsed["fields"]["invoiceDate"]["prefix"] == ""
+    assert parsed["fields"]["sellerName"]["cell"] == ""
+    assert {"cell": "A1", "value": "Example sales company"} in parsed["sourceCells"]
+    assert parsed["charges"] == []
+    assert parsed["sourceCells"][-1] == {"cell": "L28", "value": "=(G28+I28+J28+K28)*F28"}
+    with pytest.raises(ValueError, match="Seller / 卖方") as exc: templates.validate_config(split_label_invoice, parsed)
+    assert "bankDetails" not in str(exc.value)
+    assert not templates.records()
+
+
+def test_confirmed_split_label_export_keeps_labels_and_uses_saved_pi_values(split_label_invoice):
+    parsed = templates.analyse(split_label_invoice)
+    parsed["fields"]["sellerName"] = {"cell": "A1", "value": "Example sales company", "prefix": ""}
+    parsed["charges"] = ["freightEur", "insuranceEur", "handlingEur"]
+    payload = dict(name="Example split label invoice", country="CZ", brands=["OMODA"], shared=False,
+                   sha256=hashlib.sha256(split_label_invoice).hexdigest(), config=parsed)
+    saved = templates.save(split_label_invoice, payload, "alice", False)
+    template = templates.load_template(saved["id"], "alice", False, "CZ", {"OMODA"})
+    pi = detail(); before = deepcopy(pi)
+    out = exporter.generate_pi_invoice_excel(pi, {"invoiceDate": "2026-10-14"}, template)
+    ws = openpyxl.load_workbook(out).active
+    cached = openpyxl.load_workbook(BytesIO(out.getvalue()), data_only=True).active
+    assert ws["I9"].value == "Date:" and ws["I10"].value == "Ref. No:"
+    assert ws["J10"].value == pi["header"]["piCode"]
+    assert str(ws["J9"].value).startswith("2026-10-14")
+    assert ws["L28"].value == "=ROUND((G28+I28+J28+K28)*F28,2)"
+    assert cached["L30"].value == 208.46 and cached["F30"].value == 2
+    assert pi == before and template["path"].read_bytes() == split_label_invoice
+
+
+def test_required_field_errors_are_aggregated_and_ambiguous_labels_are_not_guessed(source):
+    content, payload = source
+    config = deepcopy(payload["config"])
+    for key in ("sellerName", "bankDetails", "priceTerm", "paymentTerm"): config["fields"][key]["value"] = ""
+    with pytest.raises(ValueError) as exc: templates.validate_config(content, config)
+    for label in ("卖方", "银行资料", "价格条款", "付款条款"): assert label in str(exc.value)
+    wb = openpyxl.load_workbook(BytesIO(content)); ws = wb.active
+    ws["A1"] = "Seller: One"; ws["A2"] = "Seller: Two"
+    ws["F1"] = "Date:"; ws["G1"] = "Ref. No:"
+    stream = BytesIO(); wb.save(stream)
+    parsed = templates.analyse(stream.getvalue())
+    assert parsed["fields"]["sellerName"]["cell"] == ""
+    assert parsed["fields"]["invoiceDate"]["cell"] == ""
+
+
 def test_personal_shared_admin_scope_and_independent_order(source):
     content, payload = source
     first = templates.save(content, payload, "alice", False)
