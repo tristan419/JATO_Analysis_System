@@ -385,6 +385,7 @@ describe("BOM Admin A load continuity", () => {
     await act(async () => { fireEvent.click(screen.getByText("13,600")); });
     const dialog = screen.getByRole("dialog", { name: "Country template FOB periods" });
     expect(dialog.closest(".bom-admin-panel")).toBeNull();
+    expect(dialog.parentElement?.classList.contains("bom-fob-period-backdrop")).toBe(true);
     expect(api.listBomTemplateFobPeriods).toHaveBeenCalledWith({ bomTemplate: "T-Period sample-**", countryCode: "SE" });
     fireEvent.change(within(dialog).getByLabelText("From"), { target: { value: "2026-08-01" } });
     fireEvent.change(within(dialog).getByLabelText("To"), { target: { value: "2026-08-31" } });

@@ -8577,7 +8577,7 @@ export function BomAdminPanel({
         </div>
       ) : null}
       {editFob ? createPortal((
-        <div className="bom-finance-modal-backdrop" onClick={() => { if (!fobPeriodSaving) setEditFob(null); }}>
+        <div className="bom-finance-modal-backdrop bom-fob-period-backdrop" onClick={() => { if (!fobPeriodSaving) setEditFob(null); }}>
           <div className="bom-fob-edit-modal-shell" role="dialog" aria-modal="true" aria-label="Country template FOB periods" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape" && !fobPeriodSaving) setEditFob(null); }}>
             <div className="bom-fob-edit-card">
               <div>
