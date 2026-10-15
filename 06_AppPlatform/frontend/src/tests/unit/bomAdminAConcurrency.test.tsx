@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client";
 import { BomAdminPanel } from "../../pages/OrderGeniusPage";
 import { clearCachedPageValue } from "../../utils/pageCache";
+import type { CountryTemplateFobPeriod } from "../../types/orderGenius";
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -367,6 +368,7 @@ describe("BOM Admin A load continuity", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Release sample/ })); });
     await act(async () => { fireEvent.click(screen.getByText("13,600")); });
     const dialog = screen.getByRole("dialog", { name: "Country template FOB periods" });
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "New phase / 新增阶段" })); });
     fireEvent.change(within(dialog).getByLabelText("From"), { target: { value: "2026-10-01" } });
     fireEvent.change(within(dialog).getByLabelText("To"), { target: { value: "2026-10-31" } });
     fireEvent.change(within(dialog).getByLabelText("Single base EUR"), { target: { value: "14000" } });
@@ -376,13 +378,83 @@ describe("BOM Admin A load continuity", () => {
         if (!codes.includes(code)) fireEvent.click(within(dialog).getByLabelText(`Release ${code}`));
       }
     }
-    await act(async () => { fireEvent.click(within(dialog).getByText("Add period")); });
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Add phase / 添加阶段" })); });
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ allowedColourCodes: codes }));
-    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: /^Edit$/ })); });
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: /^P1/ })); });
     expect((within(dialog).getByLabelText(/All colours, including future additions/) as HTMLInputElement).checked).toBe(codes === null);
     for (const code of ["W3", "CL"]) {
       expect((within(dialog).getByLabelText(`Release ${code}`) as HTMLInputElement).checked).toBe(codes === null || codes.includes(code));
     }
+  });
+
+  it("uses one fixed editor, guards dirty focus and saves each phase by id without changing the default", async () => {
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Phases"));
+    const colours = Array.from({ length: 8 }, (_, index) => ({ colourCode: `C${index}`, colourName: `Colour ${index}`, colourHex: null }));
+    const periods: CountryTemplateFobPeriod[] = [
+      { periodId: "first", countryCode: "SE", bomTemplate: "T-Phases-**", validFrom: "2026-08-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1, allowedColourCodes: null },
+      { periodId: "second", countryCode: "SE", bomTemplate: "T-Phases-**", validFrom: "2026-10-01", validTo: null, baseFobEur: 14000, remark: null, rowVersion: 1, allowedColourCodes: ["C0", "C1", "C2", "C3"] },
+    ];
+    vi.spyOn(api, "listBomTemplateFobPeriods").mockImplementation(async () => ({ periods: [...periods], usesPeriods: true, colours }));
+    const save = vi.spyOn(api, "saveBomTemplateFobPeriod").mockImplementation(async (payload) => {
+      const index = periods.findIndex((period) => period.periodId === payload.periodId);
+      periods[index] = { ...periods[index], allowedColourCodes: payload.allowedColourCodes, rowVersion: periods[index].rowVersion + 1 };
+      return periods[index];
+    });
+    const changed = vi.fn();
+    await act(async () => { render(<BomAdminPanel isAdmin={true} onFobChanged={changed} />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Phases/ })); });
+    await act(async () => { fireEvent.click(screen.getByText("13,600")); });
+    const dialog = screen.getByRole("dialog", { name: "Country template FOB periods" });
+    expect(within(dialog).getAllByLabelText("Release C0")).toHaveLength(1);
+    expect(within(dialog).queryByLabelText("From")).toBeNull();
+    expect(within(dialog).getByText(/释放 8\/8/)).toBeTruthy();
+    expect(within(dialog).getByText(/释放 4\/8/)).toBeTruthy();
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: /^P1/ })); });
+    const firstEditor = within(dialog).getByRole("group", { name: "Editing P1 / 正在编辑P1" });
+    expect(firstEditor.closest(".bom-fob-period-item")).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /Save global default/ })).toBeNull();
+    fireEvent.click(within(firstEditor).getByLabelText("Release C7"));
+    expect(within(dialog).getByRole("button", { name: /^P2/ }).hasAttribute("disabled")).toBe(true);
+    await act(async () => { fireEvent.click(within(firstEditor).getByRole("button", { name: /^Save P1/ })); });
+    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ periodId: "first", allowedColourCodes: ["C0", "C1", "C2", "C3", "C4", "C5", "C6"] }));
+    expect(periods[1].allowedColourCodes).toEqual(["C0", "C1", "C2", "C3"]);
+    expect(within(dialog).getAllByRole("group", { name: /Editing P1/ })).toHaveLength(1);
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: /^P2/ })); });
+    const secondEditor = within(dialog).getByRole("group", { name: "Editing P2 / 正在编辑P2" });
+    expect(secondEditor.parentElement).toBe(firstEditor.parentElement);
+    fireEvent.click(within(secondEditor).getByLabelText("Release C3"));
+    await act(async () => { fireEvent.click(within(secondEditor).getByRole("button", { name: /^Save P2/ })); });
+    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ periodId: "second", allowedColourCodes: ["C0", "C1", "C2"] }));
+    expect(periods[0].allowedColourCodes).toHaveLength(7);
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "New phase / 新增阶段" })); });
+    fireEvent.click(within(dialog).getByLabelText("Release C0"));
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Cancel changes / 取消修改" })); });
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(within(dialog).getByRole("button", { name: /Save global default/ })).toBeTruthy();
+    expect(within(dialog).queryByLabelText("From")).toBeNull();
+  });
+
+  it.each([null, [], ["W3"], ["W3", "CL"]] as Array<string[] | null>)("saves default colours %j without submitting a price or overwriting phases", async (codes) => {
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Global"));
+    const colours = ["W3", "CL"].map((colourCode) => ({ colourCode, colourName: colourCode, colourHex: null }));
+    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods: [], usesPeriods: false, colours, defaultAllowedColourCodes: null });
+    const save = vi.spyOn(api, "updateBomTemplateFob").mockResolvedValue({ bomTemplate: "T-Global-**", countryCode: "SE", baseFobEur: null, updated: 0, created: 0, cleared: 0, details: [] });
+    const phaseSave = vi.spyOn(api, "saveBomTemplateFobPeriod");
+    await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Global/ })); });
+    await act(async () => { fireEvent.click(screen.getByText("13,600")); });
+    const dialog = screen.getByRole("dialog", { name: "Country template FOB periods" });
+    expect(within(dialog).queryByLabelText("From")).toBeNull();
+    if (codes !== null) {
+      fireEvent.click(within(dialog).getByLabelText(/All colours, including future additions/));
+      for (const code of ["W3", "CL"]) if (!codes.includes(code)) fireEvent.click(within(dialog).getByLabelText(`Release ${code}`));
+    }
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: /Save global default/ })); });
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ allowedColourCodes: codes }));
+    expect(save.mock.calls[0][0]).not.toHaveProperty("baseFobEur");
+    expect(phaseSave).not.toHaveBeenCalled();
+    expect((within(dialog).getByLabelText("Base FOB EUR") as HTMLInputElement).value).toBe("13600");
+    expect(within(dialog).getByRole("button", { name: /Save global default/ }).hasAttribute("disabled")).toBe(false);
   });
 
   it("opens country periods outside the BOM card and keeps the draft after a save failure", async () => {
@@ -396,11 +468,12 @@ describe("BOM Admin A load continuity", () => {
     expect(dialog.closest(".bom-admin-panel")).toBeNull();
     expect(dialog.parentElement?.classList.contains("bom-fob-period-backdrop")).toBe(true);
     expect(api.listBomTemplateFobPeriods).toHaveBeenCalledWith({ bomTemplate: "T-Period sample-**", countryCode: "SE" });
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "New phase / 新增阶段" })); });
     fireEvent.change(within(dialog).getByLabelText("From"), { target: { value: "2026-08-01" } });
     fireEvent.change(within(dialog).getByLabelText("To"), { target: { value: "2026-08-31" } });
     const base = within(dialog).getByLabelText("Single base EUR") as HTMLInputElement;
     fireEvent.change(base, { target: { value: "14000" } });
-    await act(async () => { fireEvent.click(within(dialog).getByText("Add period")); });
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Add phase / 添加阶段" })); });
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ countryCode: "SE", bomTemplate: "T-Period sample-**", validFrom: "2026-08-01", validTo: "2026-08-31", baseFobEur: 14000 }));
     expect(base.value).toBe("14000");
     expect(within(dialog).getByText("Country price conflict")).toBeTruthy();
@@ -440,14 +513,16 @@ describe("BOM Admin A load continuity", () => {
     await act(async () => { render(<BomAdminPanel isAdmin={true} onFobChanged={changed} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Restore sample/ })); });
     await act(async () => { fireEvent.click(screen.getByText("13,600")); });
-    await act(async () => { fireEvent.click(within(screen.getByRole("dialog")).getByText("Delete")); });
+    await act(async () => { fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^P1/ })); });
+    await act(async () => { fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Delete selected phase/ })); });
     expect(remove).toHaveBeenLastCalledWith("p1", 1, undefined);
     expect(screen.getByText(/undated Single base 13,000 EUR/)).toBeTruthy();
     expect(changed).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(screen.getByText("Confirm remove period")); });
     expect(remove).toHaveBeenLastCalledWith("p1", 1, "fp");
     expect(changed).toHaveBeenCalledOnce();
-    expect(screen.getByText(/No periods configured/)).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Save global default/ })).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /^P1/ })).toBeNull();
   });
 
   it("searches the target country's rows and renders only NL plus that country; Clear restores all columns", async () => {

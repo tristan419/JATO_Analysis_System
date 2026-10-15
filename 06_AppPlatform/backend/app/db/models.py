@@ -2075,6 +2075,13 @@ class CountryTemplateFobPeriod(TimestampMixin, Base):
             "country_code", "bom_template", "valid_from", unique=True,
             postgresql_where=text("status = 'active'"),
         ),
+        Index("uq_country_template_fob_default", "country_code", "bom_template", unique=True,
+              postgresql_where=text("status = 'default' AND valid_from IS NULL")),
+        CheckConstraint(
+            "(valid_from IS NOT NULL AND base_fob_eur IS NOT NULL) OR "
+            "(status = 'default' AND valid_from IS NULL AND valid_to IS NULL AND base_fob_eur IS NULL)",
+            name="ck_fob_period_or_default_scope",
+        ),
         CheckConstraint("status IN ('active', 'deleted', 'default')", name="ck_fob_period_status"),
         CheckConstraint(
             "valid_to IS NULL OR valid_to >= valid_from",
@@ -2096,9 +2103,9 @@ class CountryTemplateFobPeriod(TimestampMixin, Base):
     )
     country_code: Mapped[str] = mapped_column(Text, nullable=False)
     bom_template: Mapped[str] = mapped_column(Text, nullable=False)
-    valid_from: Mapped[date] = mapped_column(Date, nullable=False)
+    valid_from: Mapped[date | None] = mapped_column(Date, nullable=True)
     valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
-    base_fob_eur: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    base_fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     allowed_colour_codes: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

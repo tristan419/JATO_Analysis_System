@@ -93,6 +93,90 @@ def release_period(db, codes, start=date(2026, 10, 1), end=date(2026, 10, 31), c
 
 
 @pytest.mark.parametrize("codes", [None, [], ["S"], ["S", "D"]])
+def test_default_colour_scope_has_no_price_or_dates_and_does_not_create_a_phase(db, codes):
+    single = sku(db, "S", "single")
+    sku(db, "D", "dual")
+    price = fob(db, "S", 1500, base=1500)
+    repo.save_default_colour_scope(db, "CH", "T**001", codes, "test")
+    db.commit()
+    db.expire_all()
+    assert repo.list_default_colour_scopes(db, "CH")["T**001"] == (sorted(codes) if codes is not None else None)
+    assert repo.list_country_template_fob_periods(db, "CH", "T**001") == []
+    default = db.scalars(select(models.CountryTemplateFobPeriod)).one()
+    assert default.status == "default" and default.valid_from is None and default.valid_to is None and default.base_fob_eur is None
+    assert float(price.final_fob_eur) == 1500
+    assert repo.is_default_colour_released(db, "CH", single) is (codes is None or "S" in codes)
+    new = sku(db, "NEW", "single")
+    assert repo.is_default_colour_released(db, "CH", new) is (codes is None)
+    assert repo.is_default_colour_released(db, "SE", new)
+
+
+def test_default_colour_only_patch_does_not_reprice_and_price_only_preserves_colours(db):
+    sku(db, "S", "single")
+    price = fob(db, "S", 1500, base=1500)
+    db.commit()
+    user = SimpleNamespace(name="test", role="admin")
+    body = {"bomTemplate": "T**001", "countryCode": "CH", "materialCodes": ["S"]}
+    result = routes.patch_bom_template_fob({**body, "allowedColourCodes": []}, db, user)
+    assert result["details"] == [] and result["updated"] == 0
+    assert float(price.final_fob_eur) == 1500
+    assert not db.scalars(select(models.FobResolvedHistory)).all()
+    routes.patch_bom_template_fob({**body, "baseFobEur": 1600}, db, user)
+    assert repo.list_default_colour_scopes(db, "CH")["T**001"] == []
+    assert float(price.final_fob_eur) == 1600
+    with pytest.raises(HTTPException):
+        routes.patch_bom_template_fob({**body, "baseFobEur": 1700, "allowedColourCodes": ["FOREIGN"]}, db, user)
+    assert float(price.final_fob_eur) == 1600
+    assert repo.list_default_colour_scopes(db, "CH")["T**001"] == []
+
+
+def test_default_colour_blocks_plan_import_pi_export_but_phase_is_independent(db):
+    single = sku(db, "S", "single")
+    price = fob(db, "S", 1500, base=1500)
+    db.commit()
+    parsed = OrderQuantityImport("CH", 2026, [ImportedRow("S", 99999, "Model", "Version", "Colour", [ImportedQuantityCell("S", 10, 4)])])
+    assert service.apply_order_quantity_import(db, parsed, "test")["appliedCells"] == 1
+    repo.save_default_colour_scope(db, "CH", "T**001", [], "test")
+    db.commit()
+    assert service.resolve_date_effective_fob(db, "CH", single, date(2026, 10, 15))[2]["status"] == "colour_not_released"
+    quote = service.resolve_month_effective_fob(db, "CH", single, 2026, 10, default_fob=price, periods=[], uses_periods=False,
+        colour_pricing={"amount": 0})
+    assert not quote["isEditable"] and quote["status"] == "colour_not_released"
+    assert not service.preview_order_quantity_import(db, parsed)["matchedRows"]
+    assert service.apply_order_quantity_import(db, parsed, "test")["appliedCells"] == 0
+    with pytest.raises(ValueError):
+        service.update_quantity_cell(db, "CH", 2026, 10, "S", 5, "test", 1)
+    with pytest.raises(HTTPException):
+        vehicle_service._line_payload_from_material(db, "CH", "S", {}, pricing_date=date(2026, 10, 15))
+    items, countries = repo.list_bom_with_fob(db)
+    projected = service.prepare_bom_export_rows(db, items, countries, reference_date=date(2026, 10, 15))
+    assert all(not row["exportPricesByCountry"] for row in projected)
+    phase = release_period(db, ["S"])
+    assert service.resolve_date_effective_fob(db, "CH", single, date(2026, 10, 15))[0] == 1000
+    assert vehicle_service._line_payload_from_material(db, "CH", "S", {}, pricing_date=date(2026, 10, 15))["fobEur"] == 1000
+    price.final_fob_eur = 0
+    db.commit()
+    quote = service.resolve_month_effective_fob(db, "CH", single, 2026, 10, default_fob=price, periods=[phase], uses_periods=True,
+        colour_pricing={"amount": 0})
+    assert quote["isEditable"] and quote["fobEur"] == 1000
+    assert service.resolve_date_effective_fob(db, "CH", single, date(2026, 11, 15))[2]["status"] == "no_price"
+
+
+def test_last_phase_deletion_previews_and_rechecks_saved_global_colours(db):
+    sku(db, "S", "single")
+    fob(db, "S", 1500, base=1500)
+    repo.save_default_colour_scope(db, "CH", "T**001", ["S"], "test")
+    phase = release_period(db, [])
+    preview = repo.preview_country_template_fob_period_deletion(db, phase.country_template_fob_period_id, phase.row_version)
+    assert preview["defaultAllowedColourCodes"] == ["S"]
+    repo.save_default_colour_scope(db, "CH", "T**001", [], "test")
+    db.commit()
+    new = repo.preview_country_template_fob_period_deletion(db, phase.country_template_fob_period_id, phase.row_version)
+    assert new["fingerprint"] != preview["fingerprint"]
+    assert new["defaultAllowedColourCodes"] == []
+
+
+@pytest.mark.parametrize("codes", [None, [], ["S"], ["S", "D"]])
 def test_release_scope_persists_null_empty_and_explicit_lists(db, codes):
     single, dual = sku(db, "S", "single"), sku(db, "D", "dual")
     period = release_period(db, codes)

@@ -187,6 +187,7 @@ export interface FobPeriodDeletionPreview {
   fingerprint: string;
   lastPeriod: boolean;
   defaultBaseFobEur: number | null;
+  defaultAllowedColourCodes?: string[] | null;
 }
 
 export interface BomTemplateLifecycleUpdateRequest {

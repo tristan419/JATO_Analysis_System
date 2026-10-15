@@ -5570,7 +5570,7 @@ export const api = {
   updateSkuFob: (materialCode: string, body: { countryCode: string; baseFobEur?: number | null; finalFobEur?: number | null; paymentTermCode?: string; remark?: string | null }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),
 
-  updateBomTemplateFob: (body: { bomTemplate: string; materialCodes: string[]; countryCode: string; baseFobEur: number | null; remark?: string | null }) =>
+  updateBomTemplateFob: (body: { bomTemplate: string; materialCodes: string[]; countryCode: string; baseFobEur?: number | null; remark?: string | null; allowedColourCodes?: string[] | null }) =>
     request<{ bomTemplate: string; countryCode: string; baseFobEur: number | null; updated: number; created: number; cleared: number; details: Array<Record<string, unknown>> }>(
       "/order-genius/bom-templates/fob",
       { method: "PATCH", body: JSON.stringify(body) },
@@ -5581,7 +5581,7 @@ export const api = {
       bomTemplate: params.bomTemplate,
       countryCode: params.countryCode,
     });
-    return request<{ periods: CountryTemplateFobPeriod[]; usesPeriods: boolean;
+    return request<{ periods: CountryTemplateFobPeriod[]; usesPeriods: boolean; defaultAllowedColourCodes?: string[] | null;
       colours: Array<{ colourCode: string; colourName: string; colourHex: string | null }> }>(
       `/order-genius/bom-templates/fob-periods?${qs.toString()}`,
     );
