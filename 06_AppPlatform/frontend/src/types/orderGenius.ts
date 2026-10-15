@@ -176,6 +176,7 @@ export interface CountryTemplateFobPeriod {
   validFrom: string;
   validTo: string | null;
   baseFobEur: number;
+  allowedColourCodes: string[] | null;
   remark: string | null;
   rowVersion: number;
 }

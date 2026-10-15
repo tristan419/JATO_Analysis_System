@@ -567,6 +567,12 @@ def resolve_date_effective_fob(
     }
     if float(period.base_fob_eur) == 0:
         return None, None, period_payload
+    if not repo.is_colour_released(period, sku):
+        return None, {
+            "materialCode": sku.material_code, "countryCode": country_code, "status": "conflict",
+            "reason": "Colour is not released for this country/period / 该国家期间未释放此颜色",
+            "records": [],
+        }, {**period_payload, "status": "colour_not_released"}
 
     tier = repo.resolve_effective_colour_tier(sku)
     surcharge = repo.resolve_colour_surcharge_for_sku(session, sku, tier)
@@ -592,12 +598,14 @@ def resolve_month_effective_fob(
     *, default_fob: CountrySkuFobResolved | None, periods: list[CountryTemplateFobPeriod], uses_periods: bool,
     colour_pricing: dict,
     include_historical: bool = False,
+    as_of: date | None = None,
 ) -> dict:
     """One monthly planning price, with exact sale-day ranges. No today-based pricing."""
     start, end = date(year, month, 1), date(year, month, monthrange(year, month)[1])
-    result = {"isEditable": False, "fobEur": None, "availableRanges": [], "requiresOrderDate": False, "reason": ""}
-    historical = repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
-    if historical and (not include_historical or (year, month) > (date.today().year, date.today().month)):
+    result = {"isEditable": False, "fobEur": None, "availableRanges": [], "requiresOrderDate": False, "reason": "", "status": "no_price"}
+    today = as_of or date.today()
+    historical = repo.resolve_effective_lifecycle_status(sku, today) == "historical"
+    if historical and (not include_historical or (year, month) > (today.year, today.month)):
         result["reason"] = "Include historical materials for current/past orders; future use requires extending the template end date / 历史物料须明确启用补录，未来订单请延长模板截止日"
         return result
     effective_from, effective_to = repo.get_lifecycle_dates(sku)
@@ -613,11 +621,18 @@ def resolve_month_effective_fob(
     if uses_periods:
         for period in periods:
             left, right = max(start, period.valid_from), min(end, period.valid_to or end)
-            if left <= right and float(period.base_fob_eur) > 0:
-                ranges.append((left, right))
-                bases.add(round(float(period.base_fob_eur), 2))
+            if left > right:
+                continue
+            if float(period.base_fob_eur) <= 0:
+                result["status"] = "stopped"
+                continue
+            if not repo.is_colour_released(period, sku):
+                result["status"] = "colour_not_released"
+                continue
+            ranges.append((left, right))
+            bases.add(round(float(period.base_fob_eur), 2))
         if not ranges:
-            result["reason"] = "No country FOB this month (gap or ordering paused); edit country price periods in BOM Admin / 本月国家无价或停价，请在 BOM Admin 补正区间"
+            result["reason"] = "No country FOB for a released colour this month (gap, paused or colour not released); edit BOM Admin / 本月国家无价、停价或颜色未释放，请查看期间与色码范围"
             return result
         if len(bases) > 1:
             result["reason"] = "Conflicting monthly Single bases; align this template/country month's prices in BOM Admin / 同月基准冲突，请统一该模板国家价格"
@@ -644,6 +659,7 @@ def resolve_month_effective_fob(
             merged.append((left, right))
     full_month = merged == [(date(year, month, 1), date(year, month, monthrange(year, month)[1]))]
     result.update({
+        "status": "ready",
         "isEditable": True, "fobEur": final,
         "availableRanges": [{"from": left.isoformat(), "to": right.isoformat()} for left, right in merged],
         "requiresOrderDate": not full_month,
@@ -1436,6 +1452,53 @@ def update_remark(
 # ── Export ─────────────────────────────────────────────────────────────
 
 
+def prepare_bom_export_rows(session: Session, items: list[dict], countries: list[str], reference_date: date) -> list[dict]:
+    """Project saved and month prices through the existing sale-day resolver."""
+    skus = {sku.material_code: sku for sku in repo.list_all_material_skus_for_admin(session, limit=None)}
+    periods = session.execute(select(CountryTemplateFobPeriod).where(
+        CountryTemplateFobPeriod.bom_template.in_({item["bomTemplate"] for item in items}),
+        CountryTemplateFobPeriod.country_code.in_(countries), CountryTemplateFobPeriod.status == "active",
+    )).scalars().all()
+    schedules: dict[tuple[str, str], list[CountryTemplateFobPeriod]] = {}
+    for period in periods:
+        schedules.setdefault((period.country_code, period.bom_template), []).append(period)
+    fobs = {country: repo.list_fobs_for_country_material_codes(
+        session, country, [item["materialCode"] for item in items], include_conflicts=True,
+    )[0] for country in countries}
+    result = []
+    for item in items:
+        sku = skus[item["materialCode"]]
+        lifecycle = repo.resolve_effective_lifecycle_status(sku, reference_date)
+        prices = {}
+        for country in countries:
+            schedule = schedules.get((country, sku.bom_template), [])
+            current = next((period for period in schedule if period.valid_from <= reference_date
+                            and (period.valid_to is None or period.valid_to >= reference_date)), None)
+            if current is not None and (float(current.base_fob_eur) <= 0 or not repo.is_colour_released(current, sku)):
+                continue
+            saved = fobs[country].get(sku.material_code)
+            quote = resolve_month_effective_fob(
+                session, country, sku, reference_date.year, reference_date.month,
+                default_fob=saved, periods=schedule, uses_periods=bool(schedule),
+                colour_pricing=item["colourPricing"], include_historical=lifecycle == "historical", as_of=reference_date,
+            )
+            historical = lifecycle == "historical"
+            if historical and not quote["isEditable"] and quote["status"] in {"stopped", "colour_not_released"}:
+                continue
+            if not historical and (lifecycle not in {"active", "phase_out"} or not quote["isEditable"]
+                                   or not any(r["from"] <= reference_date.isoformat() <= r["to"] for r in quote["availableRanges"])):
+                continue
+            default = float(saved.final_fob_eur) if saved is not None else None
+            month = quote["fobEur"] if quote["isEditable"] else None
+            if default is None and month is None:
+                continue
+            prices[country] = {"savedFobEur": default, "monthFobEur": month,
+                               "status": "historical" if historical else "ready",
+                               "availableRanges": quote["availableRanges"]}
+        result.append({**item, "lifecycleStatus": lifecycle, "exportPricesByCountry": prices})
+    return result
+
+
 def export_matrix(
     session: Session,
     country_code: str,
@@ -1575,10 +1638,6 @@ def preview_order_quantity_import(
     if parsed.errors:
         return result
 
-    # Get all active SKUs + FOB for this country
-    country_pt = repo.get_country_payment_term(session, parsed.country_code)
-    pt_code = country_pt.payment_term_code if country_pt else None
-
     for row in parsed.rows:
         # Check if material code exists
         existing_sku = repo.get_sku_by_material_code(session, row.material_code)
@@ -1593,13 +1652,8 @@ def preview_order_quantity_import(
             continue
 
         # Check FOB divergence
-        current_fob = None
-        if pt_code:
-            fob_record = repo.get_fob_for_country_sku(
-                session, parsed.country_code, row.material_code, pt_code,
-            )
-            if fob_record:
-                current_fob = float(fob_record.final_fob_eur)
+        fob_record = repo.get_fob_for_country_sku(session, parsed.country_code, row.material_code)
+        current_fob = float(fob_record.final_fob_eur) if fob_record else None
 
         fob_changed = False
         if row.fob_eur is not None and current_fob is not None:
@@ -1612,6 +1666,10 @@ def preview_order_quantity_import(
                 })
 
         matched_cells = []
+        periods = repo.list_country_template_fob_periods(session, parsed.country_code, existing_sku.bom_template)
+        colour_pricing = repo.resolve_colour_surcharge_for_sku(
+            session, existing_sku, repo.resolve_effective_colour_tier(existing_sku),
+        )
         for cell in row.cells:
             result["totalCells"] += 1
             if cell.error:
@@ -1623,13 +1681,23 @@ def preview_order_quantity_import(
             )
             old_qty = existing_qty.quantity if existing_qty else None
             old_row_version = existing_qty.row_version if existing_qty else 0
+            if cell.quantity == (old_qty or 0) and not cell.error:
+                continue
 
-            if cell.quantity != (old_qty or 0) or cell.error:
+            availability = resolve_month_effective_fob(
+                session, parsed.country_code, existing_sku, parsed.year, cell.month,
+                default_fob=fob_record, periods=periods, uses_periods=bool(periods),
+                colour_pricing=colour_pricing,
+            )
+            error = cell.error or (availability["reason"] if not availability["isEditable"] else None)
+            if error and not cell.error:
+                result["errorCells"] += 1
+            if cell.quantity != (old_qty or 0) or error:
                 matched_cells.append({
                     "month": cell.month,
                     "oldQuantity": old_qty,
                     "newQuantity": cell.quantity,
-                    "error": cell.error,
+                    "error": error,
                     "rowVersion": old_row_version,
                 })
 
@@ -1663,24 +1731,12 @@ def apply_order_quantity_import(
     skipped = 0
     errors: list[str] = []
 
-    country_pt = repo.get_country_payment_term(session, parsed.country_code)
-    pt_code = country_pt.payment_term_code if country_pt else None
-
     for row in parsed.rows:
         existing_sku = repo.get_sku_by_material_code(session, row.material_code)
         if not existing_sku:
             skipped += len(row.cells)
             errors.append(f"{row.material_code}: material code not found in active SKU master")
             continue
-
-        # Resolve current FOB for quantity cells
-        fob_eur = 0.0
-        if pt_code:
-            fob_record = repo.get_fob_for_country_sku(
-                session, parsed.country_code, row.material_code, pt_code,
-            )
-            if fob_record:
-                fob_eur = float(fob_record.final_fob_eur)
 
         for cell in row.cells:
             if cell.error:
@@ -1691,25 +1747,19 @@ def apply_order_quantity_import(
                 session, parsed.country_code, parsed.year, cell.month, row.material_code,
             )
             expected_version = existing.row_version if existing else 0
+            if cell.quantity == (existing.quantity if existing else 0):
+                skipped += 1
+                continue
 
-            result = repo.upsert_quantity_cell(
-                session,
-                country_code=parsed.country_code,
-                order_year=parsed.year,
-                order_month=cell.month,
-                material_code=row.material_code,
-                quantity=cell.quantity,
-                fob_eur=fob_eur,
-                updated_by=username,
-                expected_version=expected_version,
-            )
-            if result:
-                applied += 1
-            else:
-                errors.append(
-                    f"{row.material_code} M{cell.month}: optimistic lock failure "
-                    f"(expected version {expected_version})"
+            try:
+                update_quantity_cell(
+                    session, country_code=parsed.country_code, order_year=parsed.year,
+                    order_month=cell.month, material_code=row.material_code,
+                    quantity=cell.quantity, updated_by=username, expected_version=expected_version,
                 )
+                applied += 1
+            except ValueError as exc:
+                errors.append(f"{row.material_code} M{cell.month}: {exc}")
                 skipped += 1
 
     return {"appliedCells": applied, "skippedCells": skipped, "errors": errors}

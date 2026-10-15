@@ -2099,6 +2099,7 @@ class CountryTemplateFobPeriod(TimestampMixin, Base):
     valid_from: Mapped[date] = mapped_column(Date, nullable=False)
     valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     base_fob_eur: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    allowed_colour_codes: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_by: Mapped[str | None] = mapped_column(Text, nullable=True)

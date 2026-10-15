@@ -1152,6 +1152,7 @@ def save_country_template_fob_period(
     changed_by: str,
     period_id: UUID | None = None,
     row_version: int | None = None,
+    allowed_colour_codes: list[str] | None = None,
 ) -> CountryTemplateFobPeriod:
     country = clean_text(country_code).upper()
     template = clean_text(bom_template).upper()
@@ -1163,6 +1164,16 @@ def save_country_template_fob_period(
         raise ValueError("baseFobEur must be greater than or equal to 0")
 
     baseline = get_latest_baseline(session)
+    if allowed_colour_codes is not None:
+        if not isinstance(allowed_colour_codes, list) or any(
+            not isinstance(code, str) or not clean_text(code) for code in allowed_colour_codes
+        ):
+            raise ValueError("allowedColourCodes must be null or a list of colour codes / 请选择有效色码")
+        allowed_colour_codes = sorted({clean_text(code).upper() for code in allowed_colour_codes})
+        members = list_bom_template_skus(session, template, baseline.baseline_version_id) if baseline else []
+        known = {clean_text(sku.exterior_color_code).upper() for sku in members}
+        if set(allowed_colour_codes) - known:
+            raise ValueError("Selected colour codes are not in this BOM template; refresh / 色码不属于当前模板，请刷新")
     if baseline is not None:
         try:
             lifecycle = get_bom_template_lifecycle(
@@ -1248,6 +1259,7 @@ def save_country_template_fob_period(
     row.valid_to = valid_to
     row.base_fob_eur = round(base_fob_eur, 2)
     row.remark = clean_text(remark) or None
+    row.allowed_colour_codes = allowed_colour_codes
     row.updated_by = changed_by
     return row
 
@@ -1316,7 +1328,14 @@ def country_template_fob_period_payload(row: CountryTemplateFobPeriod) -> dict:
         "bomTemplate": row.bom_template, "validFrom": row.valid_from.isoformat(),
         "validTo": row.valid_to.isoformat() if row.valid_to else None,
         "baseFobEur": float(row.base_fob_eur), "remark": row.remark, "rowVersion": row.row_version,
+        "allowedColourCodes": row.allowed_colour_codes,
     }
+
+
+def is_colour_released(period: CountryTemplateFobPeriod, sku: MaterialSkuMaster) -> bool:
+    """Null means unrestricted; an explicit empty list releases no colours."""
+    return (period.allowed_colour_codes is None
+            or clean_text(sku.exterior_color_code).upper() in period.allowed_colour_codes)
 
 
 def initialize_sku_fobs_from_source(

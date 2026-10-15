@@ -3868,6 +3868,7 @@ type BomFobPeriodDraft = {
   validFrom: string;
   validTo: string;
   baseFobEur: string;
+  allowedColourCodes: string[] | null;
   remark: string;
 };
 
@@ -3877,6 +3878,7 @@ const EMPTY_BOM_FOB_PERIOD_DRAFT: BomFobPeriodDraft = {
   validFrom: "",
   validTo: "",
   baseFobEur: "",
+  allowedColourCodes: null,
   remark: "",
 };
 
@@ -3989,6 +3991,7 @@ export function BomAdminPanel({
   const [debouncedSearch, setDebouncedSearch] = useState(cachedSearchText.trim());
   const [editFob, setEditFob] = useState<BomFobEditor | null>(null);
   const [fobPeriods, setFobPeriods] = useState<CountryTemplateFobPeriod[]>([]);
+  const [periodColours, setPeriodColours] = useState<Array<{ colourCode: string; colourName: string; colourHex: string | null }>>([]);
   const [periodDeletePreview, setPeriodDeletePreview] = useState<(CountryTemplateFobPeriod & FobPeriodDeletionPreview) | null>(null);
   const [fobPeriodsLoading, setFobPeriodsLoading] = useState(false);
   const [fobPeriodSaving, setFobPeriodSaving] = useState(false);
@@ -4033,6 +4036,10 @@ export function BomAdminPanel({
   const [adjustCountryMessage, setAdjustCountryMessage] = useState("");
   const [adjustingCountry, setAdjustingCountry] = useState(false);
   const [bomExportCountry, setBomExportCountry] = useState("");
+  const [bomExportDate, setBomExportDate] = useState(() => {
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  });
   const [exportingBomAdmin, setExportingBomAdmin] = useState(false);
   const [bomExportStatus, setBomExportStatus] = useState("");
   const [copyDrafts, setCopyDrafts] = useState<Record<string, BomCopyDraft>>({});
@@ -4162,11 +4169,11 @@ export function BomAdminPanel({
     setExportingBomAdmin(true);
     setBomExportStatus("");
     try {
-      const blob = await api.exportBomAdmin(bomExportCountry || undefined);
+      const blob = await api.exportBomAdmin(bomExportCountry || undefined, bomExportDate);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `BOM_Admin_Material_Master_${bomExportCountry || "ALL"}.xlsx`;
+      anchor.download = `BOM_Admin_Material_Master_${bomExportCountry || "ALL"}_${bomExportDate}.xlsx`;
       anchor.click();
       URL.revokeObjectURL(url);
       setBomExportStatus(`Exported ${bomExportCountry || "all countries"}.`);
@@ -4862,13 +4869,17 @@ export function BomAdminPanel({
     }
     let cancelled = false;
     setFobPeriods([]);
+    setPeriodColours([]);
     setPeriodDeletePreview(null);
     setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
     setFobPeriodsLoading(true);
     setFobPeriodError("");
     void api.listBomTemplateFobPeriods({ bomTemplate, countryCode })
       .then((response) => {
-        if (!cancelled) setFobPeriods(response.periods);
+        if (!cancelled) {
+          setFobPeriods(response.periods);
+          setPeriodColours(response.colours);
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled) setFobPeriodError(getErrorMessage(error));
@@ -4885,6 +4896,7 @@ export function BomAdminPanel({
     if (!bomTemplate || !countryCode) return;
     const response = await api.listBomTemplateFobPeriods({ bomTemplate, countryCode });
     setFobPeriods(response.periods);
+    setPeriodColours(response.colours);
   };
 
   const handleFobPeriodSave = async () => {
@@ -4905,6 +4917,7 @@ export function BomAdminPanel({
         validFrom: fobPeriodDraft.validFrom,
         validTo: fobPeriodDraft.validTo || null,
         baseFobEur,
+        allowedColourCodes: fobPeriodDraft.allowedColourCodes,
         remark: fobPeriodDraft.remark.trim() || null,
       });
       setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
@@ -4949,6 +4962,7 @@ export function BomAdminPanel({
       validFrom: period.validFrom,
       validTo: period.validTo ?? "",
       baseFobEur: String(period.baseFobEur),
+      allowedColourCodes: period.allowedColourCodes,
       remark: period.remark ?? "",
     });
   };
@@ -7003,12 +7017,13 @@ export function BomAdminPanel({
                         </option>
                       ))}
                     </select>
-                    <button className="btn btn-sm btn-primary" type="button" disabled={exportingBomAdmin} onClick={() => void handleBomAdminExport()}>
+                    <button className="btn btn-sm btn-primary" type="button" disabled={exportingBomAdmin || !bomExportDate} onClick={() => void handleBomAdminExport()}>
                       {exportingBomAdmin ? "Exporting..." : "Export material workbook"}
                     </button>
+                    <label>Reference date / 参考日期<input type="date" value={bomExportDate} onChange={(event) => setBomExportDate(event.target.value)} required /></label>
                   </div>
                   <div style={{ marginTop: 7, fontSize: 9, lineHeight: 1.35, color: "#64748b" }}>
-                    One model per sheet. Blue rows mean a saved Dual/Special surcharge tier; tier is never inferred from the colour name or fill.
+                    Saved and month FOB are separate. Unpriced/unreleased colours are omitted; Historical reference prices are struck through. / 长期价与当月价分列；无价/未释放不导出，历史参考价划线。
                   </div>
                   {bomExportStatus ? (
                     <div style={{ marginTop: 7, fontSize: 11, color: bomExportStatus.startsWith("Exported") ? "#0f766e" : "#dc2626", fontWeight: 600 }}>
@@ -8562,7 +8577,7 @@ export function BomAdminPanel({
         </div>
       ) : null}
       {editFob ? createPortal((
-        <div className="bom-finance-modal-backdrop" onClick={() => { if (!fobPeriodSaving) setEditFob(null); }}>
+        <div className="bom-finance-modal-backdrop bom-fob-period-backdrop" onClick={() => { if (!fobPeriodSaving) setEditFob(null); }}>
           <div className="bom-fob-edit-modal-shell" role="dialog" aria-modal="true" aria-label="Country template FOB periods" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape" && !fobPeriodSaving) setEditFob(null); }}>
             <div className="bom-fob-edit-card">
               <div>
@@ -8623,7 +8638,7 @@ export function BomAdminPanel({
                         <div className="bom-fob-period-row">
                           <span>{period.validFrom} → {period.validTo || "Open"}</span>
                           <strong>{period.baseFobEur === 0 ? "Ordering paused (0 EUR)" : `${period.baseFobEur.toLocaleString()} EUR`}</strong>
-                          <span>{period.remark || "—"}</span>
+                          <span>{period.remark || "—"}<small style={{ display: "block" }}>{period.allowedColourCodes === null ? "All colours (unrestricted) / 全部颜色（不限）" : `Selected colours / 指定颜色 ${period.allowedColourCodes.length}/${periodColours.length}`}</small></span>
                           <div className="bom-fob-period-actions">
                             <button
                               type="button"
@@ -8644,6 +8659,7 @@ export function BomAdminPanel({
                   ) : !fobPeriodsLoading ? <p>No periods configured: positive undated default FOB remains available within template dates.</p> : null}
                   {fobPeriods.length > 0 ? <p>Outside listed periods: no price — ordering unavailable.</p> : null}
                   {periodDeletePreview ? <div role="status">
+                    {periodDeletePreview.lastPeriod ? <p>Removing the last period removes its colour restriction; the undated default becomes unrestricted. / 删除最后期间也删除其颜色限制，长期默认价恢复不限颜色。</p> : null}
                     <p>Remove {periodDeletePreview.validFrom} → {periodDeletePreview.validTo || "Open"}? {periodDeletePreview.lastPeriod ? periodDeletePreview.defaultBaseFobEur != null ? `The undated Single base ${periodDeletePreview.defaultBaseFobEur.toLocaleString()} EUR will apply within template dates${periodDeletePreview.defaultBaseFobEur === 0 ? "; ordering stays paused" : ""}.` : "No undated default exists: no price after deletion." : "These dates will become a no-price gap; the default will not apply."}</p>
                     <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving} onClick={() => void handleFobPeriodDelete(periodDeletePreview, periodDeletePreview.fingerprint)}>Confirm remove period</button>
                     <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setPeriodDeletePreview(null)}>Cancel removal</button>
@@ -8653,6 +8669,26 @@ export function BomAdminPanel({
                     <label><span>To</span><input type="date" disabled={fobPeriodSaving} value={fobPeriodDraft.validTo} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validTo: event.target.value }))} /></label>
                     <label><span>Single base EUR</span><input type="number" min="0" disabled={fobPeriodSaving} value={fobPeriodDraft.baseFobEur} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, baseFobEur: event.target.value }))} /></label>
                     <label><span>Remark</span><input type="text" disabled={fobPeriodSaving} value={fobPeriodDraft.remark} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, remark: event.target.value }))} /></label>
+                    <fieldset className="bom-fob-period-colours" style={{ gridColumn: "1 / -1" }} disabled={fobPeriodSaving || fobPeriodsLoading}>
+                      <legend>Released colours / 释放颜色</legend>
+                      <label><input type="checkbox" checked={fobPeriodDraft.allowedColourCodes === null} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, allowedColourCodes: event.target.checked ? null : periodColours.map((colour) => colour.colourCode) }))} />All colours, including future additions / 全部颜色（含以后新增）</label>
+                      <p>{fobPeriodDraft.allowedColourCodes === null ? "Unrestricted / 不限颜色" : `Selected / 指定 ${fobPeriodDraft.allowedColourCodes.length}/${periodColours.length}; new colours are not added automatically / 新颜色不自动加入`}</p>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {periodColours.map((colour) => (
+                          <label key={colour.colourCode} title={colour.colourName} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <input type="checkbox" aria-label={`Release ${colour.colourCode}`}
+                              checked={fobPeriodDraft.allowedColourCodes === null || fobPeriodDraft.allowedColourCodes.includes(colour.colourCode)}
+                              onChange={(event) => setFobPeriodDraft((current) => {
+                                const selected = current.allowedColourCodes ?? periodColours.map((option) => option.colourCode);
+                                return { ...current, allowedColourCodes: event.target.checked ? [...selected, colour.colourCode] : selected.filter((code) => code !== colour.colourCode) };
+                              })} />
+                            <span aria-hidden="true" style={{ width: 18, height: 18, border: "1px solid #cbd5e1", background: parseOrderGeniusColourSwatch(colour.colourHex).background }} />
+                            {colour.colourCode}
+                          </label>
+                        ))}
+                      </div>
+                      {fobPeriodDraft.allowedColourCodes?.length === 0 ? <p role="status">0 colours released: ordering is unavailable in this period. / 此期间不释放任何颜色，不能下单。</p> : null}
+                    </fieldset>
                     <div className="bom-fob-period-actions">
                       <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving || !fobPeriodDraft.validFrom || fobPeriodDraft.baseFobEur === ""} onClick={() => void handleFobPeriodSave()}>
                         {fobPeriodDraft.periodId ? "Save changes" : "Add period"}

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import openpyxl
+from datetime import date
+from functools import partial
 
 from app.services.bom_admin_export_service import (
     BOM_ADMIN_EXPORT_SCHEMA_VERSION,
     build_bom_admin_workbook,
 )
 
+build_bom_admin_workbook = partial(build_bom_admin_workbook, reference_date=date(2026, 10, 15))
 
 def _item(
     material_code: str,
@@ -31,6 +34,12 @@ def _item(
         "colourTier": tier,
         "interiorColorName": "Black-Black",
         "rowVersion": 4,
+        "lifecycleStatus": "active",
+        "exportPricesByCountry": {
+            country: {"savedFobEur": value + surcharge, "monthFobEur": value + surcharge,
+                      "status": "ready", "availableRanges": []}
+            for country, value in (("AT", base), ("CZ", base - 150))
+        },
         "fobByCountry": {
             "AT": {
                 "baseFobEur": base,
@@ -67,8 +76,9 @@ def test_bom_admin_export_matches_material_master_shape_and_preserves_tier() -> 
     assert ws["E1"].value == "BOM"
     assert ws["F1"].value == "Material Code"
     assert ws["J1"].value == "Colour Tier"
-    assert ws["K1"].value == "Austria FOB"
-    assert ws["L1"].value == "CZ FOB"
+    assert ws["L1"].value == "Austria FOB"
+    assert ws["N1"].value == "CZ FOB"
+    assert ws["L2"].value == "Saved FOB" and ws["M2"].value == "2026-10 FOB"
     assert ws["A1"].font.name == "Calibri"
     assert ws["A1"].font.sz == 14
     assert ws["A1"].font.bold is True
@@ -78,8 +88,8 @@ def test_bom_admin_export_matches_material_master_shape_and_preserves_tier() -> 
     exported = {
         ws.cell(row, 6).value: {
             "tier": ws.cell(row, 10).value,
-            "atFinal": ws.cell(row, 11).value,
-            "czFinal": ws.cell(row, 12).value,
+            "atFinal": ws.cell(row, 13).value,
+            "czFinal": ws.cell(row, 15).value,
             "fill": ws.cell(row, 7).fill.fgColor.rgb,
         }
         for row in range(3, 6)
@@ -130,13 +140,13 @@ def test_bom_admin_export_marks_price_conflict_for_review() -> None:
         ],
     }
 
-    workbook_bytes = build_bom_admin_workbook([row], ["AT"])
+    del row["exportPricesByCountry"]["AT"]
+    workbook_bytes = build_bom_admin_workbook([row], ["AT", "CZ"])
     wb = openpyxl.load_workbook(workbook_bytes, data_only=False)
 
-    assert wb["JAECOO8 SHS"]["K3"].value == "REVIEW"
+    assert wb["JAECOO8 SHS"]["L3"].value is None
     data = wb["_BOM_ADMIN_DATA"]
-    assert data["R2"].value == "conflict"
-    assert '"paymentTermCode": "LC"' in data["S2"].value
+    assert data["N2"].value == "CZ" and data.max_row == 2
 
 
 def test_bom_admin_export_can_limit_prices_to_one_country() -> None:
@@ -148,9 +158,9 @@ def test_bom_admin_export_can_limit_prices_to_one_country() -> None:
 
     wb = openpyxl.load_workbook(workbook_bytes, data_only=False)
     ws = wb["JAECOO8 SHS"]
-    assert ws.max_column == 11
-    assert ws["K1"].value == "CZ FOB"
-    assert ws["K3"].value == 28150
+    assert ws.max_column == 13
+    assert ws["L1"].value == "CZ FOB"
+    assert ws["M3"].value == 28150
     data = wb["_BOM_ADMIN_DATA"]
     assert data.max_row == 2
     assert data["N2"].value == "CZ"
@@ -175,7 +185,7 @@ def test_bom_admin_export_never_infers_missing_tier_from_name_or_swatch() -> Non
     ws = wb["JAECOO8 SHS"]
 
     assert ws["J3"].value == "Missing tier"
-    assert ws["K3"].value == 28300
+    assert ws["M3"].value == 28300
     data = wb["_BOM_ADMIN_DATA"]
     assert data["L2"].value is None
     assert data["O2"].value == 28000

@@ -5549,10 +5549,10 @@ export const api = {
     }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
   },
 
-  exportBomAdmin: (countryCode?: string) =>
+  exportBomAdmin: (countryCode: string | undefined, referenceDate: string) =>
     requestBlob("/order-genius/bom-admin/export", {
       method: "POST",
-      body: JSON.stringify({ countryCode: countryCode || null }),
+      body: JSON.stringify({ countryCode: countryCode || null, referenceDate }),
       headers: { "Content-Type": "application/json" },
     }),
 
@@ -5581,7 +5581,8 @@ export const api = {
       bomTemplate: params.bomTemplate,
       countryCode: params.countryCode,
     });
-    return request<{ periods: CountryTemplateFobPeriod[]; usesPeriods: boolean }>(
+    return request<{ periods: CountryTemplateFobPeriod[]; usesPeriods: boolean;
+      colours: Array<{ colourCode: string; colourName: string; colourHex: string | null }> }>(
       `/order-genius/bom-templates/fob-periods?${qs.toString()}`,
     );
   },
@@ -5593,6 +5594,7 @@ export const api = {
     validFrom: string;
     validTo?: string | null;
     baseFobEur: number;
+    allowedColourCodes: string[] | null;
     remark?: string | null;
     rowVersion?: number;
   }) => request<CountryTemplateFobPeriod>(
