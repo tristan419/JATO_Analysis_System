@@ -343,9 +343,42 @@ describe("BOM Admin A load continuity", () => {
     expect(save).toHaveBeenLastCalledWith("T-Product sample", expect.objectContaining({ rowVersions: { "T-Product sample": 1 } }));
   });
 
+  it.each([null, [], ["W3"], ["W3", "CL"]] as Array<string[] | null>)("saves and reloads exact colour release scope %j", async (codes) => {
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Release sample"));
+    const colours = [{ colourCode: "W3", colourName: "Water blue", colourHex: null },
+      { colourCode: "CL", colourName: "Black", colourHex: "#111111" }];
+    const period = { periodId: "p1", countryCode: "SE", bomTemplate: "T-Release sample-**",
+      validFrom: "2026-10-01", validTo: "2026-10-31", baseFobEur: 14000,
+      allowedColourCodes: codes, remark: null, rowVersion: 1 };
+    vi.spyOn(api, "listBomTemplateFobPeriods")
+      .mockResolvedValueOnce({ periods: [], usesPeriods: false, colours })
+      .mockResolvedValue({ periods: [period], usesPeriods: true, colours });
+    const save = vi.spyOn(api, "saveBomTemplateFobPeriod").mockResolvedValue(period);
+    await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Release sample/ })); });
+    await act(async () => { fireEvent.click(screen.getByText("13,600")); });
+    const dialog = screen.getByRole("dialog", { name: "Country template FOB periods" });
+    fireEvent.change(within(dialog).getByLabelText("From"), { target: { value: "2026-10-01" } });
+    fireEvent.change(within(dialog).getByLabelText("To"), { target: { value: "2026-10-31" } });
+    fireEvent.change(within(dialog).getByLabelText("Single base EUR"), { target: { value: "14000" } });
+    if (codes !== null) {
+      fireEvent.click(within(dialog).getByLabelText(/All colours, including future additions/));
+      for (const code of ["W3", "CL"]) {
+        if (!codes.includes(code)) fireEvent.click(within(dialog).getByLabelText(`Release ${code}`));
+      }
+    }
+    await act(async () => { fireEvent.click(within(dialog).getByText("Add period")); });
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ allowedColourCodes: codes }));
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: /^Edit$/ })); });
+    expect((within(dialog).getByLabelText(/All colours, including future additions/) as HTMLInputElement).checked).toBe(codes === null);
+    for (const code of ["W3", "CL"]) {
+      expect((within(dialog).getByLabelText(`Release ${code}`) as HTMLInputElement).checked).toBe(codes === null || codes.includes(code));
+    }
+  });
+
   it("opens country periods outside the BOM card and keeps the draft after a save failure", async () => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Period sample"));
-    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods: [], usesPeriods: false });
+    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods: [], usesPeriods: false, colours: [] });
     const save = vi.spyOn(api, "saveBomTemplateFobPeriod").mockRejectedValue(new Error("Country price conflict"));
     await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Period sample/ })); });
@@ -368,11 +401,11 @@ describe("BOM Admin A load continuity", () => {
   it("shows latest-start Single base with Pn without changing the default input", async () => {
     const response = bomResponse("Period summary");
     const periods = [
-      { periodId: "past", countryCode: "SE", bomTemplate: "T-Period summary-**", validFrom: "2026-07-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1 },
-      { periodId: "future", countryCode: "SE", bomTemplate: "T-Period summary-**", validFrom: "2027-01-01", validTo: null, baseFobEur: 15000, remark: null, rowVersion: 1 },
+      { periodId: "past", countryCode: "SE", bomTemplate: "T-Period summary-**", validFrom: "2026-07-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1, allowedColourCodes: null },
+      { periodId: "future", countryCode: "SE", bomTemplate: "T-Period summary-**", validFrom: "2027-01-01", validTo: null, baseFobEur: 15000, remark: null, rowVersion: 1, allowedColourCodes: null },
     ];
     vi.spyOn(api, "getBomAdmin").mockResolvedValue({ ...response, items: response.items.map((item) => ({ ...item, fobPeriodsByCountry: { SE: periods } })) });
-    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods, usesPeriods: true });
+    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods, usesPeriods: true, colours: [] });
     await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Period summary/ })); });
     expect(screen.getByText("P2")).toBeTruthy();
@@ -387,8 +420,8 @@ describe("BOM Admin A load continuity", () => {
   it("confirms the server-priced default once before deleting the last period", async () => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Restore sample"));
     vi.spyOn(api, "listBomTemplateFobPeriods")
-      .mockResolvedValueOnce({ periods: [{ periodId: "p1", countryCode: "SE", bomTemplate: "T-Restore sample-**", validFrom: "2026-08-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1 }], usesPeriods: true })
-      .mockResolvedValue({ periods: [], usesPeriods: false });
+      .mockResolvedValueOnce({ periods: [{ periodId: "p1", countryCode: "SE", bomTemplate: "T-Restore sample-**", validFrom: "2026-08-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1, allowedColourCodes: [] }], usesPeriods: true, colours: [] })
+      .mockResolvedValue({ periods: [], usesPeriods: false, colours: [] });
     const impact = { periodId: "p1", fingerprint: "fp", lastPeriod: true, defaultBaseFobEur: 13000 };
     const remove = vi.spyOn(api, "deleteBomTemplateFobPeriod")
       .mockResolvedValueOnce({ ...impact, deleted: false })

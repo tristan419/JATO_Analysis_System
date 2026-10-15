@@ -15966,6 +15966,9 @@ table.material-finance-table td:nth-child(n+5) {
   background: #fff;
 }
 
+.bom-fob-period-colours label { display: inline-flex; align-items: center; gap: 4px; }
+.bom-fob-period-colours input[type="checkbox"] { width: 16px; height: 16px; padding: 0; flex-shrink: 0; }
+
 .order-genius-date-filter {
   display: grid;
   gap: 3px;

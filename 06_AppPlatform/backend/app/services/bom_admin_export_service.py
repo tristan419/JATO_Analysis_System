@@ -14,18 +14,19 @@ import json
 import re
 import zipfile
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Iterable
 from xml.etree import ElementTree
 
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.comments import Comment
 from openpyxl.utils import get_column_letter
 
 from app.infra.order_genius_repository import COUNTRY_NAMES_BY_CODE
 
 
-BOM_ADMIN_EXPORT_SCHEMA_VERSION = "bom-admin-material-master-v1"
+BOM_ADMIN_EXPORT_SCHEMA_VERSION = "bom-admin-material-master-v2"
 
 _HEADER_FONT = Font(name="Calibri", size=14, bold=True, color="FF000000")
 _SURCHARGE_FILL = PatternFill("solid", fgColor="FFE1EAFF")
@@ -50,6 +51,7 @@ _FIXED_HEADERS = (
     "Colour Code",
     "Interior Color",
     "Colour Tier",
+    "Lifecycle / Final order date",
 )
 
 _COLOUR_TIERS = frozenset({"single", "dual", "special"})
@@ -155,9 +157,11 @@ def _merge_group_columns(ws, start_row: int, end_row: int) -> None:
         )
 
 
-def _write_model_sheet(ws, items: list[dict], countries: list[str]) -> None:
+def _write_model_sheet(ws, items: list[dict], countries: list[str], reference_date: date) -> None:
     fixed_count = len(_FIXED_HEADERS)
     for column, label in enumerate(_FIXED_HEADERS, start=1):
+        if column == fixed_count:
+            label += f"\nAs of {reference_date.isoformat()}"
         cell = ws.cell(1, column, label)
         ws.merge_cells(start_row=1, start_column=column, end_row=2, end_column=column)
         cell.font = _HEADER_FONT
@@ -165,12 +169,17 @@ def _write_model_sheet(ws, items: list[dict], countries: list[str]) -> None:
         cell.border = _BORDER
 
     for country_index, country_code in enumerate(countries):
-        start_col = fixed_count + country_index + 1
+        start_col = fixed_count + country_index * 2 + 1
         title = ws.cell(1, start_col, _country_header(country_code))
-        ws.merge_cells(start_row=1, start_column=start_col, end_row=2, end_column=start_col)
+        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=start_col + 1)
         title.font = _HEADER_FONT
         title.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         title.border = _BORDER
+        for offset, label in enumerate(("Saved FOB", f"{reference_date:%Y-%m} FOB")):
+            cell = ws.cell(2, start_col + offset, label)
+            cell.font = Font(name="Calibri", size=11, bold=True)
+            cell.border = _BORDER
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     grouped: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
     for item in sorted(items, key=_group_sort_key):
@@ -202,6 +211,8 @@ def _write_model_sheet(ws, items: list[dict], countries: list[str]) -> None:
                 colour_code,
                 interior,
                 tier.title() if tier else "Missing tier",
+                (f"Historical / Not orderable\n{item.get('effectiveTo') or 'Final date not maintained'}"
+                 if item["lifecycleStatus"] == "historical" else item["lifecycleStatus"]),
             )
             for column, value in enumerate(values, start=1):
                 cell = ws.cell(row, column, value)
@@ -221,19 +232,23 @@ def _write_model_sheet(ws, items: list[dict], countries: list[str]) -> None:
                     cell.font = Font(name="Calibri", size=11, bold=True, color="FF9C0006")
 
             for country_index, country_code in enumerate(countries):
-                column = fixed_count + country_index + 1
-                _, _, final, price_status, _ = _country_price_parts(item, country_code)
-                value = "REVIEW" if price_status == "conflict" else final
-                cell = ws.cell(row, column, value)
-                cell.font = Font(name="Calibri", size=11)
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-                cell.border = _BORDER
-                if isinstance(value, (int, float)):
+                price = item["exportPricesByCountry"].get(country_code, {})
+                for offset, key in enumerate(("savedFobEur", "monthFobEur")):
+                    column = fixed_count + country_index * 2 + offset + 1
+                    cell = ws.cell(row, column, price.get(key))
+                    cell.font = Font(name="Calibri", size=11, strike=price.get("status") == "historical")
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                    cell.border = _BORDER
                     cell.number_format = _PRICE_FORMAT
-                if price_status == "conflict":
-                    cell.fill = _CONFLICT_FILL
-                elif tier in {"dual", "special"}:
-                    cell.fill = _SURCHARGE_FILL
+                    cell.comment = Comment(
+                        f"Reference date: {reference_date.isoformat()}; {price.get('status', 'unavailable')}. "
+                        + ("Saved reference; not the period offer." if offset == 0 else
+                           "Available dates: " + json.dumps(price.get("availableRanges", []))),
+                        "BOM Admin",
+                    )
+                    if tier in {"dual", "special"}:
+                        cell.fill = _SURCHARGE_FILL
+            ws.row_dimensions[row].height = 50 if item["lifecycleStatus"] == "historical" else 36
             row += 1
 
         _merge_group_columns(ws, group_start, row - 1)
@@ -244,7 +259,7 @@ def _write_model_sheet(ws, items: list[dict], countries: list[str]) -> None:
     if model_end >= model_start:
         while model_end > model_start and all(
             ws.cell(model_end, column).value is None
-            for column in range(1, fixed_count + len(countries) + 1)
+            for column in range(1, fixed_count + len(countries) * 2 + 1)
         ):
             model_end -= 1
         for column in (2, 3):
@@ -260,14 +275,14 @@ def _write_model_sheet(ws, items: list[dict], countries: list[str]) -> None:
                 wrap_text=True,
             )
 
-    widths = (8, 16, 22, 20, 30, 24, 42, 12, 20, 14)
+    widths = (8, 20, 22, 20, 30, 24, 42, 12, 20, 20, 30)
     for column, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(column)].width = width
-    for column in range(fixed_count + 1, fixed_count + len(countries) + 1):
-        ws.column_dimensions[get_column_letter(column)].width = 14
+    for column in range(fixed_count + 1, fixed_count + len(countries) * 2 + 1):
+        ws.column_dimensions[get_column_letter(column)].width = 18
 
     ws.row_dimensions[1].height = 27
-    ws.row_dimensions[2].height = 10
+    ws.row_dimensions[2].height = 26
     ws.freeze_panes = f"{get_column_letter(fixed_count + 1)}3"
     ws.sheet_view.showGridLines = False
     ws.page_setup.orientation = "landscape"
@@ -275,6 +290,7 @@ def _write_model_sheet(ws, items: list[dict], countries: list[str]) -> None:
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.print_title_rows = "1:2"
+    ws.oddHeader.center.text = f"BOM material reference — {reference_date.isoformat()}"
     ws.sheet_properties.outlinePr.summaryBelow = True
 
 
@@ -314,6 +330,10 @@ def _write_data_sheet(wb, items: list[dict], countries: list[str]) -> None:
         "Price Status",
         "Conflict Detail",
         "Fingerprint",
+        "Month FOB",
+        "Reference Date",
+        "Available Dates",
+        "Export Status",
     )
     for column, header in enumerate(headers, start=1):
         cell = ws.cell(1, column, header)
@@ -327,6 +347,9 @@ def _write_data_sheet(wb, items: list[dict], countries: list[str]) -> None:
     )):
         tier = _explicit_colour_tier(item)
         for country_code in countries:
+            price = item["exportPricesByCountry"].get(country_code)
+            if price is None:
+                continue
             fob = (item.get("fobByCountry") or {}).get(country_code) or {}
             base, surcharge, final, status, conflict_detail = _country_price_parts(
                 item,
@@ -350,9 +373,13 @@ def _write_data_sheet(wb, items: list[dict], countries: list[str]) -> None:
                 base,
                 surcharge,
                 final,
-                status,
+                "historical" if price["status"] == "historical" else status,
                 conflict_detail,
                 _price_fingerprint(item, country_code, fob),
+                price["monthFobEur"],
+                item["exportReferenceDate"],
+                json.dumps(price["availableRanges"]),
+                price["status"],
             )
             for column, value in enumerate(values, start=1):
                 cell = ws.cell(row, column, value)
@@ -363,11 +390,11 @@ def _write_data_sheet(wb, items: list[dict], countries: list[str]) -> None:
                     cell.number_format = _PRICE_FORMAT
             row += 1
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:T{max(row - 1, 1)}"
+    ws.auto_filter.ref = f"A1:X{max(row - 1, 1)}"
     ws.sheet_state = "hidden"
 
 
-def _write_schema_sheet(wb, countries: list[str], item_count: int) -> None:
+def _write_schema_sheet(wb, countries: list[str], item_count: int, reference_date: date) -> None:
     ws = wb.create_sheet("_BOM_ADMIN_SCHEMA")
     rows = (
         ("schemaVersion", BOM_ADMIN_EXPORT_SCHEMA_VERSION),
@@ -377,6 +404,9 @@ def _write_schema_sheet(wb, countries: list[str], item_count: int) -> None:
         ("tierAuthority", "BOM Admin saved Colour Tier; never inferred from name/code/swatch/fill"),
         ("countryScope", ",".join(countries)),
         ("itemCount", item_count),
+        ("referenceDate", reference_date.isoformat()),
+        ("referenceMonth", reference_date.strftime("%Y-%m")),
+        ("historicalPrices", "Saved/month prices are struck references, never orderable"),
     )
     for row_index, (key, value) in enumerate(rows, start=1):
         ws.cell(row_index, 1, key)
@@ -437,27 +467,30 @@ def build_bom_admin_workbook(
     countries: Iterable[str],
     *,
     country_code: str | None = None,
+    reference_date: date,
 ) -> io.BytesIO:
     """Build the BOM Admin material workbook for all countries or one country."""
     selected_countries = _normalise_countries(countries, country_code)
     if not selected_countries:
         raise ValueError("No active BOM FOB countries are available for export")
 
+    items = [{**item, "exportReferenceDate": reference_date.isoformat()} for item in items
+             if any(country in item["exportPricesByCountry"] for country in selected_countries)]
     model_groups: dict[str, list[dict]] = defaultdict(list)
     for item in items:
         model_name = _clean(item.get("modelName")) or "UNNAMED MODEL"
         model_groups[model_name].append(item)
     if not model_groups:
-        raise ValueError("No BOM Admin material rows are available for export")
+        raise ValueError("No priced, released materials or saved Historical reference prices / 当前范围无可导出的有效报价或历史参考价")
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     used_names: set[str] = set()
     for model_name in sorted(model_groups, key=str.casefold):
         ws = wb.create_sheet(_safe_sheet_name(model_name, used_names))
-        _write_model_sheet(ws, model_groups[model_name], selected_countries)
+        _write_model_sheet(ws, model_groups[model_name], selected_countries, reference_date)
     _write_data_sheet(wb, items, selected_countries)
-    _write_schema_sheet(wb, selected_countries, len(items))
+    _write_schema_sheet(wb, selected_countries, len(items), reference_date)
 
     output = io.BytesIO()
     wb.save(output)

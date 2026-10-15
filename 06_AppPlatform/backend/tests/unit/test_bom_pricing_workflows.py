@@ -16,6 +16,9 @@ from app.services import order_genius_vehicle_service as vehicle_service
 from app.services import material_replacement_service as replacements
 from fastapi import HTTPException
 from app.api.routes import order_genius as routes
+from app.services.bom_admin_export_service import build_bom_admin_workbook
+from app.services.order_quantity_parser import OrderQuantityImport, ImportedRow, ImportedQuantityCell
+import openpyxl
 
 
 @compiles(JSONB, "sqlite")
@@ -76,6 +79,154 @@ def fob(db, code, value, base=None, surcharge=None, term="TT", country="CH", sou
     db.add(row)
     db.flush()
     return row
+
+
+def release_period(db, codes, start=date(2026, 10, 1), end=date(2026, 10, 31), country="CH", period=None):
+    row = repo.save_country_template_fob_period(
+        db, country_code=country, bom_template="T**001", valid_from=start, valid_to=end,
+        base_fob_eur=1000, remark=None, changed_by="test", allowed_colour_codes=codes,
+        period_id=period.country_template_fob_period_id if period else None,
+        row_version=period.row_version if period else None,
+    )
+    db.commit()
+    return row
+
+
+@pytest.mark.parametrize("codes", [None, [], ["S"], ["S", "D"]])
+def test_release_scope_persists_null_empty_and_explicit_lists(db, codes):
+    single, dual = sku(db, "S", "single"), sku(db, "D", "dual")
+    period = release_period(db, codes)
+    period_id = period.country_template_fob_period_id
+    db.expire_all()
+    reloaded = db.get(models.CountryTemplateFobPeriod, period_id)
+    expected = sorted(codes) if codes is not None else None
+    assert reloaded.allowed_colour_codes == expected
+    assert repo.country_template_fob_period_payload(reloaded)["allowedColourCodes"] == expected
+    new = sku(db, "NEW", "single")
+    assert repo.is_colour_released(reloaded, new) is (codes is None)
+    assert repo.is_colour_released(reloaded, single) is (codes is None or "S" in codes)
+    assert repo.is_colour_released(reloaded, dual) is (codes is None or "D" in codes)
+
+
+@pytest.mark.parametrize("codes", ["S", [""], [12], ["OTHER-TEMPLATE"]])
+def test_release_scope_rejects_bad_or_foreign_colour_codes(db, codes):
+    sku(db, "S", "single")
+    with pytest.raises(ValueError):
+        release_period(db, codes)
+    assert not db.scalars(select(models.CountryTemplateFobPeriod)).all()
+
+
+def test_release_month_window_pi_date_and_other_country_share_same_rules(db):
+    single = sku(db, "S", "single")
+    fob(db, "S", 1000, base=1000)
+    fob(db, "S", 1000, base=1000, country="SE")
+    release_period(db, [], end=date(2026, 10, 14))
+    release_period(db, ["S"], start=date(2026, 10, 15))
+    quote = service.resolve_month_effective_fob(
+        db, "CH", single, 2026, 10, default_fob=None,
+        periods=repo.list_country_template_fob_periods(db, "CH", "T**001"), uses_periods=True,
+        colour_pricing=repo.resolve_colour_surcharge_for_sku(db, single, "single"),
+    )
+    assert quote["isEditable"] and quote["requiresOrderDate"]
+    assert quote["availableRanges"] == [{"from": "2026-10-15", "to": "2026-10-31"}]
+    assert service.resolve_date_effective_fob(db, "CH", single, date(2026, 10, 14))[0] is None
+    assert service.resolve_date_effective_fob(db, "CH", single, date(2026, 10, 15))[0] == 1000
+    assert vehicle_service._line_payload_from_material(db, "SE", "S", {}, pricing_date=date(2026, 10, 14))["fobEur"] == 1000
+    with pytest.raises(HTTPException, match="not released"):
+        vehicle_service._line_payload_from_material(db, "CH", "S", {}, pricing_date=date(2026, 10, 14))
+    assert vehicle_service._line_payload_from_material(db, "CH", "S", {}, pricing_date=date(2026, 10, 15))["fobEur"] == 1000
+    with pytest.raises(HTTPException):
+        vehicle_service._resolve_pi_pricing_date(db, "CH", "S", 2026, 10, None)
+
+
+def test_import_preview_and_apply_recheck_release_without_changing_existing_plan(db):
+    sku(db, "S", "single")
+    fob(db, "S", 1000, base=1000)
+    period = release_period(db, ["S"])
+    parsed = OrderQuantityImport("CH", 2026, [
+        ImportedRow("S", 99999, "Model", "Version", "Colour", [ImportedQuantityCell("S", 10, 4)]),
+    ])
+    preview = service.preview_order_quantity_import(db, parsed)
+    assert not preview["matchedRows"][0]["cells"][0]["error"]
+    assert service.apply_order_quantity_import(db, parsed, "test")["appliedCells"] == 1
+    cell = repo.get_quantity_cell(db, "CH", 2026, 10, "S")
+    assert cell.quantity == 4 and float(cell.fob_eur) == 1000
+    parsed.rows[0].cells[0].quantity = 5
+    assert not service.preview_order_quantity_import(db, parsed)["matchedRows"][0]["cells"][0]["error"]
+    release_period(db, [], period=period)
+    preview = service.preview_order_quantity_import(db, parsed)
+    assert "未释放" in preview["matchedRows"][0]["cells"][0]["error"]
+    rejected = service.apply_order_quantity_import(db, parsed, "test")
+    assert rejected["appliedCells"] == 0 and rejected["skippedCells"] == 1
+    assert cell.quantity == 4 and float(cell.fob_eur) == 1000
+    with pytest.raises(ValueError, match="未释放"):
+        service.update_quantity_cell(db, "CH", 2026, 10, "S", 5, "test", cell.row_version)
+
+
+def test_export_filters_unpriced_unreleased_stopped_and_strikes_both_historical_prices(db):
+    for code in ("S", "H", "NO-PRICE", "BLOCKED", "STOPPED"):
+        sku(db, code, "single", template="T**001" if code in ("S", "BLOCKED") else f"{code}**001")
+    for code in ("S", "H", "BLOCKED", "STOPPED"):
+        fob(db, code, 1200, base=1200)
+    release_period(db, ["S"])
+    repo.save_country_template_fob_period(
+        db, country_code="CH", bom_template="H**001", valid_from=date(2026, 10, 1),
+        valid_to=date(2026, 10, 10), base_fob_eur=1500, remark=None, changed_by="test",
+    )
+    historical = repo.get_sku_by_material_code(db, "H")
+    historical.effective_from_date, historical.effective_to_date = date(2026, 1, 1), date(2026, 10, 10)
+    repo.save_country_template_fob_period(
+        db, country_code="CH", bom_template="STOPPED**001", valid_from=date(2026, 10, 1),
+        valid_to=None, base_fob_eur=0, remark=None, changed_by="test",
+    )
+    db.commit()
+    items, countries = repo.list_bom_with_fob(db)
+    projected = service.prepare_bom_export_rows(db, items, countries, date(2026, 10, 15))
+    wb = openpyxl.load_workbook(build_bom_admin_workbook(projected, countries, country_code="CH", reference_date=date(2026, 10, 15)))
+    ws = wb["JAECOO7 SHS"]
+    rows = {ws.cell(r, 6).value: r for r in range(3, ws.max_row + 1) if ws.cell(r, 6).value}
+    assert set(rows) == {"S", "H"}
+    assert ws.cell(rows["S"], 12).value == 1200 and ws.cell(rows["S"], 13).value == 1000
+    assert not ws.cell(rows["S"], 12).font.strike
+    assert ws.cell(rows["H"], 12).value == 1200 and ws.cell(rows["H"], 13).value == 1500
+    assert ws.cell(rows["H"], 12).font.strike and ws.cell(rows["H"], 13).font.strike
+    assert "2026-10-10" in ws.cell(rows["H"], 11).value
+    assert "2026-10-15" in ws["K1"].value
+    assert all(r[17] == "historical" for r in wb["_BOM_ADMIN_DATA"].iter_rows(min_row=2, values_only=True) if r[6] == "H")
+    assert wb["_BOM_ADMIN_SCHEMA"]["B8"].value == "2026-10-15"
+
+
+def test_export_all_countries_keeps_one_country_without_exposing_unreleased_old_price(db):
+    sku(db, "S", "single")
+    fob(db, "S", 1000, base=1000, country="CH")
+    fob(db, "S", 1200, base=1200, country="SE")
+    release_period(db, [])
+    items, countries = repo.list_bom_with_fob(db)
+    projected = service.prepare_bom_export_rows(db, items, countries, date(2026, 10, 15))
+    wb = openpyxl.load_workbook(build_bom_admin_workbook(projected, countries, reference_date=date(2026, 10, 15)))
+    ws = wb["JAECOO7 SHS"]
+    assert ws["L3"].value is None and ws["M3"].value is None
+    assert ws["N3"].value == 1200 and ws["O3"].value == 1200
+    assert wb["_BOM_ADMIN_DATA"].max_row == 2
+    assert wb["_BOM_ADMIN_DATA"]["N2"].value == "SE"
+
+
+@pytest.mark.parametrize("codes,base", [([], 1000), (None, 0)])
+def test_historical_reference_never_bypasses_month_colour_release_or_stop(db, codes, base):
+    historical = sku(db, "H", "single")
+    fob(db, "H", 1200, base=1200)
+    historical.effective_to_date = date(2026, 10, 10)
+    repo.save_country_template_fob_period(
+        db, country_code="CH", bom_template="T**001", valid_from=date(2026, 10, 1),
+        valid_to=date(2026, 10, 10), base_fob_eur=base, allowed_colour_codes=codes,
+        remark=None, changed_by="test",
+    )
+    db.commit()
+    items, countries = repo.list_bom_with_fob(db)
+    rows = service.prepare_bom_export_rows(db, items, countries, date(2026, 10, 15))
+    assert rows[0]["exportPricesByCountry"] == {}
+    with pytest.raises(ValueError, match="无可导出"):
+        build_bom_admin_workbook(rows, countries, reference_date=date(2026, 10, 15))
 
 
 def test_explicit_base_links_accept_changed_model_and_codes_without_changing_business_data(db):

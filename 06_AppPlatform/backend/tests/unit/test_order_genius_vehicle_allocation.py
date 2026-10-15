@@ -450,6 +450,7 @@ def test_line_payload_uses_order_date_period_and_saved_colour_tier(monkeypatch) 
         valid_from=date(2026, 7, 1),
         valid_to=date(2026, 7, 31),
         base_fob_eur=19000,
+        allowed_colour_codes=None,
     )
     monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
     monkeypatch.setattr(order_repo, "get_fob_for_country_sku", lambda *_args: SimpleNamespace(final_fob_eur=19000))
@@ -612,8 +613,8 @@ def test_historical_override_survives_country_allocation_normalisation() -> None
 def test_pi_requires_order_date_when_one_month_crosses_fob_periods(monkeypatch) -> None:
     sku = SimpleNamespace(bom_template="T7151R**MH0001", colour_tier="single", lifecycle_status="active")
     periods = [
-        SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 14), base_fob_eur=1000),
-        SimpleNamespace(valid_from=date(2026, 7, 20), valid_to=None, base_fob_eur=1000),
+        SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 14), base_fob_eur=1000, allowed_colour_codes=None),
+        SimpleNamespace(valid_from=date(2026, 7, 20), valid_to=None, base_fob_eur=1000, allowed_colour_codes=None),
     ]
     monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
     monkeypatch.setattr(order_repo, "list_country_template_fob_periods", lambda *_args: periods)
@@ -627,7 +628,7 @@ def test_pi_requires_order_date_when_one_month_crosses_fob_periods(monkeypatch) 
 
 def test_pi_can_use_single_period_covering_whole_month_without_order_date(monkeypatch) -> None:
     sku = SimpleNamespace(bom_template="T7151R**MH0001", colour_tier="single", lifecycle_status="active")
-    periods = [SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 31), base_fob_eur=1000)]
+    periods = [SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 31), base_fob_eur=1000, allowed_colour_codes=None)]
     monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
     monkeypatch.setattr(order_repo, "list_country_template_fob_periods", lambda *_args: periods)
 

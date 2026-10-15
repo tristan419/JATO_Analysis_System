@@ -67,7 +67,24 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20261012_0056"]
+    assert sorted(revisions - parent_revisions) == ["20261015_0057"]
+
+
+def test_period_colour_release_revision_only_adds_nullable_scope() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "period_colour_release_0057", VERSIONS_DIR / "20261015_0057_period_colour_release.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = StringIO()
+    module.op = Operations(MigrationContext.configure(
+        dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output},
+    ))
+    module.upgrade()
+    sql = output.getvalue()
+    assert "ALTER TABLE ordering.country_template_fob_period ADD COLUMN allowed_colour_codes JSONB" in sql
+    assert all(word not in sql.upper() for word in ("UPDATE", "DELETE", "TRUNCATE", "NOT NULL", "DEFAULT", "CREATE TABLE"))
 
 
 def test_optional_colour_hex_revision_only_changes_existing_nullability() -> None:

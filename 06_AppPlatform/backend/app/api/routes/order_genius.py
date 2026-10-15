@@ -33,6 +33,7 @@ from app.services import material_master_upload_service as upload_svc
 from app.services.backup_utils import backup_ordering_schema
 from app.services.bom_admin_export_service import build_bom_admin_workbook
 from app.services.order_genius_service import (
+    prepare_bom_export_rows,
     apply_order_quantity_import,
     build_matrix,
     build_matrix_batch,
@@ -1161,7 +1162,14 @@ def get_bom_template_fob_periods(
         raise HTTPException(status_code=400, detail="countryCode and bomTemplate are required")
     validate_country_access(session, user.name, user.role, country)
     rows = repo.list_country_template_fob_periods(session, country, template)
+    baseline = repo.get_latest_baseline(session)
+    members = repo.list_bom_template_skus(session, template, baseline.baseline_version_id) if baseline else []
+    colours = {clean_text(sku.exterior_color_code).upper(): {
+        "colourCode": clean_text(sku.exterior_color_code).upper(),
+        "colourName": sku.exterior_color_name or "", "colourHex": sku.colour_hex,
+    } for sku in members if clean_text(sku.exterior_color_code)}
     return {"periods": [_country_template_fob_period_payload(row) for row in rows],
+            "colours": [colours[code] for code in sorted(colours)],
             "usesPeriods": repo.has_country_template_fob_periods(session, country, template)}
 
 
@@ -1225,6 +1233,7 @@ def put_bom_template_fob_period(
             changed_by=user.name,
             period_id=period_id,
             row_version=int(body.get("rowVersion")) if body.get("rowVersion") is not None else None,
+            allowed_colour_codes=body.get("allowedColourCodes", existing.allowed_colour_codes if period_id else None),
         )
         session.commit()
         session.refresh(row)
@@ -2241,6 +2250,7 @@ def export_bom_admin(
 ) -> StreamingResponse:
     """Export the managed BOM/material master as a human-readable XLSX."""
     country_code = clean_text(body.get("countryCode")).upper() or None
+    reference_date = _parse_iso_date(body.get("referenceDate"), "referenceDate") or date.today()
     if country_code is not None and len(country_code) != 2:
         raise HTTPException(status_code=400, detail="countryCode must be a two-letter code")
 
@@ -2248,11 +2258,13 @@ def export_bom_admin(
         validate_country_access(session, user.name, user.role, country_code)
     items, countries = repo.list_bom_with_fob(session, limit=5000, allowed_brands=ordering_brands(session, user),
                                              allowed_countries=ordering_countries(session, user))
+    items = prepare_bom_export_rows(session, items, [country_code] if country_code else countries, reference_date)
     try:
         workbook = build_bom_admin_workbook(
             items,
             countries,
             country_code=country_code,
+            reference_date=reference_date,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
