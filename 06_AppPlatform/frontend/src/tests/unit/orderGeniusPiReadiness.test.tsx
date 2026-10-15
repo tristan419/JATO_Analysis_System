@@ -88,6 +88,7 @@ async function openOctober() {
 
 describe("quantity save → PI readiness", () => {
   it("keeps PI templates reachable with no matrix rows, quantities or saved PI", async () => {
+    const reactErrors = vi.spyOn(console, "error").mockImplementation(() => {});
     const response = await api.getOrderGeniusMatrixBatch({ countries: ["CH"], year: 2026 });
     vi.mocked(api.getOrderGeniusMatrixBatch).mockResolvedValue({ ...response,
       matrices: { CH: { ...response.matrices.CH, rows: [], totalRows: 0 } } });
@@ -99,6 +100,7 @@ describe("quantity save → PI readiness", () => {
     expect(await screen.findByLabelText("Template country")).toBeTruthy();
     expect(screen.getByRole("checkbox", { name: "OMODA" })).toBeTruthy();
     expect(screen.getByRole("checkbox", { name: "CHERY" })).toBeTruthy();
+    expect(reactErrors.mock.calls.filter((args) => String(args[0]).includes("same key"))).toEqual([]);
   });
 
   it("keeps a no-brand request actionable without a missing-FOB overlay or BOM entry", async () => {
