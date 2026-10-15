@@ -1471,8 +1471,6 @@ def prepare_bom_export_rows(session: Session, items: list[dict], countries: list
         lifecycle = repo.resolve_effective_lifecycle_status(sku, reference_date)
         prices = {}
         for country in countries:
-            if (item.get("fobByCountry", {}).get(country) or {}).get("status") == "conflict":
-                continue
             schedule = schedules.get((country, sku.bom_template), [])
             current = next((period for period in schedule if period.valid_from <= reference_date
                             and (period.valid_to is None or period.valid_to >= reference_date)), None)

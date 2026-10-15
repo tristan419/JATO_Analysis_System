@@ -229,6 +229,19 @@ def test_historical_reference_never_bypasses_month_colour_release_or_stop(db, co
         build_bom_admin_workbook(rows, countries, reference_date=date(2026, 10, 15))
 
 
+def test_export_uses_authoritative_period_without_choosing_conflicting_saved_default(db):
+    sku(db, "S", "single")
+    fob(db, "S", 1200, base=1200, term="TT")
+    fob(db, "S", 1300, base=1300, term="LC")
+    release_period(db, ["S"])
+    items, countries = repo.list_bom_with_fob(db)
+    rows = service.prepare_bom_export_rows(db, items, countries, date(2026, 10, 15))
+    price = rows[0]["exportPricesByCountry"]["CH"]
+    assert price["savedFobEur"] is None and price["monthFobEur"] == 1000
+    wb = openpyxl.load_workbook(build_bom_admin_workbook(rows, countries, reference_date=date(2026, 10, 15)))
+    assert wb["JAECOO7 SHS"]["L3"].value is None and wb["JAECOO7 SHS"]["M3"].value == 1000
+
+
 def test_explicit_base_links_accept_changed_model_and_codes_without_changing_business_data(db):
     old = sku(db, "OLD-BW", "single", template="OLD**A", model="Old model")
     new = sku(db, "NEW-CL", "single", template="NEW**B", model="New model")
