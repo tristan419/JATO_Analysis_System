@@ -361,8 +361,8 @@ describe("BOM Admin A load continuity", () => {
       validFrom: "2026-10-01", validTo: "2026-10-31", baseFobEur: 14000,
       allowedColourCodes: codes, remark: null, rowVersion: 1 };
     vi.spyOn(api, "listBomTemplateFobPeriods")
-      .mockResolvedValueOnce({ periods: [], usesPeriods: false, colours })
-      .mockResolvedValue({ periods: [period], usesPeriods: true, colours });
+      .mockResolvedValueOnce({ periods: [], materialCodes: ["T-Release sample"], usesPeriods: false, colours })
+      .mockResolvedValue({ periods: [period], materialCodes: ["T-Release sample"], usesPeriods: true, colours });
     const save = vi.spyOn(api, "saveBomTemplateFobPeriod").mockResolvedValue(period);
     await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Release sample/ })); });
@@ -394,7 +394,7 @@ describe("BOM Admin A load continuity", () => {
       { periodId: "first", countryCode: "SE", bomTemplate: "T-Phases-**", validFrom: "2026-08-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1, allowedColourCodes: null },
       { periodId: "second", countryCode: "SE", bomTemplate: "T-Phases-**", validFrom: "2026-10-01", validTo: null, baseFobEur: 14000, remark: null, rowVersion: 1, allowedColourCodes: ["C0", "C1", "C2", "C3"] },
     ];
-    vi.spyOn(api, "listBomTemplateFobPeriods").mockImplementation(async () => ({ periods: [...periods], usesPeriods: true, colours }));
+    vi.spyOn(api, "listBomTemplateFobPeriods").mockImplementation(async () => ({ periods: [...periods], materialCodes: ["T-Phases"], usesPeriods: true, colours }));
     const save = vi.spyOn(api, "saveBomTemplateFobPeriod").mockImplementation(async (payload) => {
       const index = periods.findIndex((period) => period.periodId === payload.periodId);
       periods[index] = { ...periods[index], allowedColourCodes: payload.allowedColourCodes, rowVersion: periods[index].rowVersion + 1 };
@@ -437,7 +437,7 @@ describe("BOM Admin A load continuity", () => {
   it.each([null, [], ["W3"], ["W3", "CL"]] as Array<string[] | null>)("saves default colours %j without submitting a price or overwriting phases", async (codes) => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Global"));
     const colours = ["W3", "CL"].map((colourCode) => ({ colourCode, colourName: colourCode, colourHex: null }));
-    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods: [], usesPeriods: false, colours, defaultAllowedColourCodes: null });
+    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods: [], materialCodes: ["T-Global", "T-Global-hidden"], usesPeriods: false, colours, defaultAllowedColourCodes: null });
     const save = vi.spyOn(api, "updateBomTemplateFob").mockResolvedValue({ bomTemplate: "T-Global-**", countryCode: "SE", baseFobEur: null, updated: 0, created: 0, cleared: 0, details: [] });
     const phaseSave = vi.spyOn(api, "saveBomTemplateFobPeriod");
     await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
@@ -450,7 +450,8 @@ describe("BOM Admin A load continuity", () => {
       for (const code of ["W3", "CL"]) if (!codes.includes(code)) fireEvent.click(within(dialog).getByLabelText(`Release ${code}`));
     }
     await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: /Save global default/ })); });
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ allowedColourCodes: codes }));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ allowedColourCodes: codes, materialCodes: ["T-Global", "T-Global-hidden"] }));
+    expect(within(dialog).getByText(/2 material codes/)).toBeTruthy();
     expect(save.mock.calls[0][0]).not.toHaveProperty("baseFobEur");
     expect(phaseSave).not.toHaveBeenCalled();
     expect((within(dialog).getByLabelText("Base FOB EUR") as HTMLInputElement).value).toBe("13600");
@@ -459,7 +460,7 @@ describe("BOM Admin A load continuity", () => {
 
   it("opens country periods outside the BOM card and keeps the draft after a save failure", async () => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Period sample"));
-    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods: [], usesPeriods: false, colours: [] });
+    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods: [], materialCodes: ["T-Period sample"], usesPeriods: false, colours: [] });
     const save = vi.spyOn(api, "saveBomTemplateFobPeriod").mockRejectedValue(new Error("Country price conflict"));
     await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Period sample/ })); });
@@ -488,7 +489,7 @@ describe("BOM Admin A load continuity", () => {
       { periodId: "future", countryCode: "SE", bomTemplate: "T-Period summary-**", validFrom: "2027-01-01", validTo: null, baseFobEur: 15000, remark: null, rowVersion: 1, allowedColourCodes: null },
     ];
     vi.spyOn(api, "getBomAdmin").mockResolvedValue({ ...response, items: response.items.map((item) => ({ ...item, fobPeriodsByCountry: { SE: periods } })) });
-    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods, usesPeriods: true, colours: [] });
+    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods, materialCodes: ["T-Period summary"], usesPeriods: true, colours: [] });
     await act(async () => { render(<BomAdminPanel isAdmin={true} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Period summary/ })); });
     expect(screen.getByText("P2")).toBeTruthy();
@@ -503,8 +504,8 @@ describe("BOM Admin A load continuity", () => {
   it("confirms the server-priced default once before deleting the last period", async () => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Restore sample"));
     vi.spyOn(api, "listBomTemplateFobPeriods")
-      .mockResolvedValueOnce({ periods: [{ periodId: "p1", countryCode: "SE", bomTemplate: "T-Restore sample-**", validFrom: "2026-08-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1, allowedColourCodes: [] }], usesPeriods: true, colours: [] })
-      .mockResolvedValue({ periods: [], usesPeriods: false, colours: [] });
+      .mockResolvedValueOnce({ periods: [{ periodId: "p1", countryCode: "SE", bomTemplate: "T-Restore sample-**", validFrom: "2026-08-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1, allowedColourCodes: [] }], materialCodes: ["T-Restore sample"], usesPeriods: true, colours: [] })
+      .mockResolvedValue({ periods: [], materialCodes: ["T-Restore sample"], usesPeriods: false, colours: [] });
     const impact = { periodId: "p1", fingerprint: "fp", lastPeriod: true, defaultBaseFobEur: 13000 };
     const remove = vi.spyOn(api, "deleteBomTemplateFobPeriod")
       .mockResolvedValueOnce({ ...impact, deleted: false })

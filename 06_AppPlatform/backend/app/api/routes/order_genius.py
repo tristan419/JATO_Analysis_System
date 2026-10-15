@@ -1173,6 +1173,7 @@ def get_bom_template_fob_periods(
         "colourName": sku.exterior_color_name or "", "colourHex": sku.colour_hex,
     } for sku in members if clean_text(sku.exterior_color_code)}
     return {"periods": [_country_template_fob_period_payload(row) for row in rows],
+            "materialCodes": sorted(sku.material_code for sku in members),
             "colours": [colours[code] for code in sorted(colours)],
             "defaultAllowedColourCodes": repo.list_default_colour_scopes(session, country).get(template),
             "usesPeriods": repo.has_country_template_fob_periods(session, country, template)}

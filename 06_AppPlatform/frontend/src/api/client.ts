@@ -5581,7 +5581,7 @@ export const api = {
       bomTemplate: params.bomTemplate,
       countryCode: params.countryCode,
     });
-    return request<{ periods: CountryTemplateFobPeriod[]; usesPeriods: boolean; defaultAllowedColourCodes?: string[] | null;
+    return request<{ periods: CountryTemplateFobPeriod[]; materialCodes: string[]; usesPeriods: boolean; defaultAllowedColourCodes?: string[] | null;
       colours: Array<{ colourCode: string; colourName: string; colourHex: string | null }> }>(
       `/order-genius/bom-templates/fob-periods?${qs.toString()}`,
     );

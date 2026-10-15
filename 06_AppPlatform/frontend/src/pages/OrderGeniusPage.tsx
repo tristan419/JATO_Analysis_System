@@ -4897,7 +4897,11 @@ export function BomAdminPanel({
           setPeriodColours(response.colours);
           const codes = response.defaultAllowedColourCodes ?? null;
           setDefaultColourCodes(codes);
-          if (editFob) setFobPeriodDraft(defaultFobDraft(editFob, codes));
+          if (editFob) {
+            const scope = { ...editFob, materialCodes: response.materialCodes };
+            setEditFob(scope);
+            setFobPeriodDraft(defaultFobDraft(scope, codes));
+          }
         }
       })
       .catch((error: unknown) => {
