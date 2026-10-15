@@ -57,6 +57,15 @@ const colourRuleSummary = {
 };
 
 describe("BOM Admin A load continuity", () => {
+  it("keeps period save actions in a full-width row below the colour selector", async () => {
+    // @ts-ignore Frontend browser types omit Node modules; this test runs in Vitest.
+    const { readFileSync } = await import("node:fs") as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const globalStyles = readFileSync("src/index.css", "utf8");
+    expect(globalStyles).toMatch(/\.bom-fob-period-draft\s*>\s*\.bom-fob-period-actions\s*\{\s*grid-column:\s*1\s*\/\s*-1\s*;/);
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     localStorage.clear();
