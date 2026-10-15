@@ -130,6 +130,21 @@ def test_default_colour_only_patch_does_not_reprice_and_price_only_preserves_col
     assert repo.list_default_colour_scopes(db, "CH")["T**001"] == []
 
 
+def test_template_editor_reads_complete_scope_before_an_explicit_default_price_save(db):
+    sku(db, "S", "single")
+    sku(db, "D", "dual")
+    fob(db, "S", 1500, base=1500)
+    fob(db, "D", 1800, base=1500)
+    db.commit()
+    user = SimpleNamespace(name="test", role="admin")
+    scope = routes.get_bom_template_fob_periods("T**001", "CH", db, user)
+    assert scope["materialCodes"] == ["D", "S"]
+    assert not db.scalars(select(models.FobResolvedHistory)).all()
+    result = routes.patch_bom_template_fob({"bomTemplate": "T**001", "countryCode": "CH",
+        "materialCodes": scope["materialCodes"], "baseFobEur": 1600}, db, user)
+    assert {row["materialCode"]: row["finalFobEur"] for row in result["details"]} == {"S": 1600, "D": 1900}
+
+
 def test_default_colour_blocks_plan_import_pi_export_but_phase_is_independent(db):
     single = sku(db, "S", "single")
     price = fob(db, "S", 1500, base=1500)
