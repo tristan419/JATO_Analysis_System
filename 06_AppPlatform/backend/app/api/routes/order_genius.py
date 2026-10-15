@@ -1113,8 +1113,8 @@ def patch_bom_template_fob(
     country_code = clean_text(body.get("countryCode") or body.get("country_code")).upper()
     if not country_code:
         raise HTTPException(status_code=400, detail="countryCode is required")
-    if "baseFobEur" not in body:
-        raise HTTPException(status_code=400, detail="baseFobEur is required")
+    if "baseFobEur" not in body and "allowedColourCodes" not in body:
+        raise HTTPException(status_code=400, detail="baseFobEur or allowedColourCodes is required")
     base_raw = body.get("baseFobEur")
     base_fob = _parse_fob_value(base_raw)
     if base_raw not in (None, "", 0, 0.0) and base_fob is None:
@@ -1124,6 +1124,7 @@ def patch_bom_template_fob(
     if base_fob == 0:
         base_fob = None
     bom_template = clean_text(body.get("bomTemplate") or body.get("materialCode")).upper()
+    _validate_template_access(session, user, bom_template)
     try:
         result = repo.update_bom_template_base_fob(
             session,
@@ -1134,7 +1135,10 @@ def patch_bom_template_fob(
             remark=clean_text(body.get("remark")) if "remark" in body else None,
             update_remark="remark" in body,
             changed_by=user.name,
-        )
+        ) if "baseFobEur" in body else {"bomTemplate": bom_template, "countryCode": country_code,
+            "baseFobEur": None, "updated": 0, "created": 0, "cleared": 0, "details": []}
+        if "allowedColourCodes" in body:
+            repo.save_default_colour_scope(session, country_code, bom_template, body["allowedColourCodes"], user.name)
         session.commit()
         return result
     except LookupError as exc:
@@ -1170,6 +1174,7 @@ def get_bom_template_fob_periods(
     } for sku in members if clean_text(sku.exterior_color_code)}
     return {"periods": [_country_template_fob_period_payload(row) for row in rows],
             "colours": [colours[code] for code in sorted(colours)],
+            "defaultAllowedColourCodes": repo.list_default_colour_scopes(session, country).get(template),
             "usesPeriods": repo.has_country_template_fob_periods(session, country, template)}
 
 

@@ -10,6 +10,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import { animate } from "animejs";
 import { createPortal } from "react-dom";
@@ -3863,6 +3864,7 @@ type BomFobEditor = {
 };
 
 type BomFobPeriodDraft = {
+  scope: "default" | "phase";
   periodId: string | null;
   rowVersion: number | null;
   validFrom: string;
@@ -3873,6 +3875,7 @@ type BomFobPeriodDraft = {
 };
 
 const EMPTY_BOM_FOB_PERIOD_DRAFT: BomFobPeriodDraft = {
+  scope: "phase",
   periodId: null,
   rowVersion: null,
   validFrom: "",
@@ -3881,6 +3884,17 @@ const EMPTY_BOM_FOB_PERIOD_DRAFT: BomFobPeriodDraft = {
   allowedColourCodes: null,
   remark: "",
 };
+
+function defaultFobDraft(editor: BomFobEditor, codes: string[] | null): BomFobPeriodDraft {
+  return { ...EMPTY_BOM_FOB_PERIOD_DRAFT, scope: "default", baseFobEur: editor.fob == null ? "" : String(editor.fob),
+    remark: editor.remark, allowedColourCodes: codes };
+}
+
+function phaseFobDraft(period: CountryTemplateFobPeriod): BomFobPeriodDraft {
+  return { scope: "phase", periodId: period.periodId, rowVersion: period.rowVersion, validFrom: period.validFrom,
+    validTo: period.validTo ?? "", baseFobEur: String(period.baseFobEur), allowedColourCodes: period.allowedColourCodes,
+    remark: period.remark ?? "" };
+}
 
 type BomFobSaveResponse = {
   materialCode: string;
@@ -3996,7 +4010,8 @@ export function BomAdminPanel({
   const [fobPeriodsLoading, setFobPeriodsLoading] = useState(false);
   const [fobPeriodSaving, setFobPeriodSaving] = useState(false);
   const [fobPeriodError, setFobPeriodError] = useState("");
-  const [fobPeriodDraft, setFobPeriodDraft] = useState<BomFobPeriodDraft>(EMPTY_BOM_FOB_PERIOD_DRAFT);
+  const [fobPeriodDraft, setFobPeriodDraft] = useState<BomFobPeriodDraft | null>(null);
+  const [defaultColourCodes, setDefaultColourCodes] = useState<string[] | null>(null);
   const [financeQuickCard, setFinanceQuickCard] = useState<BomFinanceQuickCard | null>(null);
   const [financeQuickFlipped, setFinanceQuickFlipped] = useState(false);
   const [financeQuickRows, setFinanceQuickRows] = useState<CountryMaterialFinanceRow[]>([]);
@@ -4864,14 +4879,15 @@ export function BomAdminPanel({
     if (!bomTemplate || !countryCode || !bomTemplate.includes("**")) {
       setFobPeriods([]);
       setFobPeriodError("");
-      setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
+      setFobPeriodDraft(editFob ? defaultFobDraft(editFob, null) : null);
       return;
     }
     let cancelled = false;
     setFobPeriods([]);
     setPeriodColours([]);
     setPeriodDeletePreview(null);
-    setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
+    setFobPeriodDraft(null);
+    setDefaultColourCodes(null);
     setFobPeriodsLoading(true);
     setFobPeriodError("");
     void api.listBomTemplateFobPeriods({ bomTemplate, countryCode })
@@ -4879,6 +4895,9 @@ export function BomAdminPanel({
         if (!cancelled) {
           setFobPeriods(response.periods);
           setPeriodColours(response.colours);
+          const codes = response.defaultAllowedColourCodes ?? null;
+          setDefaultColourCodes(codes);
+          if (editFob) setFobPeriodDraft(defaultFobDraft(editFob, codes));
         }
       })
       .catch((error: unknown) => {
@@ -4897,10 +4916,11 @@ export function BomAdminPanel({
     const response = await api.listBomTemplateFobPeriods({ bomTemplate, countryCode });
     setFobPeriods(response.periods);
     setPeriodColours(response.colours);
+    setDefaultColourCodes(response.defaultAllowedColourCodes ?? null);
   };
 
   const handleFobPeriodSave = async () => {
-    if (!editFob?.bomTemplate || !fobPeriodDraft.validFrom || fobPeriodDraft.baseFobEur === "") return;
+    if (!editFob?.bomTemplate || fobPeriodDraft?.scope !== "phase" || !fobPeriodDraft.validFrom || fobPeriodDraft.baseFobEur === "") return;
     const baseFobEur = Number(fobPeriodDraft.baseFobEur);
     if (!Number.isFinite(baseFobEur) || baseFobEur < 0) {
       setFobPeriodError("Period base FOB must be zero or greater.");
@@ -4909,7 +4929,7 @@ export function BomAdminPanel({
     setFobPeriodSaving(true);
     setFobPeriodError("");
     try {
-      await api.saveBomTemplateFobPeriod({
+      const saved = await api.saveBomTemplateFobPeriod({
         periodId: fobPeriodDraft.periodId ?? undefined,
         rowVersion: fobPeriodDraft.rowVersion ?? undefined,
         bomTemplate: editFob.bomTemplate,
@@ -4920,7 +4940,7 @@ export function BomAdminPanel({
         allowedColourCodes: fobPeriodDraft.allowedColourCodes,
         remark: fobPeriodDraft.remark.trim() || null,
       });
-      setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
+      setFobPeriodDraft(phaseFobDraft(saved));
       await reloadFobPeriods();
       if (!await load()) throw new Error("Period saved, but BOM refresh failed. Refresh to verify.");
       await onFobChanged?.();
@@ -4940,8 +4960,8 @@ export function BomAdminPanel({
         setPeriodDeletePreview({ ...period, ...result });
         return;
       }
-      if (fobPeriodDraft.periodId === period.periodId) {
-        setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
+      if (fobPeriodDraft?.periodId === period.periodId) {
+        setFobPeriodDraft(editFob ? defaultFobDraft(editFob, defaultColourCodes) : null);
       }
       await reloadFobPeriods();
       setPeriodDeletePreview(null);
@@ -4956,31 +4976,29 @@ export function BomAdminPanel({
 
   const handleFobPeriodEdit = (period: CountryTemplateFobPeriod) => {
     setFobPeriodError("");
-    setFobPeriodDraft({
-      periodId: period.periodId,
-      rowVersion: period.rowVersion,
-      validFrom: period.validFrom,
-      validTo: period.validTo ?? "",
-      baseFobEur: String(period.baseFobEur),
-      allowedColourCodes: period.allowedColourCodes,
-      remark: period.remark ?? "",
-    });
+    setFobPeriodDraft(phaseFobDraft(period));
   };
 
   const handleFobSave = async () => {
-    if (!editFob) return;
-    const remark = editFob.fob != null && editFob.fob > 0 ? editFob.remark.trim() : "";
-    const nextFob = editFob.fob != null && editFob.fob > 0 ? editFob.fob : null;
+    if (!editFob || fobPeriodDraft?.scope !== "default") return;
+    const parsedFob = fobPeriodDraft.baseFobEur.trim() === "" ? null : Number(fobPeriodDraft.baseFobEur);
+    if (parsedFob !== null && (!Number.isFinite(parsedFob) || parsedFob < 0)) {
+      setFobPeriodError("Default FOB must be blank or non-negative / 默认价须为空或非负数"); return;
+    }
+    const remark = fobPeriodDraft.remark.trim();
+    const nextFob = parsedFob !== null && parsedFob > 0 ? parsedFob : null;
     const originalFob = editFob.originalFob != null && editFob.originalFob > 0 ? editFob.originalFob : null;
     const didChangeFob = nextFob !== originalFob;
+    setFobPeriodSaving(true);
+    setFobPeriodError("");
     try {
       if (editFob.bomTemplate?.includes("**")) {
         const result = await api.updateBomTemplateFob({
           bomTemplate: editFob.bomTemplate,
           materialCodes: editFob.materialCodes,
           countryCode: editFob.countryCode,
-          baseFobEur: nextFob,
-          remark,
+          ...(didChangeFob || remark !== editFob.remark ? { baseFobEur: nextFob, remark } : {}),
+          allowedColourCodes: fobPeriodDraft.allowedColourCodes,
         });
         const detailUpdates: BomFobPatch[] = result.details.flatMap((detail) => {
           const materialCode = String(detail.materialCode || "");
@@ -4997,14 +5015,18 @@ export function BomAdminPanel({
           }];
         });
         patchBomFobs(detailUpdates);
-        setEditFob(null);
-        scheduleLoad(1200);
-        onFobChanged?.();
+        const updated = { ...editFob, fob: nextFob, originalFob: nextFob, remark };
+        setEditFob(updated);
+        setDefaultColourCodes(fobPeriodDraft.allowedColourCodes);
+        setFobPeriodDraft(defaultFobDraft(updated, fobPeriodDraft.allowedColourCodes));
+        await reloadFobPeriods();
+        if (!await load()) throw new Error("Default saved, but refresh failed. Refresh to verify.");
+        await onFobChanged?.();
         return;
       }
       const responses: BomFobSaveResponse[] = [];
       for (const mc of editFob.materialCodes) {
-        responses.push(await api.updateSkuFob(mc, { countryCode: editFob.countryCode, baseFobEur: editFob.fob, remark }) as BomFobSaveResponse);
+        responses.push(await api.updateSkuFob(mc, { countryCode: editFob.countryCode, baseFobEur: nextFob, remark }) as BomFobSaveResponse);
       }
       const responseByMaterial = new Map(
         responses.map((response) => [bomMaterialKey(response.materialCode), response]),
@@ -5026,7 +5048,11 @@ export function BomAdminPanel({
       setEditFob(null);
       scheduleLoad(1200);
       onFobChanged?.();
-    } catch (e) { alert(getErrorMessage(e)); }
+    } catch (error: unknown) {
+      setFobPeriodError(getErrorMessage(error));
+    } finally {
+      setFobPeriodSaving(false);
+    }
   };
 
   const resetNewMaterial = () => {
@@ -6819,6 +6845,70 @@ export function BomAdminPanel({
     ].join(" · ");
   };
 
+  const savedDraft = fobPeriodDraft?.scope === "default" && editFob
+    ? defaultFobDraft(editFob, defaultColourCodes)
+    : fobPeriods.find((period) => period.periodId === fobPeriodDraft?.periodId);
+  const draftBaseline = savedDraft && "scope" in savedDraft ? savedDraft
+    : savedDraft ? phaseFobDraft(savedDraft) : EMPTY_BOM_FOB_PERIOD_DRAFT;
+  const normalizedDraft = (draft: BomFobPeriodDraft): string => JSON.stringify({
+    ...draft, baseFobEur: draft.baseFobEur === "" ? "" : String(Number(draft.baseFobEur)),
+    remark: draft.remark.trim(), allowedColourCodes: draft.allowedColourCodes === null ? null : [...draft.allowedColourCodes].sort(),
+  });
+  const fobDraftDirty = fobPeriodDraft !== null && normalizedDraft(fobPeriodDraft) !== normalizedDraft(draftBaseline);
+  const resetFobDraft = (): void => {
+    setFobPeriodError("");
+    setFobPeriodDraft(fobPeriodDraft?.periodId ? draftBaseline : editFob ? defaultFobDraft(editFob, defaultColourCodes) : null);
+  };
+  const renderFobPeriodDraft = (): ReactNode => {
+    const draft = fobPeriodDraft;
+    if (!draft) return null;
+    const change = (patch: Partial<BomFobPeriodDraft>): void => {
+      setFobPeriodDraft((current) => current ? { ...current, ...patch } : null);
+    };
+    const phase = `P${fobPeriods.findIndex((period) => period.periodId === draft.periodId) + 1}`;
+    const isDefault = draft.scope === "default";
+    const title = isDefault ? "Global default / 全局默认" : draft.periodId ? `Editing ${phase} / 正在编辑${phase}` : "New phase / 新增阶段";
+    return (
+      <div id="bom-fob-period-draft" className="bom-fob-period-draft" role="group" aria-label={title}>
+        <strong className="bom-fob-period-draft-title">{title}</strong>
+        {!isDefault ? <>
+          <p className="bom-fob-default-scope">Global reference / 全局参考价：{editFob?.fob?.toLocaleString() ?? "—"} EUR · This phase has its own price and colours / 本阶段独立，不受全局颜色限制</p>
+          <label><span>From</span><input type="date" disabled={fobPeriodSaving} value={draft.validFrom} onChange={(event) => change({ validFrom: event.target.value })} /></label>
+          <label><span>To</span><input type="date" disabled={fobPeriodSaving} value={draft.validTo} onChange={(event) => change({ validTo: event.target.value })} /></label>
+        </> : null}
+        <label><span>{isDefault ? "Base FOB EUR" : "Single base EUR"}</span><input type="number" min="0" disabled={fobPeriodSaving} value={draft.baseFobEur} onChange={(event) => change({ baseFobEur: event.target.value })} /></label>
+        <label><span>Remark</span><input type="text" disabled={fobPeriodSaving} value={draft.remark} onChange={(event) => change({ remark: event.target.value })} /></label>
+        {editFob?.bomTemplate?.includes("**") ? <fieldset className="bom-fob-period-colours" style={{ gridColumn: "1 / -1" }} disabled={fobPeriodSaving || fobPeriodsLoading}>
+          <legend>{isDefault ? "Global default" : draft.periodId ? phase : "New phase"} · Released colours / 释放颜色</legend>
+          <label><input type="checkbox" checked={draft.allowedColourCodes === null} onChange={(event) => change({ allowedColourCodes: event.target.checked ? null : periodColours.map((colour) => colour.colourCode) })} />All colours, including future additions / 全部颜色（含以后新增）</label>
+          <p>{draft.allowedColourCodes === null ? "Unrestricted / 不限颜色" : `Selected / 指定 ${draft.allowedColourCodes.length}/${periodColours.length}; new colours are not added automatically / 新颜色不自动加入`}</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {periodColours.map((colour) => (
+              <label key={colour.colourCode} title={colour.colourName} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <input type="checkbox" aria-label={`Release ${colour.colourCode}`}
+                  checked={draft.allowedColourCodes === null || draft.allowedColourCodes.includes(colour.colourCode)}
+                  onChange={(event) => {
+                    const selected = draft.allowedColourCodes ?? periodColours.map((option) => option.colourCode);
+                    change({ allowedColourCodes: event.target.checked ? [...selected, colour.colourCode] : selected.filter((code) => code !== colour.colourCode) });
+                  }} />
+                <span aria-hidden="true" style={{ width: 18, height: 18, border: "1px solid #cbd5e1", background: parseOrderGeniusColourSwatch(colour.colourHex).background }} />
+                {colour.colourCode}
+              </label>
+            ))}
+          </div>
+          {draft.allowedColourCodes?.length === 0 ? <p role="status">0 colours released: ordering is unavailable in this scope. / 此范围不释放任何颜色，不能下单。</p> : null}
+        </fieldset> : null}
+        {fobPeriodError ? <div className="form-error" role="alert">{fobPeriodError}</div> : null}
+        <div className="bom-fob-period-actions">
+          <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving || (!isDefault && (!draft.validFrom || draft.baseFobEur === ""))} onClick={() => void (isDefault ? handleFobSave() : handleFobPeriodSave())}>
+            {fobPeriodSaving ? "Saving… / 保存中" : isDefault ? "Save global default / 保存全局默认" : draft.periodId ? `Save ${phase} / 保存${phase}` : "Add phase / 添加阶段"}
+          </button>
+          <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={resetFobDraft}>Cancel changes / 取消修改</button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ padding: 20 }}>
       <div style={{ display: "flex", flexDirection: isPhoneToolsLayout ? "column" : "row", gap: isPhoneToolsLayout ? 2 : 8, justifyContent: "space-between", alignItems: isPhoneToolsLayout ? "flex-start" : "center", marginBottom: 12, position: "sticky", top: 0, background: "rgba(255,255,255,0.95)", backdropFilter: "blur(8px)", zIndex: 1, padding: "8px 0", borderBottom: "1px solid #e2e8f0" }}>
@@ -8596,117 +8686,50 @@ export function BomAdminPanel({
                   Current {editFob.originalFob != null ? editFob.originalFob.toLocaleString() : "-"}
                 </span>
               </div>
-              <div className="bom-fob-edit-grid">
-                <label>
-                  <span>Country</span>
-                  <input type="text" value={editFob.countryCode} readOnly autoFocus />
-                </label>
-                <label>
-                  <span>{editFob.bomTemplate?.includes("**") ? "Base FOB EUR" : "FOB EUR"}</span>
-                  <input
-                    type="number"
-                    value={editFob.fob ?? ""}
-                    onChange={(event) => setEditFob({ ...editFob, fob: event.target.value === "" ? null : Number(event.target.value) })}
-                  />
-                </label>
-                <label className="bom-fob-edit-remark-field">
-                  <span>Remark</span>
-                  <textarea
-                    value={editFob.remark}
-                    placeholder="Country-specific FOB remark for this father material..."
-                    rows={3}
-                    onChange={(event) => setEditFob({ ...editFob, remark: event.target.value })}
-                  />
-                </label>
-              </div>
               {editFob.bomTemplate?.includes("**") ? (
                 <section className="bom-fob-period-editor" aria-label="Date-specific base FOB periods">
                   <div className="bom-fob-period-head">
                     <div>
-                      <strong>Date-specific Single base</strong>
-                      <span>Periods are authoritative for this country. Gaps have no price; zero pauses ordering. One Single base per month.</span>
+                      <strong>{editFob.countryCode} · Price & released colours / 价格与释放颜色</strong>
+                      <span>No phases: use global default. With phases: each phase is independent; gaps have no quote. / 无阶段用全局；有阶段按阶段，空档无报价。</span>
                     </div>
                     {fobPeriodsLoading ? <span>Loading…</span> : null}
                   </div>
+                  <div className="bom-fob-focus" aria-label="Editing scope">
+                    <button type="button" className="btn btn-sm btn-ghost" aria-pressed={fobPeriodDraft?.scope === "default"}
+                      disabled={fobPeriodSaving || fobPeriodsLoading || (fobDraftDirty && fobPeriodDraft?.scope !== "default")}
+                      onClick={() => { if (fobPeriodDraft?.scope !== "default") { setFobPeriodDraft(defaultFobDraft(editFob, defaultColourCodes)); setFobPeriodError(""); } }}>Global default / 全局默认</button>
                   {fobPeriods.length > 0 ? (
-                    <div className="bom-fob-period-list">
+                    <>
                       {fobPeriods.map((period, index) => (
-                        <Fragment key={period.periodId}>
-                        {index > 0 && fobPeriods[index - 1].validTo && new Date(period.validFrom).getTime() - new Date(fobPeriods[index - 1].validTo!).getTime() > 86400000 ? (
-                          <p className="bom-fob-period-gap">Gap after {fobPeriods[index - 1].validTo} and before {period.validFrom}: no price — ordering unavailable</p>
-                        ) : null}
-                        <div className="bom-fob-period-row">
-                          <span>{period.validFrom} → {period.validTo || "Open"}</span>
-                          <strong>{period.baseFobEur === 0 ? "Ordering paused (0 EUR)" : `${period.baseFobEur.toLocaleString()} EUR`}</strong>
-                          <span>{period.remark || "—"}<small style={{ display: "block" }}>{period.allowedColourCodes === null ? "All colours (unrestricted) / 全部颜色（不限）" : `Selected colours / 指定颜色 ${period.allowedColourCodes.length}/${periodColours.length}`}</small></span>
-                          <div className="bom-fob-period-actions">
-                            <button
+                            <button key={period.periodId}
                               type="button"
                               className="btn btn-sm btn-ghost"
-                              disabled={fobPeriodSaving}
-                              onClick={() => handleFobPeriodEdit(period)}
-                            >Edit</button>
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-ghost"
-                              disabled={fobPeriodSaving}
-                              onClick={() => void handleFobPeriodDelete(period)}
-                            >Delete</button>
-                          </div>
-                        </div></Fragment>
+                              disabled={fobPeriodSaving || fobPeriodsLoading || (fobDraftDirty && fobPeriodDraft?.periodId !== period.periodId)}
+                              aria-pressed={fobPeriodDraft?.periodId === period.periodId}
+                              aria-controls="bom-fob-period-draft"
+                              onClick={() => { if (fobPeriodDraft?.periodId !== period.periodId) handleFobPeriodEdit(period); }}
+                            >P{index + 1}<small>{period.validFrom} → {period.validTo || "Open"} · {period.baseFobEur.toLocaleString()} EUR · 释放 {period.allowedColourCodes?.length ?? periodColours.length}/{periodColours.length}{period.allowedColourCodes === null ? "（不限）" : ""}</small></button>
                       ))}
-                    </div>
-                  ) : !fobPeriodsLoading ? <p>No periods configured: positive undated default FOB remains available within template dates.</p> : null}
-                  {fobPeriods.length > 0 ? <p>Outside listed periods: no price — ordering unavailable.</p> : null}
+                    </>
+                  ) : null}
+                    <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving || fobPeriodsLoading || fobDraftDirty}
+                      onClick={() => { setFobPeriodError(""); setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT); }}>New phase / 新增阶段</button>
+                  </div>
+                  {fobDraftDirty ? <p role="status">Save or cancel changes before switching scope. / 请先保存或取消修改，再切换范围。</p> : null}
+                  {renderFobPeriodDraft()}
+                  {fobPeriodDraft?.periodId ? <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving || fobDraftDirty}
+                    onClick={() => { const period = fobPeriods.find((row) => row.periodId === fobPeriodDraft.periodId); if (period) void handleFobPeriodDelete(period); }}>Delete selected phase / 删除当前阶段</button> : null}
                   {periodDeletePreview ? <div role="status">
-                    {periodDeletePreview.lastPeriod ? <p>Removing the last period removes its colour restriction; the undated default becomes unrestricted. / 删除最后期间也删除其颜色限制，长期默认价恢复不限颜色。</p> : null}
+                    {periodDeletePreview.lastPeriod ? <p>Restore saved global colours / 恢复已保存的全局颜色：{periodDeletePreview.defaultAllowedColourCodes == null ? "不限（含新色）" : periodDeletePreview.defaultAllowedColourCodes.join(", ") || "0 色"}</p> : null}
                     <p>Remove {periodDeletePreview.validFrom} → {periodDeletePreview.validTo || "Open"}? {periodDeletePreview.lastPeriod ? periodDeletePreview.defaultBaseFobEur != null ? `The undated Single base ${periodDeletePreview.defaultBaseFobEur.toLocaleString()} EUR will apply within template dates${periodDeletePreview.defaultBaseFobEur === 0 ? "; ordering stays paused" : ""}.` : "No undated default exists: no price after deletion." : "These dates will become a no-price gap; the default will not apply."}</p>
                     <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving} onClick={() => void handleFobPeriodDelete(periodDeletePreview, periodDeletePreview.fingerprint)}>Confirm remove period</button>
                     <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setPeriodDeletePreview(null)}>Cancel removal</button>
                   </div> : null}
-                  <div className="bom-fob-period-draft">
-                    <label><span>From</span><input type="date" disabled={fobPeriodSaving} value={fobPeriodDraft.validFrom} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validFrom: event.target.value }))} /></label>
-                    <label><span>To</span><input type="date" disabled={fobPeriodSaving} value={fobPeriodDraft.validTo} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validTo: event.target.value }))} /></label>
-                    <label><span>Single base EUR</span><input type="number" min="0" disabled={fobPeriodSaving} value={fobPeriodDraft.baseFobEur} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, baseFobEur: event.target.value }))} /></label>
-                    <label><span>Remark</span><input type="text" disabled={fobPeriodSaving} value={fobPeriodDraft.remark} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, remark: event.target.value }))} /></label>
-                    <fieldset className="bom-fob-period-colours" style={{ gridColumn: "1 / -1" }} disabled={fobPeriodSaving || fobPeriodsLoading}>
-                      <legend>Released colours / 释放颜色</legend>
-                      <label><input type="checkbox" checked={fobPeriodDraft.allowedColourCodes === null} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, allowedColourCodes: event.target.checked ? null : periodColours.map((colour) => colour.colourCode) }))} />All colours, including future additions / 全部颜色（含以后新增）</label>
-                      <p>{fobPeriodDraft.allowedColourCodes === null ? "Unrestricted / 不限颜色" : `Selected / 指定 ${fobPeriodDraft.allowedColourCodes.length}/${periodColours.length}; new colours are not added automatically / 新颜色不自动加入`}</p>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {periodColours.map((colour) => (
-                          <label key={colour.colourCode} title={colour.colourName} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                            <input type="checkbox" aria-label={`Release ${colour.colourCode}`}
-                              checked={fobPeriodDraft.allowedColourCodes === null || fobPeriodDraft.allowedColourCodes.includes(colour.colourCode)}
-                              onChange={(event) => setFobPeriodDraft((current) => {
-                                const selected = current.allowedColourCodes ?? periodColours.map((option) => option.colourCode);
-                                return { ...current, allowedColourCodes: event.target.checked ? [...selected, colour.colourCode] : selected.filter((code) => code !== colour.colourCode) };
-                              })} />
-                            <span aria-hidden="true" style={{ width: 18, height: 18, border: "1px solid #cbd5e1", background: parseOrderGeniusColourSwatch(colour.colourHex).background }} />
-                            {colour.colourCode}
-                          </label>
-                        ))}
-                      </div>
-                      {fobPeriodDraft.allowedColourCodes?.length === 0 ? <p role="status">0 colours released: ordering is unavailable in this period. / 此期间不释放任何颜色，不能下单。</p> : null}
-                    </fieldset>
-                    <div className="bom-fob-period-actions">
-                      <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving || !fobPeriodDraft.validFrom || fobPeriodDraft.baseFobEur === ""} onClick={() => void handleFobPeriodSave()}>
-                        {fobPeriodDraft.periodId ? "Save changes" : "Add period"}
-                      </button>
-                      {fobPeriodDraft.periodId ? (
-                        <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT)}>Cancel edit</button>
-                      ) : null}
-                    </div>
-                  </div>
-                  {fobPeriodError ? <div className="form-error">{fobPeriodError}</div> : null}
+                  {fobPeriodError && !fobPeriodDraft ? <div className="form-error" role="alert">{fobPeriodError}</div> : null}
                 </section>
-              ) : null}
-              <BomFinanceActionBar
-                actions={[
-                  { label: `Save ${editFob.materialCodes.length}`, kind: "primary", disabled: fobPeriodSaving, onClick: () => void handleFobSave() },
-                  { label: "Cancel", disabled: fobPeriodSaving, onClick: () => setEditFob(null) },
-                ]}
-              />
+              ) : renderFobPeriodDraft()}
+              <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setEditFob(null)}>Close / 关闭</button>
             </div>
           </div>
         </div>

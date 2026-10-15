@@ -1078,6 +1078,44 @@ def update_bom_template_base_fob(
     }
 
 
+def validate_template_colour_codes(session: Session, template: str, codes: list[str] | None) -> list[str] | None:
+    if codes is None:
+        return None
+    if not isinstance(codes, list) or any(not isinstance(code, str) or not clean_text(code) for code in codes):
+        raise ValueError("allowedColourCodes must be null or a list of colour codes / 请选择有效色码")
+    codes = sorted({clean_text(code).upper() for code in codes})
+    baseline = get_latest_baseline(session)
+    members = list_bom_template_skus(session, template, baseline.baseline_version_id) if baseline else []
+    if set(codes) - {clean_text(sku.exterior_color_code).upper() for sku in members}:
+        raise ValueError("Selected colour codes are not in this BOM template; refresh / 色码不属于当前模板，请刷新")
+    return codes
+
+
+def list_default_colour_scopes(session: Session, country_code: str) -> dict[str, list[str] | None]:
+    rows = session.execute(select(CountryTemplateFobPeriod).where(
+        CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
+        CountryTemplateFobPeriod.status == "default", CountryTemplateFobPeriod.valid_from.is_(None),
+    )).scalars().all()
+    return {row.bom_template: row.allowed_colour_codes for row in rows}
+
+
+def save_default_colour_scope(session: Session, country_code: str, bom_template: str,
+                             codes: list[str] | None, changed_by: str) -> None:
+    country, template = clean_text(country_code).upper(), clean_text(bom_template).upper()
+    codes = validate_template_colour_codes(session, template, codes)
+    row = session.execute(select(CountryTemplateFobPeriod).where(
+        CountryTemplateFobPeriod.country_code == country, CountryTemplateFobPeriod.bom_template == template,
+        CountryTemplateFobPeriod.status == "default", CountryTemplateFobPeriod.valid_from.is_(None),
+    )).scalar_one_or_none()
+    if row is None:
+        row = CountryTemplateFobPeriod(country_code=country, bom_template=template, status="default",
+                                      valid_from=None, valid_to=None, base_fob_eur=None, created_by=changed_by)
+        session.add(row)
+    else:
+        row.row_version += 1
+    row.allowed_colour_codes, row.updated_by = codes, changed_by
+
+
 def list_country_template_fob_periods(
     session: Session,
     country_code: str,
@@ -1164,16 +1202,7 @@ def save_country_template_fob_period(
         raise ValueError("baseFobEur must be greater than or equal to 0")
 
     baseline = get_latest_baseline(session)
-    if allowed_colour_codes is not None:
-        if not isinstance(allowed_colour_codes, list) or any(
-            not isinstance(code, str) or not clean_text(code) for code in allowed_colour_codes
-        ):
-            raise ValueError("allowedColourCodes must be null or a list of colour codes / 请选择有效色码")
-        allowed_colour_codes = sorted({clean_text(code).upper() for code in allowed_colour_codes})
-        members = list_bom_template_skus(session, template, baseline.baseline_version_id) if baseline else []
-        known = {clean_text(sku.exterior_color_code).upper() for sku in members}
-        if set(allowed_colour_codes) - known:
-            raise ValueError("Selected colour codes are not in this BOM template; refresh / 色码不属于当前模板，请刷新")
+    allowed_colour_codes = validate_template_colour_codes(session, template, allowed_colour_codes)
     if baseline is not None:
         try:
             lifecycle = get_bom_template_lifecycle(
@@ -1315,11 +1344,13 @@ def preview_country_template_fob_period_deletion(
                 candidates.add(base)
     if len(periods) == 1 and len(candidates) > 1:
         raise ValueError("Conflicting default Single bases; confirm the template/country base in BOM Admin / 长期基准冲突，请确认模板国家基准")
+    default_codes = list_default_colour_scopes(session, country_code).get(bom_template)
     fingerprint = hashlib.sha256(json.dumps(
-        [str(period_id), [(str(p.country_template_fob_period_id), p.row_version) for p in periods], evidence, base],
+        [str(period_id), [(str(p.country_template_fob_period_id), p.row_version) for p in periods], evidence, base, default_codes],
         sort_keys=True,
     ).encode()).hexdigest()
-    return {"fingerprint": fingerprint, "lastPeriod": len(periods) == 1, "defaultBaseFobEur": base}
+    return {"fingerprint": fingerprint, "lastPeriod": len(periods) == 1, "defaultBaseFobEur": base,
+            "defaultAllowedColourCodes": default_codes}
 
 
 def country_template_fob_period_payload(row: CountryTemplateFobPeriod) -> dict:
@@ -1336,6 +1367,12 @@ def is_colour_released(period: CountryTemplateFobPeriod, sku: MaterialSkuMaster)
     """Null means unrestricted; an explicit empty list releases no colours."""
     return (period.allowed_colour_codes is None
             or clean_text(sku.exterior_color_code).upper() in period.allowed_colour_codes)
+
+
+def is_default_colour_released(session: Session, country_code: str, sku: MaterialSkuMaster,
+                              scopes: dict[str, list[str] | None] | None = None) -> bool:
+    codes = (list_default_colour_scopes(session, country_code) if scopes is None else scopes).get(sku.bom_template)
+    return codes is None or clean_text(sku.exterior_color_code).upper() in codes
 
 
 def initialize_sku_fobs_from_source(

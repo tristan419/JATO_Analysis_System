@@ -15905,11 +15905,18 @@ table.material-finance-table td:nth-child(n+5) {
 
 .bom-fob-period-list {
   display: grid;
-  max-height: 180px;
-  overflow: auto;
   border: 1px solid #e2e8f0;
   background: #fff;
 }
+
+.bom-fob-period-item, .bom-fob-period-draft, .bom-fob-period-colours { min-width: 0; }
+.bom-fob-period-draft-title, .bom-fob-period-draft > .form-error { grid-column: 1 / -1; }
+.bom-fob-default-scope { grid-column: 1 / -1; font-size: 11px; color: #64748b; }
+.bom-fob-focus { display: flex; flex-wrap: wrap; gap: 6px; }
+.bom-fob-focus .btn { height: auto; min-height: 34px; max-width: 100%; white-space: normal; text-align: left; }
+.bom-fob-focus .btn[aria-pressed="true"] { background: #eff6ff; border-color: #2563eb; color: #1d4ed8; }
+.bom-fob-focus small { display: block; font-size: 10px; font-weight: 400; }
+.bom-fob-edit-modal-shell .bom-finance-action-button { max-width: 100%; white-space: normal; height: auto; min-height: 34px; }
 
 .bom-fob-period-row {
   display: grid;
@@ -15934,6 +15941,7 @@ table.material-finance-table td:nth-child(n+5) {
 
 .bom-fob-period-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
@@ -15943,7 +15951,7 @@ table.material-finance-table td:nth-child(n+5) {
 
 .bom-fob-period-draft {
   display: grid;
-  grid-template-columns: 140px 140px 130px minmax(160px, 1fr) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: end;
   gap: 8px;
 }
@@ -15970,6 +15978,7 @@ table.material-finance-table td:nth-child(n+5) {
 
 .bom-fob-period-colours label { display: inline-flex; align-items: center; gap: 4px; }
 .bom-fob-period-colours input[type="checkbox"] { width: 16px; height: 16px; padding: 0; flex-shrink: 0; }
+.bom-fob-period-draft .btn { height: auto; min-height: 34px; max-width: 100%; white-space: normal; }
 .bom-fob-period-backdrop { padding-top: calc(28px + var(--candidate-banner-height, 0px)); }
 .bom-fob-period-backdrop .bom-fob-edit-modal-shell { max-height: calc(100vh - 56px - var(--candidate-banner-height, 0px)); }
 
@@ -15997,7 +16006,7 @@ table.material-finance-table td:nth-child(n+5) {
 @media (max-width: 760px) {
   .bom-fob-period-row,
   .bom-fob-period-draft {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .bom-fob-period-row strong {

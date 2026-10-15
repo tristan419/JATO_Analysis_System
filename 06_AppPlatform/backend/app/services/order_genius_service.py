@@ -493,6 +493,7 @@ def resolve_date_effective_fob(
     sku: MaterialSkuMaster,
     selection_date: date | None,
     allow_historical_backfill: bool = False,
+    default_colour_scopes: dict[str, list[str] | None] | None = None,
 ) -> tuple[float | None, dict | None, dict | None]:
     """Resolve one date using template lifecycle, country base and saved tier."""
     if selection_date is None or not sku.bom_template:
@@ -543,6 +544,10 @@ def resolve_date_effective_fob(
             country_code,
             sku.bom_template,
         ):
+            if not repo.is_default_colour_released(session, country_code, sku, default_colour_scopes):
+                return None, {"materialCode": sku.material_code, "countryCode": country_code,
+                    "status": "conflict", "reason": "Colour is not released in the country default / 全局默认未释放此颜色",
+                    "records": []}, {"status": "colour_not_released", "selectionDate": selection_date.isoformat()}
             return None, None, None
         evidence = {
             "selectionDate": selection_date.isoformat(),
@@ -599,6 +604,7 @@ def resolve_month_effective_fob(
     colour_pricing: dict,
     include_historical: bool = False,
     as_of: date | None = None,
+    default_colour_scopes: dict[str, list[str] | None] | None = None,
 ) -> dict:
     """One monthly planning price, with exact sale-day ranges. No today-based pricing."""
     start, end = date(year, month, 1), date(year, month, monthrange(year, month)[1])
@@ -638,6 +644,9 @@ def resolve_month_effective_fob(
             result["reason"] = "Conflicting monthly Single bases; align this template/country month's prices in BOM Admin / 同月基准冲突，请统一该模板国家价格"
             return result
     elif default_fob is not None and float(default_fob.final_fob_eur) > 0:
+        if not repo.is_default_colour_released(session, country_code, sku, default_colour_scopes):
+            result.update(status="colour_not_released", reason="Colour is not released in the country default / 全局默认未释放此颜色")
+            return result
         ranges = [(start, end)]
     else:
         result["reason"] = "No positive Single base; save a country base in BOM Admin / 无有效基准，请保存国家基准价"
@@ -892,6 +901,8 @@ def _build_matrix_for_country(
     )
     conflict_codes = {str(item["materialCode"]) for item in fob_conflicts}
 
+    default_scopes = repo.list_default_colour_scopes(session, country_code)
+
     # Keep unresolved groups visible with no price so normal rows remain usable.
     dated_fob_by_material = {
         sku.material_code: resolve_date_effective_fob(
@@ -899,6 +910,7 @@ def _build_matrix_for_country(
             country_code,
             sku,
             selection_date,
+            default_colour_scopes=default_scopes,
             allow_historical_backfill=(
                 include_historical
                 and repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
@@ -989,7 +1001,7 @@ def _build_matrix_for_country(
             availability = resolve_month_effective_fob(
                 session, country_code, sku, year, month, default_fob=fob,
                 periods=periods, uses_periods=uses_periods, include_historical=include_historical,
-                colour_pricing=colour_pricing,
+                colour_pricing=colour_pricing, default_colour_scopes=default_scopes,
             )
             row_months[str(month)] = {
                 **availability,
@@ -1465,6 +1477,7 @@ def prepare_bom_export_rows(session: Session, items: list[dict], countries: list
     fobs = {country: repo.list_fobs_for_country_material_codes(
         session, country, [item["materialCode"] for item in items], include_conflicts=True,
     )[0] for country in countries}
+    default_scopes = {country: repo.list_default_colour_scopes(session, country) for country in countries}
     result = []
     for item in items:
         sku = skus[item["materialCode"]]
@@ -1481,6 +1494,7 @@ def prepare_bom_export_rows(session: Session, items: list[dict], countries: list
                 session, country, sku, reference_date.year, reference_date.month,
                 default_fob=saved, periods=schedule, uses_periods=bool(schedule),
                 colour_pricing=item["colourPricing"], include_historical=lifecycle == "historical", as_of=reference_date,
+                default_colour_scopes=default_scopes[country],
             )
             historical = lifecycle == "historical"
             if historical and not quote["isEditable"] and quote["status"] in {"stopped", "colour_not_released"}:
