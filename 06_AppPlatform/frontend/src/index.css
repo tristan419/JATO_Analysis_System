@@ -15939,6 +15939,8 @@ table.material-finance-table td:nth-child(n+5) {
   gap: 6px;
 }
 
+.bom-fob-period-draft > .bom-fob-period-actions { grid-column: 1 / -1; }
+
 .bom-fob-period-draft {
   display: grid;
   grid-template-columns: 140px 140px 130px minmax(160px, 1fr) auto;
