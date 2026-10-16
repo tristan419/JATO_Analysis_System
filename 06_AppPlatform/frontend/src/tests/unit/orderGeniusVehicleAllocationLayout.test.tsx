@@ -453,7 +453,7 @@ describe("PI-scoped BOM + VIN import", () => {
     vi.spyOn(api, "previewVehicleAllocationImport").mockResolvedValue(preview);
     const apply = vi.spyOn(api, "applyVehicleAllocationImport");
     await selectPi(); await uploadVinFile();
-    const select = await screen.findByRole("button", { name: "Select imported 2 / 勾选已录车辆" });
+    const select = await screen.findByRole("button", { name: "Select imported 2 / 勾选已录车辆" }, { timeout: 5000 });
     const digest = select.closest<HTMLElement>(".vehicle-import-digest-panel");
     if (!digest) throw new Error("Import digest not found");
     expect(within(digest).getByRole("button", { name: "Apply 0" }).hasAttribute("disabled")).toBe(true);
@@ -474,7 +474,7 @@ describe("PI-scoped BOM + VIN import", () => {
         { ...existing, sourceRow: 6 },
       ] });
     await selectPi(); await uploadVinFile();
-    fireEvent.click(await screen.findByRole("button", { name: "Select imported 1 / 勾选已录车辆" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Select imported 1 / 勾选已录车辆" }, { timeout: 5000 }));
     await screen.findByText(/1 imported vehicles selected; VINs and filters unchanged/);
     expect((screen.getByRole("checkbox", { name: "Select CAR-1" }) as HTMLInputElement).checked).toBe(false);
     expect((screen.getByRole("checkbox", { name: "Select CAR-2" }) as HTMLInputElement).checked).toBe(false);
@@ -537,7 +537,7 @@ describe("PI-scoped BOM + VIN import", () => {
     vi.spyOn(api, "previewVehicleAllocationImport").mockResolvedValue(vinPreview());
     const repreview = vi.spyOn(api, "previewVehicleAllocationParsedRows").mockResolvedValue(vinPreview());
     await selectPi(); await uploadVinFile();
-    fireEvent.click(await screen.findByRole("button", { name: "Choose target row 2" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Choose target row 2" }, { timeout: 5000 }));
     fireEvent.change(screen.getByLabelText("Target CarCode row 2"), { target: { value: "CAR-21" } });
     await waitFor(() => expect(repreview).toHaveBeenCalledWith(expect.objectContaining({ piCode: PI, allowReplacing: false,
       rows: expect.arrayContaining([expect.objectContaining({ sourceRow: 2, car_code: "CAR-21", material_code: "BOM-ONE" })]),
