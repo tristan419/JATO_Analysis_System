@@ -1054,6 +1054,10 @@ def export_vehicle_allocation(
     user: UserContext = Depends(require_min_role("viewer")),
 ) -> StreamingResponse:
     payload = body or {}
+    pi_codes = payload.get("piCodes")
+    if pi_codes is not None and (not isinstance(pi_codes, list) or not pi_codes or len(pi_codes) > 100
+                                or any(not isinstance(code, str) or not code.strip() for code in pi_codes)):
+        raise HTTPException(400, "Select valid PIs / 请选择有效PI")
     filters = _vehicle_filters(
         keyword=payload.get("keyword"),
         pi_code=payload.get("piCode") or payload.get("pi_code"),
@@ -1083,6 +1087,10 @@ def export_vehicle_allocation(
         page_size=500,
     )
     filters["page_size"] = 50_000
+    if pi_codes is not None:
+        filters["pi_codes"] = list(dict.fromkeys(code.strip().upper() for code in pi_codes))
+        for code in filters["pi_codes"]:
+            _accessible_pi_detail(session, user, code)
     columns = payload.get("columns")
     car_codes = payload.get("carCodes")
     if columns is not None and (not isinstance(columns, list) or len(columns) > 40 or any(not isinstance(key, str) for key in columns)):
@@ -1108,7 +1116,7 @@ def export_vehicle_allocation(
             car_codes = [vehicle.car_code for vehicle in rows if vehicle.car_code in allowed_codes]
     else:
         _validate_optional_country(session, user, filters["country"])
-    buffer = export_vehicle_units(session, columns=columns, car_codes=car_codes, **filters)
+    buffer = export_vehicle_units(session, columns=columns, car_codes=car_codes, pivot=payload.get("pivot"), **filters)
     today = date.today().strftime("%Y%m%d")
     country_part = filters["country"] or "ALL"
     filename = f"Vehicle_Allocation_{country_part}_{today}.xlsx"

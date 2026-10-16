@@ -341,9 +341,10 @@ def test_export_uses_authoritative_period_without_choosing_conflicting_saved_def
     assert wb["JAECOO7 SHS"]["L3"].value is None and wb["JAECOO7 SHS"]["M3"].value == 1000
 
 
-def test_explicit_base_links_accept_changed_model_and_codes_without_changing_business_data(db):
+def test_explicit_base_links_accept_changed_trim_and_codes_within_model_without_changing_business_data(db):
     old = sku(db, "OLD-BW", "single", template="OLD**A", model="Old model")
-    new = sku(db, "NEW-CL", "single", template="NEW**B", model="New model")
+    new = sku(db, "NEW-CL", "single", template="NEW**B", model="Old model")
+    new.version = "New trim"
     old.effective_from_date, old.effective_to_date = date(2026, 1, 1), date(2026, 9, 30)
     fob(db, old.material_code, 1000, base=1000)
     db.commit()
@@ -361,6 +362,54 @@ def test_explicit_base_links_accept_changed_model_and_codes_without_changing_bus
     assert replacements.save_replacement(db, brand="JAECOO", source="OLD**A", target="NEW**B",
         note="New hardware", expected_version=1, actor="admin", allowed_brands=None)["changed"] is False
     assert repo.list_fobs_for_country_material_codes(db, "CH", [old.material_code])[old.material_code].final_fob_eur == 1000
+
+
+def test_replacement_catalog_is_model_scoped_and_old_external_links_are_preserved(db):
+    sku(db, "A", "single", template="A", model="Model one")
+    sku(db, "B", "single", template="B", model="Model one")
+    sku(db, "C", "single", template="C", model="Model two")
+    existing = models.MaterialReplacement(brand="JAECOO", source_template="A", target_template="C", row_version=1,
+                                         changed_by="legacy", changed_at=date(2026, 10, 1))
+    db.add(existing); db.commit()
+    catalog = replacements.replacement_catalog(db, {"JAECOO"}, "A")
+    assert {node["bomTemplate"] for node in catalog["nodes"]} == {"A", "B"}
+    assert catalog["links"][0]["to"] == "C"
+    with pytest.raises(HTTPException, match="within this model"):
+        replacements.save_replacement(db, brand="JAECOO", source="B", target="C", note="",
+                                      expected_version=0, actor="admin", allowed_brands=None)
+    assert existing.target_template == "C" and existing.row_version == 1
+
+
+def test_month_export_includes_midmonth_release_even_if_month_end_is_stopped(db):
+    sku(db, "S", "single")
+    sku(db, "D", "dual")
+    fob(db, "S", 1200, base=1200)
+    release_period(db, ["S"], start=date(2026, 10, 1), end=date(2026, 10, 10))
+    repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 10, 11), valid_to=date(2026, 10, 31), base_fob_eur=0,
+        allowed_colour_codes=[], remark=None, changed_by="test")
+    db.commit()
+    items, countries = repo.list_bom_with_fob(db)
+    day = service.prepare_bom_export_rows(db, items, countries, date(2026, 10, 31))
+    assert all(not row["exportPricesByCountry"] for row in day)
+    month = service.prepare_bom_export_rows(db, items, countries, date(2026, 10, 31), whole_month=True)
+    wb = openpyxl.load_workbook(build_bom_admin_workbook(month, countries, country_code="CH", reference_date=date(2026, 10, 31)))
+    ws = wb["JAECOO7 SHS"]
+    assert ws["F3"].value == "S" and ws["M3"].value == 1000
+    assert ws["N3"].value == "2026-10-01 → 2026-10-10"
+    assert "Month-end status" in ws["K1"].value
+    assert ws.row_dimensions[1].height + ws.row_dimensions[2].height >= 80
+    assert not any(row[5] == "D" for row in ws.iter_rows(min_row=3, values_only=True))
+
+
+def test_month_export_zero_saved_historical_price_is_not_a_reference(db):
+    value = sku(db, "S", "single")
+    value.effective_to_date = date(2026, 9, 1)
+    fob(db, "S", 0, base=0)
+    db.commit()
+    items, countries = repo.list_bom_with_fob(db)
+    rows = service.prepare_bom_export_rows(db, items, countries, date(2026, 10, 31), whole_month=True)
+    assert rows[0]["exportPricesByCountry"] == {}
 
 
 def test_replacement_rejects_cycles_missing_nodes_cross_brand_and_duplicate_predecessor(db):

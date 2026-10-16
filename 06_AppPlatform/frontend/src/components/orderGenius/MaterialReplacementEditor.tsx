@@ -24,16 +24,16 @@ export function MaterialReplacementEditor({ brand, bomTemplate, onSaved }: Props
   const load = async (): Promise<void> => {
     setBusy(true); setError("");
     try {
-      const data = await api.getMaterialReplacements();
+      const data = await api.getMaterialReplacements(bomTemplate);
       setCatalog(data); chooseSource(bomTemplate, data);
     } catch (failure: unknown) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { setBusy(false); }
   };
   const current = catalog?.links.find((item) => item.brand === brand && item.from === draft.from);
   const source = catalog?.nodes.find((item) => item.brand === brand && item.bomTemplate === draft.from);
-  const nodes = catalog?.nodes.filter((item) => item.brand === brand && (query
-    ? `${item.bomTemplate} ${item.modelName} ${item.version}`.toLowerCase().includes(query.toLowerCase())
-    : item.modelName === source?.modelName)) ?? [];
+  const model = catalog?.nodes.find((item) => item.brand === brand && item.bomTemplate === bomTemplate)?.modelName;
+  const members = catalog?.nodes.filter((item) => item.brand === brand && item.modelName === model) ?? [];
+  const nodes = members.filter((item) => !query || `${item.bomTemplate} ${item.version}`.toLowerCase().includes(query.toLowerCase()));
   const save = async (): Promise<void> => {
     if (!review) { setReview(true); return; }
     if (saved) { setOpen(false); onSaved(); return; }
@@ -50,10 +50,10 @@ export function MaterialReplacementEditor({ brand, bomTemplate, onSaved }: Props
       setOpen(true); setSaved(false); setReview(false); setCatalog(null); setQuery(""); void load();
     }}>Link versions / 关联版本</button>
     {open ? <ConfirmDialog title={review ? "Confirm base relationship / 确认基准物料关联" : `${brand} · Link versions / 关联版本`}
-      description="Shared brand relation, including related history. Order dates, SKU codes, FOB, quantities and existing PIs stay unchanged. / 共享品牌关联；下单日期、物料号、价格、数量及旧PI均不变。"
+      description={`${model ?? "Current model"} · Model-scoped relationship / 当前Model内维护；下单日期、物料号、价格、数量及旧PI均不变。`}
       cancelLabel={saved ? "Close & reload / 关闭并重读" : "Cancel / 取消"}
       confirmLabel={saved ? "Close & reload / 关闭并重读" : review ? "Save relation / 保存关联" : "Preview relation / 预览关联"}
-      loadingLabel="Loading / 保存中…" submitting={busy} confirmDisabled={!catalog || !source}
+      loadingLabel="Loading / 保存中…" submitting={busy} confirmDisabled={!catalog || !source || Boolean(draft.to && !members.some((node) => node.bomTemplate === draft.to))}
       error={error && !saved ? { title: "Relation not saved / 未保存", message: error } : null}
       onCancel={() => { setOpen(false); if (saved) onSaved(); }} onConfirm={() => void save()}>
       {saved ? <p role="status">{error}</p> : review ? <div className="og-replacement-preview">
@@ -82,11 +82,12 @@ export function MaterialReplacementEditor({ brand, bomTemplate, onSaved }: Props
           </button>)}
         </div>
         <label>Source / 旧base<select value={draft.from} onChange={(event) => { if (catalog) chooseSource(event.target.value, catalog); }}>
-          {catalog?.nodes.filter((item) => item.brand === brand).map((node) => <option key={node.bomTemplate} value={node.bomTemplate}>{node.bomTemplate} · {node.modelName} · {node.version}</option>)}
+          {members.map((node) => <option key={node.bomTemplate} value={node.bomTemplate}>{node.bomTemplate} · {node.version}</option>)}
         </select></label>
         <label>Successor / 新base<select value={draft.to} onChange={(event) => setDraft({ ...draft, to: event.target.value })}>
           <option value="">No successor / 断开关联</option>
-          {catalog?.nodes.filter((item) => item.brand === brand && item.bomTemplate !== draft.from).map((node) => <option key={node.bomTemplate} value={node.bomTemplate}>{node.bomTemplate} · {node.modelName} · {node.version}</option>)}
+          {draft.to && !members.some((node) => node.bomTemplate === draft.to) ? <option value={draft.to} disabled>{draft.to} · External relation / 外部关联待核对</option> : null}
+          {members.filter((item) => item.bomTemplate !== draft.from).map((node) => <option key={node.bomTemplate} value={node.bomTemplate}>{node.bomTemplate} · {node.version}</option>)}
         </select></label>
         <label>Change note / 更替说明<textarea value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} /></label>
       </div>}

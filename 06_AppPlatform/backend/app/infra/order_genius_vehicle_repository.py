@@ -329,6 +329,7 @@ def list_vehicles(
     session: Session,
     keyword: str | None = None,
     pi_code: str | None = None,
+    pi_codes: list[str] | None = None,
     pi_line_code: str | None = None,
     car_code: str | None = None,
     vin: str | None = None,
@@ -357,6 +358,8 @@ def list_vehicles(
     allowed_brands: set[str] | None = None,
 ) -> tuple[list[PiVehicleUnit], int]:
     stmt = select(PiVehicleUnit)
+    if pi_codes is not None:
+        stmt = stmt.where(PiVehicleUnit.pi_code.in_(pi_codes))
     if allowed_countries is not None:
         stmt = stmt.where(PiVehicleUnit.country_code.in_(allowed_countries))
     if allowed_brands is not None:

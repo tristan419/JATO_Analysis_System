@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
+from zipfile import ZipFile
 
 import openpyxl
 import pytest
@@ -27,7 +28,7 @@ from app.infra import order_genius_repository as order_repo
 from app.infra import order_genius_vehicle_repository as vehicle_repo
 from app.services import order_genius_service as order_service
 from app.services import order_genius_vehicle_service as vehicle_service
-from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel
+from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel, generate_vehicle_pivot_excel
 from app.services.order_genius_vehicle_import_parser import (
     parse_vehicle_allocation_xlsx,
     parse_vehicle_vin_list_xlsx,
@@ -285,8 +286,45 @@ def test_export_visible_columns_preserves_order_and_price_snapshot():
         assert list(workbook.active.values) == [("Note / 备注", "FOB (EUR)", "Config", "Car Code"), ("'=unsafe", 12345, "JAECOO5 / Select", "CAR-1")]
     finally:
         workbook.close()
+    from xml.etree import ElementTree
+    with ZipFile(buffer) as archive:
+        fonts = ElementTree.fromstring(archive.read("xl/styles.xml")).find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}fonts")
+        assert [child.tag.rsplit("}", 1)[-1] for child in fonts[1]] == ["b", "sz", "color", "name"]
     with pytest.raises(ValueError, match="Invalid export columns"):
         generate_vehicle_allocation_excel([], ["not-a-column"])
+
+
+def test_cross_pi_pivot_exports_formulas_caches_and_exact_source_without_repricing():
+    rows = [{"carCode": "A", "piCode": "PI-A", "countryCode": "CH", "orderMonth": "2026-08", "vin": "VIN-A", "fobEur": 12345},
+            {"carCode": "B", "piCode": "PI-B", "countryCode": "SE", "orderMonth": "2026-09", "vin": None, "fobEur": None},
+            {"carCode": "C", "piCode": "PI-C", "countryCode": "CH", "orderMonth": "2026-09", "vin": None, "fobEur": 100}]
+    data = generate_vehicle_pivot_excel(rows + rows[:1], {"rows": ["countryCode"], "column": "orderMonth", "measure": "fob"}).getvalue()
+    wb = openpyxl.load_workbook(BytesIO(data), data_only=True)
+    assert wb.sheetnames == ["Pivot", "Source vehicles"]
+    assert wb["Pivot"]["D4"].value == 12445
+    assert wb["Source vehicles"].max_row == 4
+    assert "missing FOB: 1" in wb["Pivot"]["A6"].value
+    formulas = openpyxl.load_workbook(BytesIO(data), data_only=False)
+    assert formulas["Pivot"]["B2"].value.startswith("=SUMIFS(")
+    with pytest.raises(ValueError, match="Invalid pivot"):
+        generate_vehicle_pivot_excel(rows, {"rows": ["countryCode"], "column": [], "measure": "fob"})
+
+
+def test_joint_export_retains_only_chosen_pi_codes_and_rejects_foreign_targets(vehicle_db, mixed_market_pi):
+    first, cars = mixed_market_pi
+    second, other = _vin_fill_pi(vehicle_db, quantity=2)
+    view = vehicle_service.list_vehicle_units(vehicle_db, pi_codes=[second], page=1, page_size=50000)
+    assert {row["carCode"] for row in view["items"]} == {car.car_code for car in other}
+    result = vehicle_service.export_vehicle_units(vehicle_db, pi_codes=[first, second], car_codes=[cars[0].car_code, other[0].car_code], page=1, page_size=50000)
+    wb = openpyxl.load_workbook(result, data_only=True)
+    assert wb.active.max_row == 3
+    with pytest.raises(HTTPException) as denied:
+        vehicle_route.export_vehicle_allocation({"piCodes": [first, second], "carCodes": [cars[-1].car_code]}, vehicle_db,
+                                               UserContext(role="order_filler", name="ch-filler"))
+    assert denied.value.status_code == 403
+    with pytest.raises(HTTPException) as stale:
+        vehicle_service.export_vehicle_units(vehicle_db, pi_codes=[second], car_codes=[cars[0].car_code], page=1, page_size=50000)
+    assert stale.value.status_code == 409
 
 
 def test_vehicle_allocation_vin_list_parser_reads_single_column_without_header(tmp_path: Path) -> None:

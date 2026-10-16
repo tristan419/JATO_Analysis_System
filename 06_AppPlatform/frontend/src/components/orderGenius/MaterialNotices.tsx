@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { MaterialNotice } from "../../types/orderGenius";
 
-interface Props { countries: string[]; authorizationKey: string; revision: number; defaultExpanded?: boolean; onViewModel: (brand: string, model: string, country?: string) => void }
+interface Props { countries: string[]; authorizationKey: string; revision: number; defaultExpanded?: boolean; onViewModel: (brand: string, model: string, country?: string, base?: string) => void }
 interface Load { scope: string; status: "loading" | "ready" | "error"; notices: MaterialNotice[] }
 interface EventGroup { key: string; brand: string; model: string; date: string; kind: MaterialNotice["kind"]; items: MaterialNotice[] }
 const LABELS = { start: "First order date / 开始下单", end: "Final order date / 最后下单日", relation: "Relation updated / 更替关系更新" };
@@ -76,11 +76,11 @@ export function MaterialNotices({ countries, authorizationKey, revision, default
             {countries.length > 1 ? <label>View country / 查看国家<select aria-label={`View country ${event.date} ${event.kind}`} value={country} onChange={(change) => setViewCountries((values) => ({ ...values, [event.key]: change.target.value }))}>
               <option value="">Choose country / 选择国家</option>{countries.map((value) => <option key={value} value={value}>{value}</option>)}
             </select></label> : <span>{country}</span>}
-            <button type="button" className="btn btn-sm btn-ghost" disabled={!country} onClick={() => onViewModel(event.brand, event.model, country)}>View model / 查看车型</button>
+            <button type="button" className="btn btn-sm btn-ghost" disabled={!country} onClick={() => onViewModel(event.brand, event.model, country, event.items.find((item) => item.countryCode === country)?.bomTemplate)}>View model / 查看泳道</button>
             <button type="button" className="btn btn-sm btn-ghost" disabled={busy !== null} onClick={() => void mark(event)}>{busy === event.key ? "Saving / 保存中…" : read ? "Mark unread / 标为未读" : "Mark read / 标为已读"}</button>
           </div>
           <details><summary>Materials and countries / 物料及国家</summary>
-            {event.items.map((notice) => <p key={notice.key}>{notice.countryCode} · {notice.bomTemplate}{notice.kind === "relation" ? ` → ${notice.target ?? "Disconnected / 已断开"}` : ""}{notice.note ? ` · ${notice.note}` : ""} · {notice.read ? "Read / 已读" : "Unread / 未读"}</p>)}
+            {event.items.map((notice) => <p key={notice.key}><button type="button" onClick={() => onViewModel(event.brand, event.model, notice.countryCode, notice.bomTemplate)}>{notice.countryCode} · {notice.bomTemplate}</button>{notice.kind === "relation" ? ` → ${notice.target ?? "Disconnected / 已断开"}` : ""}{notice.note ? ` · ${notice.note}` : ""} · {notice.read ? "Read / 已读" : "Unread / 未读"}</p>)}
           </details>
         </div>;
       })}

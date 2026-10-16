@@ -12,7 +12,7 @@ from app.db.models import MaterialNoticeRead, MaterialReplacement
 from app.infra import order_genius_repository as repo
 
 
-def replacement_catalog(session: Session, allowed_brands: set[str] | None) -> dict:
+def replacement_catalog(session: Session, allowed_brands: set[str] | None, bom_template: str | None = None) -> dict:
     groups: dict[tuple[str, str], list] = {}
     for sku in repo.list_all_material_skus_for_admin(session, allowed_brands=allowed_brands, limit=None):
         if sku.bom_template:
@@ -26,10 +26,17 @@ def replacement_catalog(session: Session, allowed_brands: set[str] | None) -> di
         nodes.append({"brand": brand, "bomTemplate": template, "modelName": model,
                       "version": version, "powertrain": powertrain or "",
                       "materialCodes": sorted(sku.material_code for sku in members)})
+    if bom_template:
+        anchor = next((node for node in nodes if node["bomTemplate"] == bom_template), None)
+        if anchor is None:
+            raise HTTPException(400, "Choose an accessible model base / 请选择有权访问的车型物料")
+        nodes = [node for node in nodes if node["brand"] == anchor["brand"] and node["modelName"] == anchor["modelName"]]
+    templates = {node["bomTemplate"] for node in nodes}
     records = session.execute(select(MaterialReplacement)).scalars().all()
     links = [{"brand": row.brand, "from": row.source_template, "to": row.target_template,
               "note": row.note or "", "rowVersion": row.row_version}
-             for row in records if allowed_brands is None or row.brand in allowed_brands]
+             for row in records if (allowed_brands is None or row.brand in allowed_brands)
+             and (not bom_template or row.source_template in templates or row.target_template in templates)]
     return {"nodes": nodes, "links": links}
 
 
@@ -45,6 +52,8 @@ def save_replacement(session: Session, *, brand: str, source: str, target: str |
         raise HTTPException(400, "Base missing or inconsistent; maintain BOM first / 基准物料缺失或不一致，请先维护BOM")
     if source == target:
         raise HTTPException(400, "Cannot link a base to itself / 不能关联自身")
+    if target is not None and by_template[source]["modelName"] != by_template[target]["modelName"]:
+        raise HTTPException(400, "Choose a successor within this model / 只能关联当前Model内的物料；旧外部关联保留待核对")
     rows = session.execute(select(MaterialReplacement).where(
         MaterialReplacement.brand == brand).with_for_update()).scalars().all()
     current = next((row for row in rows if row.source_template == source), None)

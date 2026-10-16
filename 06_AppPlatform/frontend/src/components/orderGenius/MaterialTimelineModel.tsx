@@ -4,147 +4,76 @@ import { orderGeniusPowertrainColor } from "../../utils/orderGeniusBomAdmin";
 
 type Link = MaterialTimelineResponse["links"][number];
 interface Props {
-  country: string;
-  brand: string;
-  model: string;
-  nodes: MaterialTimelineNode[];
-  response: MaterialTimelineResponse;
-  left: number;
-  right: number;
-  zoom: number;
-  open: boolean;
-  showWvta: boolean;
+  country: string; brand: string; model: string; nodes: MaterialTimelineNode[];
+  response: MaterialTimelineResponse; left: number; right: number; zoom: number; open: boolean; showWvta: boolean;
   onToggle: () => void;
   onSelect: (node: MaterialTimelineNode, certificate?: WvtaReferenceRecord, relationship?: Link) => void;
 }
 const dayNumber = (value: string): number => Date.parse(`${value}T00:00:00Z`) / 86400000;
 
-function productChains(nodes: MaterialTimelineNode[], all: MaterialTimelineNode[], links: Link[]): MaterialTimelineNode[][] {
-  const byCode = new Map(all.map((node) => [node.bomTemplate, node]));
-  const seen = new Set<string>();
-  const chains: MaterialTimelineNode[][] = [];
-  for (const seed of nodes) {
-    let head = seed;
-    const visited = new Set<string>();
-    while (!visited.has(head.bomTemplate)) {
-      visited.add(head.bomTemplate);
-      const parent = links.find((link) => link.to === head.bomTemplate);
-      const previous = parent ? byCode.get(parent.from) : undefined;
-      if (!previous) break;
-      head = previous;
-    }
-    if (seen.has(head.bomTemplate)) continue;
-    const chain: MaterialTimelineNode[] = [];
-    let current: MaterialTimelineNode | undefined = head;
-    while (current && !seen.has(current.bomTemplate)) {
-      seen.add(current.bomTemplate); chain.push(current);
-      const outgoing: Link[] = links.filter((link) => link.from === current?.bomTemplate);
-      current = outgoing.length === 1 ? byCode.get(outgoing[0].to) : undefined;
-    }
-    chains.push(chain);
-  }
-  return chains;
-}
-
-function intervalRows(nodes: MaterialTimelineNode[]): Map<string, number> {
-  const occupied: Array<Array<[number, number]>> = [];
-  const rows = new Map<string, number>();
-  for (const node of nodes) {
-    const known = node.effectiveFrom ?? node.effectiveTo;
-    if (!known) continue;
-    const first = dayNumber(node.effectiveFrom ?? known), last = dayNumber(node.effectiveTo ?? known);
-    let row = occupied.findIndex((ranges) => ranges.every(([start, end]) => last < start || first > end));
-    if (row < 0) { row = occupied.length; occupied.push([]); }
-    occupied[row].push([first, last]); rows.set(node.bomTemplate, row);
-  }
-  return rows;
-}
-
 export function MaterialTimelineModel({ country, brand, model, nodes, response, left, right, zoom, open, showWvta, onToggle, onSelect }: Props) {
-  // Base identity includes brand; never join a colliding code from another brand.
-  const all = response.nodes.filter((node) => node.brand === brand);
-  const templates = new Set(all.map((node) => node.bomTemplate));
-  const links = response.links.filter((link) => templates.has(link.from) && templates.has(link.to));
-  const chains = productChains(nodes, all, links);
-  const linked = chains.filter((chain) => chain.length > 1);
-  const pending = chains.filter((chain) => chain.length === 1).flat();
-  const position = (date: string): number => Math.max(0, Math.min(100, 100 * (dayNumber(date) - left) / Math.max(1, right - left)));
+  const members = nodes.filter((node) => node.brand === brand && node.modelName === model)
+    .slice().sort((a, b) => a.version.localeCompare(b.version) || (a.effectiveFrom ?? "9999").localeCompare(b.effectiveFrom ?? "9999") || a.bomTemplate.localeCompare(b.bomTemplate));
+  const byCode = new Map(members.map((node) => [node.bomTemplate, node]));
+  const links = response.links.filter((link) => byCode.has(link.from) && byCode.has(link.to));
+  const certificates = (node: MaterialTimelineNode): WvtaReferenceRecord[] => showWvta
+    ? (response.wvtaReference?.records ?? []).filter((record) => record.materialGroup === node.bomTemplate) : [];
+  let height = 0, trim = "";
+  const layout = members.map((node) => {
+    const heading = node.version !== trim;
+    trim = node.version;
+    if (heading) height += 32;
+    const top = height;
+    height += 84 + certificates(node).length * 24;
+    return { node, top, heading };
+  });
+  const positions = new Map(layout.map(({ node, top }) => [node.bomTemplate, top]));
+  const position = (value: string): number => Math.max(0, Math.min(100, 100 * (dayNumber(value) - left) / Math.max(1, right - left)));
   const color = (node: MaterialTimelineNode): CSSProperties => ({ "--og-timeline-powertrain": orderGeniusPowertrainColor(node.powertrain) } as CSSProperties);
-  return <details className="og-timeline-model" open={open}>
-    <summary onClick={(event) => { event.preventDefault(); onToggle(); }}>
-      {country} · {brand} · {model} · {linked.length} chains / 产品链 · {pending.length} unlinked / 待关联
-    </summary>
-    {linked.length > 0 ? <div className="og-lineage-scroll">
-      <div className="og-lineage-map" style={{ minWidth: `${zoom * 800}px` }}>
-        <div className="og-lineage-axis"><span>BOM order dates / 下单日期</span><div>{[0, 25, 50, 75, 100].map((percent) => <span key={percent} style={{ left: `${percent}%` }}>
-          {new Date((left + (right - left) * percent / 100) * 86400000).toISOString().slice(0, 10)}
-        </span>)}</div></div>
-        <div className="og-lineage-tree">
-          <div className="og-lineage-root"><strong>{model}</strong><small>{linked.length} product chains / 产品链</small></div>
-          <div className="og-lineage-branches">{linked.map((chain) => {
-            const rows = intervalRows(chain);
-            const height = Math.max(1, ...[...rows.values()].map((row) => row + 1)) * 84;
-            const incomplete = chain.filter((node) => !node.effectiveFrom || !node.effectiveTo);
-            return <div className="og-timeline-chain og-lineage-branch" key={chain[0].bomTemplate} aria-label="Linked product timeline / 已关联产品时间轴">
-              <div className="og-lineage-branch-label">{[...new Set(chain.map((node) => node.version))].join(" → ")}</div>
-              <div className="og-timeline-relationship">Saved relation / 已保存关联：{chain.map((node) => node.bomTemplate).join(" → ")}</div>
-              {rows.size > 0 ? <div className="og-lineage-track" style={{ height }}>
-                <i className="og-timeline-today" style={{ left: `${position(response.today)}%` }} aria-hidden="true" />
-                <svg className="og-lineage-links" viewBox={`0 0 100 ${height}`} preserveAspectRatio="none" aria-hidden="true">
-                  {chain.slice(0, -1).map((source, index) => {
-                    const target = chain[index + 1];
-                    if (!source.effectiveTo || !target.effectiveFrom || !rows.has(source.bomTemplate) || !rows.has(target.bomTemplate)) return null;
-                    const x1 = position(source.effectiveTo), x2 = position(target.effectiveFrom);
-                    const y1 = (rows.get(source.bomTemplate) ?? 0) * 84 + 62, y2 = (rows.get(target.bomTemplate) ?? 0) * 84 + 44;
-                    return <path key={source.bomTemplate} d={`M ${x1} ${y1} C ${x1} ${y1 + 24}, ${x2} ${y2 + 24}, ${x2} ${y2}`} />;
-                  })}
-                </svg>
-                {chain.map((node) => node.effectiveFrom || node.effectiveTo ? <div key={node.bomTemplate} className={`og-lineage-version is-${node.lifecycleStatus}`}
-                  style={{ ...color(node), top: (rows.get(node.bomTemplate) ?? 0) * 84, left: `${position(node.effectiveFrom ?? node.effectiveTo ?? response.today)}%`, width: `${node.effectiveFrom && node.effectiveTo ? Math.max(.25, position(node.effectiveTo) - position(node.effectiveFrom)) : 0}%` }}>
-                  {node.effectiveFrom && node.effectiveTo ? <button type="button" className="og-lineage-period" title={`${node.bomTemplate} · ${node.effectiveFrom} → ${node.effectiveTo}`} onClick={() => onSelect(node)}>{node.bomTemplate}</button> : null}
-                  {node.effectiveFrom ? <button type="button" className="og-lineage-pin is-start" aria-label={`${node.bomTemplate} starts ${node.effectiveFrom}`} title={`First order date / 开始下单 ${node.effectiveFrom}`} onClick={() => onSelect(node)} /> : null}
-                  {node.effectiveTo ? <button type="button" className="og-lineage-pin is-end" aria-label={`${node.bomTemplate} ends ${node.effectiveTo}`} title={`Final order date / 最后下单 ${node.effectiveTo}`} onClick={() => onSelect(node)} /> : null}
-                </div> : null)}
-              </div> : null}
-              <div className="og-lineage-transitions">{chain.slice(0, -1).map((node, index) => {
-                const target = chain[index + 1];
-                const link = links.find((value) => value.from === node.bomTemplate && value.to === target.bomTemplate);
-                return <button type="button" className="btn btn-sm btn-ghost" key={node.bomTemplate} onClick={() => onSelect(node, undefined, link)}>
-                  {node.bomTemplate} → {target.bomTemplate}{link?.note ? " · Note / 备注" : ""}
-                </button>;
-              })}</div>
-              {incomplete.length > 0 ? <div className="og-lineage-undated"><span>Dates not maintained / 日期待维护：</span>{incomplete.map((node) => <button type="button" className="btn btn-sm btn-ghost" key={node.bomTemplate} onClick={() => onSelect(node)}>
-                {node.bomTemplate} · {node.effectiveFrom ?? "Start not set / 起始未设"} → {node.effectiveTo ?? "End not set / 截止未设"}
-              </button>)}</div> : null}
-              {showWvta && response.wvtaReference?.status === "ready" ? <div className="og-lineage-wvta">{chain.map((node) => <div key={node.bomTemplate} style={color(node)}>
-                <small>{node.bomTemplate} · WVTA reference / 参考</small>
-                {response.wvtaReference?.records.filter((record) => record.materialGroup === node.bomTemplate).map((record, index) => <button type="button"
-                  className={`og-wvta-segment is-${record.sourceStatus}`} key={`${record.pageNumber}-${record.tableRowNumber}-${index}`} onClick={() => onSelect(node, record)}>
-                  {record.sourceStatus === "recorded" && record.validFrom ? <i className={record.validTo ? "" : "is-open"} style={{ left: `${position(record.validFrom)}%`, width: `${Math.max(.25, (record.validTo ? position(record.validTo) : 100) - position(record.validFrom))}%` }} /> : null}
-                  <span>{record.wvtaNo} · {record.validFrom ?? "Start not recorded / 起始未记录"} → {record.validTo ?? "End not recorded / 截止未记录"}{record.sourceStatus !== "recorded" ? ` · ${record.sourceStatus}` : ""}</span>
-                </button>)}
-                {!response.wvtaReference?.records.some((record) => record.materialGroup === node.bomTemplate) ? <span>No exact certificate match / 无精确证书记录，不猜测日期。</span> : null}
-              </div>)}</div> : null}
+  return <details className="og-timeline-model" open={open} data-model={model}>
+    <summary onClick={(event) => { event.preventDefault(); onToggle(); }}>{country} · {brand} · {model} · {members.length} bases / 物料泳道 · {new Set(members.map((n) => n.version)).size} trims / 配置</summary>
+    <div className="og-lineage-scroll"><div className="og-swimlane-map" style={{ minWidth: `${zoom * 850}px` }}>
+      <div className="og-swimlane-axis"><strong>{model} · Trim / Base</strong><div>{[0, 25, 50, 75, 100].map((percent) => <span key={percent} style={{ left: `${percent}%` }}>{new Date((left + (right - left) * percent / 100) * 86400000).toISOString().slice(0, 10)}</span>)}</div></div>
+      <div className="og-swimlane-body" style={{ height }}>
+        <div className="og-swimlane-labels">{layout.map(({ node, top, heading }) => <div key={node.bomTemplate}>
+          {heading ? <strong className="og-swimlane-trim" style={{ top: top - 32 }}>{node.version || "Trim not set / 配置未维护"}</strong> : null}
+          <button type="button" className="og-swimlane-label" aria-label={`${node.bomTemplate} · ${node.version} · ${node.powertrain} · ${node.lifecycleStatus}`} style={{ top, borderLeftColor: orderGeniusPowertrainColor(node.powertrain) }} onClick={() => onSelect(node)}>
+            <strong>{node.bomTemplate}</strong><span>{node.powertrain} · {node.lifecycleStatus} · {node.materialCodes.length} SKUs</span>
+            {!node.effectiveFrom && !node.effectiveTo ? <small>Dates not maintained / 日期待维护</small> : null}
+            {!response.links.some((link) => link.from === node.bomTemplate || link.to === node.bomTemplate) ? <small>Relation not maintained / 关联未维护</small> : null}
+            {response.links.some((link) => (link.from === node.bomTemplate && !byCode.has(link.to)) || (link.to === node.bomTemplate && !byCode.has(link.from))) ? <small>External relation / 外部关联待核对</small> : null}
+          </button>
+        </div>)}</div>
+        <div className="og-swimlane-tracks">
+          <i className="og-timeline-today" style={{ left: `${position(response.today)}%` }} aria-hidden="true" />
+          <svg className="og-lineage-links" viewBox={`0 0 100 ${Math.max(1, height)}`} preserveAspectRatio="none" aria-hidden="true">
+            {links.map((link) => {
+              const source = byCode.get(link.from), target = byCode.get(link.to);
+              if (!source?.effectiveTo || !target?.effectiveFrom) return null;
+              const x1 = position(source.effectiveTo), x2 = position(target.effectiveFrom);
+              const y1 = (positions.get(link.from) ?? 0) + 26, y2 = (positions.get(link.to) ?? 0) + 26;
+              return <path key={link.from} d={`M ${x1} ${y1} C ${x1} ${y1 + 35}, ${x2} ${y2 - 35}, ${x2} ${y2}`} />;
+            })}
+          </svg>
+          {layout.map(({ node, top }) => {
+            const outgoing = links.find((link) => link.from === node.bomTemplate);
+            const start = node.effectiveFrom, end = node.effectiveTo;
+            return <div key={node.bomTemplate} className="og-swimlane-track" style={{ top, ...color(node) }} aria-label={`${node.bomTemplate} swimlane / 物料泳道`}>
+              <div className="og-swimlane-baseline" />
+              {start && end ? <button type="button" className={`og-swimlane-period is-${node.lifecycleStatus}`} style={{ left: `${position(start)}%`, width: `${Math.max(.3, position(end) - position(start))}%` }}
+                title={`${node.bomTemplate} · ${start} → ${end}`} onClick={() => onSelect(node)} /> : null}
+              {start ? <button type="button" className="og-swimlane-pin" style={{ left: `${position(start)}%` }} aria-label={`${node.bomTemplate} starts ${start}`} onClick={() => onSelect(node)} /> : null}
+              {end ? <button type="button" className="og-swimlane-pin" style={{ left: `${position(end)}%` }} aria-label={`${node.bomTemplate} ends ${end}`} onClick={() => onSelect(node)} /> : null}
+              <button type="button" className="og-swimlane-dates" onClick={() => onSelect(node)}>{start ?? "Start not set / 起始未设"} → {end ?? "End not set / 截止未设"}</button>
+              {outgoing ? <button type="button" className="og-swimlane-relation" onClick={() => onSelect(node, undefined, outgoing)}>→ {outgoing.to}{outgoing.note ? " · Note / 备注" : ""}</button> : null}
+              {certificates(node).map((record, index) => <button key={`${record.pageNumber}-${record.tableRowNumber}-${index}`} className="og-swimlane-wvta" style={{ top: 76 + index * 24 }} onClick={() => onSelect(node, record)}>
+                {record.sourceStatus === "recorded" && record.validFrom ? <i style={{ left: `${position(record.validFrom)}%`, width: `${Math.max(.3, (record.validTo ? position(record.validTo) : 100) - position(record.validFrom))}%` }} /> : null}
+                WVTA · {record.wvtaNo} · {record.validFrom ?? "Start not recorded"} → {record.validTo ?? "End not recorded"} · {record.sourceStatus}
+              </button>)}
             </div>;
-          })}</div>
+          })}
         </div>
       </div>
-    </div> : <p>No saved product chain / 尚无已保存产品链，请先维护明确关系。</p>}
-    {pending.length > 0 ? <details className="og-lineage-pending">
-      <summary>Unlinked materials / 待确认关联 · {pending.length}</summary>
-      <p>Relation not maintained / 关联未维护；同车型、配置或相邻日期不代表同一升级链。</p>
-      <div className="og-lineage-pending-list">{pending.map((node) => <div key={node.bomTemplate}>
-        <button type="button" className="og-timeline-node" aria-label={`${country} · ${node.bomTemplate} · ${node.version} · ${node.powertrain} · ${node.lifecycleStatus}`} style={{ borderLeftColor: orderGeniusPowertrainColor(node.powertrain) }} onClick={() => onSelect(node)}>
-          <strong>{node.bomTemplate}</strong><span>{node.version} · {node.powertrain} · {node.materialCodes.length} SKUs</span>
-          <span>{node.effectiveFrom ?? "Start not set / 起始未设"} → {node.effectiveTo ?? "End not set / 截止未设"}</span>
-          {!node.effectiveFrom && !node.effectiveTo ? <span>Dates not maintained / 日期待维护</span> : null}
-        </button>
-        {showWvta && response.wvtaReference?.status === "ready" ? <div>{response.wvtaReference.records.filter((record) => record.materialGroup === node.bomTemplate).map((record, index) => <button type="button" className={`og-wvta-segment is-${record.sourceStatus}`} style={color(node)}
-          key={`${record.pageNumber}-${record.tableRowNumber}-${index}`} onClick={() => onSelect(node, record)}>
-          {record.sourceStatus === "recorded" && record.validFrom ? <i className={record.validTo ? "" : "is-open"} style={{ left: `${position(record.validFrom)}%`, width: `${Math.max(.25, (record.validTo ? position(record.validTo) : 100) - position(record.validFrom))}%` }} /> : null}
-          <span>WVTA · {record.wvtaNo} · {record.validFrom ?? "Start not recorded / 起始未记录"} → {record.validTo ?? "End not recorded / 截止未记录"}{record.sourceStatus !== "recorded" ? ` · ${record.sourceStatus}` : ""}</span>
-        </button>)}</div> : null}
-      </div>)}</div>
-    </details> : null}
+    </div></div>
   </details>;
 }

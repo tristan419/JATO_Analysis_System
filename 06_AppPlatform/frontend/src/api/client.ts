@@ -5025,7 +5025,7 @@ export const api = {
     "/order-genius/wvta-reference", { method: "POST", body: JSON.stringify({ uploadId, sha256 }) },
   ),
 
-  getMaterialReplacements: () => request<MaterialReplacementCatalog>("/order-genius/material-replacements"),
+  getMaterialReplacements: (bomTemplate: string) => request<MaterialReplacementCatalog>(`/order-genius/material-replacements?bomTemplate=${encodeURIComponent(bomTemplate)}`),
   saveMaterialReplacement: (body: { brand: string; from: string; to: string | null; note: string; rowVersion: number }) =>
     request<{ changed: boolean; rowVersion: number }>("/order-genius/material-replacements", { method: "PUT", body: JSON.stringify(body) }),
   getMaterialNotices: (country: string) => request<{ countryCode: string; notices: MaterialNotice[] }>(
@@ -5531,7 +5531,7 @@ export const api = {
       { method: "POST" },
     ),
 
-  exportVehicleAllocation: (params: VehicleAllocationFilters & { columns?: string[]; carCodes?: string[] } = {}) =>
+  exportVehicleAllocation: (params: VehicleAllocationFilters & { columns?: string[]; carCodes?: string[]; pivot?: { rows: string[]; column: string; measure: string } } = {}) =>
     requestBlob("/order-genius/vehicle-allocation/export", {
       method: "POST",
       body: JSON.stringify(params),
@@ -5549,10 +5549,10 @@ export const api = {
     }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
   },
 
-  exportBomAdmin: (countryCode: string | undefined, referenceDate: string) =>
+  exportBomAdmin: (countryCode: string | undefined, referenceMonth: string) =>
     requestBlob("/order-genius/bom-admin/export", {
       method: "POST",
-      body: JSON.stringify({ countryCode: countryCode || null, referenceDate }),
+      body: JSON.stringify({ countryCode: countryCode || null, referenceMonth }),
       headers: { "Content-Type": "application/json" },
     }),
 

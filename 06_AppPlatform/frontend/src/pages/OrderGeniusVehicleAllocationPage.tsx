@@ -33,6 +33,7 @@ import type {
 } from "../types/orderGeniusVehicle";
 import { VehicleAllocationGrid, type VehicleGridView, type VehicleColumnKey } from "../components/VehicleAllocationPivotGrid";
 import { VehicleAllocationEditor } from "../components/VehicleAllocationEditor";
+import { VehicleAnalysisPivot, type VehiclePivotConfig } from "../components/VehicleAnalysisPivot";
 import { VEHICLE_COLUMNS, COLUMN_GROUPS, matchesVehicleText } from "../components/vehicleAllocationFields";
 import { ptColor } from "../utils/colors";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
@@ -194,6 +195,11 @@ export function OrderGeniusVehicleAllocationPage() {
   const [piBrowsePage, setPiBrowsePage] = useState(1);
   const [piListError, setPiListError] = useState<string | null>(null);
   const [selectedPi, setSelectedPi] = useState<PiOrderDetail | null>(null);
+  const [workspaceCodes, setWorkspaceCodes] = useState<string[]>([]);
+  const [workspacePis, setWorkspacePis] = useState<PiOrderDetail[]>([]);
+  const [onlySelectedPis, setOnlySelectedPis] = useState(false);
+  const [analysisView, setAnalysisView] = useState<"details" | "pivot">("details");
+  const [inspection, setInspection] = useState<PiVehicleUnit[] | null>(null);
   const [piLoading, setPiLoading] = useState(false);
   const piRequest = useRef(0);
   useEffect(() => () => { piRequest.current += 1; }, []);
@@ -220,7 +226,6 @@ export function OrderGeniusVehicleAllocationPage() {
   const [vinBatchText, setVinBatchText] = useState("");
   const [batchVins, setBatchVins] = useState<string[]>([]);
   const [vinSelectionScope, setVinSelectionScope] = useState<"global" | "filtered">("global");
-  const [pivotBy, setPivotBy] = useState<"modelName" | "materialCode" | "logisticsStatus" | "countryCode">("modelName");
   const [sideLoading, setSideLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [bulkSaving, setBulkSaving] = useState(false);
@@ -267,12 +272,14 @@ export function OrderGeniusVehicleAllocationPage() {
   const mutationBusy = saving || bulkSaving || vinPasteApplying || importBusy;
   const scopeBusy = mutationBusy || piLoading;
   const pageSize = 100;
+  const checkedPiCodes = workspaceCodes.length ? workspaceCodes : selectedPi ? [selectedPi.header.piCode] : [];
+  const joint = workspaceCodes.length > 1;
   const selectedLine = selectedPi?.lines.find((line) => line.piLineCode === selectedLineCode) ?? null;
   const activeScopeLabel = selectedLine
     ? selectedLine.piLineCode
     : selectedPi
       ? selectedPi.header.piCode
-      : "No PI selected";
+      : joint ? `${workspaceCodes.length} PIs / 联合范围` : "No PI selected";
   const statusFlowCountry = selectedPi?.header.countryCode || filters.country || defaultCountry;
   const statusFlowAccount = selectedPi?.header.orderingAccountCode ?? "";
   const allocationStatusOptions = allocationOptionsFromFlow(statusFlow);
@@ -308,13 +315,14 @@ export function OrderGeniusVehicleAllocationPage() {
     return Array.from(byCode.values()).filter((option) => isAdmin || allowed.has(option.value)).sort((a, b) => a.value.localeCompare(b.value));
   }, [accountCountryOptions, defaultCountry, filters.country, piBrowseCountry, selectedPi, user]);
   const vinPasteScopeVehicles = useMemo(() => {
+    if (joint) return [...new Map(workspacePis.flatMap((pi) => pi.vehicles).map((vehicle) => [vehicle.carCode, vehicle])).values()];
     if (!selectedPi) {
       return [];
     }
     return selectedLineCode
       ? selectedPi.vehicles.filter((vehicle) => vehicle.piLineCode === selectedLineCode)
       : selectedPi.vehicles;
-  }, [selectedPi, selectedLineCode]);
+  }, [selectedPi, selectedLineCode, workspacePis, joint]);
   const importedMatchCodes = new Set<string>();
   if (importPreview?.mode === "pi_vin_fill" && !importPreview.removeVins && importPreview.piCode === selectedPi?.header.piCode) {
     const vehiclesByCode = new Map(vinPasteScopeVehicles.map((vehicle) => [vehicle.carCode, vehicle]));
@@ -345,14 +353,6 @@ export function OrderGeniusVehicleAllocationPage() {
         || (a.version ?? "").localeCompare(b.version ?? "") || (a.bom ?? "").localeCompare(b.bom ?? "")
         || (a.materialCode ?? "").localeCompare(b.materialCode ?? "") || a.carCode.localeCompare(b.carCode));
   }, [vinPasteScopeVehicles, filters.country, filters.keyword, filters.carCode, batchVins]);
-  const pivotGroups = new Map<string, { count: number; vin: number; ready: number }>();
-  for (const vehicle of vinPasteScopeVehicles) {
-    const key = display(vehicle[pivotBy]);
-    const group = pivotGroups.get(key) ?? { count: 0, vin: 0, ready: 0 };
-    group.count += 1; group.vin += vehicle.vin ? 1 : 0;
-    group.ready += vehicle.logisticsStatus === "ready_for_pickup" ? 1 : 0;
-    pivotGroups.set(key, group);
-  }
 
   const tableSummary = useMemo(() => {
     const vinMissing = vinPasteScopeVehicles.filter((item) => !item.vin).length;
@@ -479,6 +479,7 @@ export function OrderGeniusVehicleAllocationPage() {
   const authorizationKey = JSON.stringify([user?.username, user?.role, user?.primaryCountry, user?.secondaryCountries, user?.brands]);
   useEffect(() => {
     piRequest.current += 1;
+    setWorkspaceCodes([]); setWorkspacePis([]); setInspection(null);
     clearScopeEdits();
     setSelectedPi(null);
     setSelectedLineCode("");
@@ -548,6 +549,7 @@ export function OrderGeniusVehicleAllocationPage() {
   }
 
   function setPiVehicleScope(detail: PiOrderDetail, lineCode: string | null): void {
+    setWorkspaceCodes([]); setWorkspacePis([]); setInspection(null);
     setSelectedPi(detail);
     setSelectedLineCode(lineCode);
     setFilters((current) => ({
@@ -670,6 +672,29 @@ export function OrderGeniusVehicleAllocationPage() {
     } finally { if (request === piRequest.current) setPiLoading(false); }
   }
 
+  async function readWorkspace(codes: string[]): Promise<void> {
+    if (mutationBusy) return;
+    const request = ++piRequest.current;
+    setWorkspaceCodes(codes); setWorkspacePis([]); setSelectedPi(null); setSelectedLineCode(null);
+    setImportPreview(null); setEditorTargets([]); setInspection(null); setLinesOpen(false);
+    setFilters((current) => ({ ...current, country: "", piCode: undefined, piLineCode: undefined }));
+    setPiLoading(Boolean(codes.length)); setError(null);
+    if (!codes.length) { clearSelection(); return; }
+    try {
+      const details = await Promise.all(codes.map((code) => api.getVehicleAllocationPi(code)));
+      if (request !== piRequest.current) return;
+      setWorkspacePis(details);
+      if (details.length === 1) setSelectedPi(details[0]);
+      const eligible = new Set(details.flatMap((pi) => pi.vehicles.map((v) => v.carCode)));
+      setSelectedCarCodes((previous) => new Set([...previous].filter((code) => eligible.has(code))));
+    } catch (reason: unknown) {
+      if (request === piRequest.current) {
+        clearSelection();
+        setError(actionableError(reason, "Could not read all selected PIs; no partial result. Re-read / 联合范围读取失败，未显示部分结果，请重读或取消失效PI。"));
+      }
+    } finally { if (request === piRequest.current) setPiLoading(false); }
+  }
+
   async function searchCocLibrary(): Promise<void> {
     if (!selectedPi || cocBusy) return;
     const request = cocRequest.current;
@@ -744,6 +769,7 @@ export function OrderGeniusVehicleAllocationPage() {
 
   function selectVehicle(vehicle: PiVehicleUnit): void {
     if (scopeBusy) return;
+    if (joint) { setNotice("Choose a single PI before editing / 联合查看只读，请点击具体PI进入修改。"); return; }
     setEditorTargets([vehicle]);
     setActiveToolTab("status");
     setToolDrawerOpen(true);
@@ -799,16 +825,19 @@ export function OrderGeniusVehicleAllocationPage() {
     setFilters({ country: filters.country, piCode: selectedPi?.header.piCode, piLineCode: selectedLineCode ?? undefined, page: 1, pageSize });
   }
 
-  async function exportCurrentView(): Promise<void> {
-    if (!selectedPi || scopeBusy || exporting) return;
+  async function exportCurrentView(selectedOnly = false, pivot?: VehiclePivotConfig, source?: PiVehicleUnit[]): Promise<void> {
+    if ((!selectedPi && !joint) || scopeBusy || exporting || (joint && workspacePis.length !== workspaceCodes.length)) return;
     setExporting(true);
     setError(null);
     try {
       const view = gridView.current;
-      if (!view.vehicles.length || !view.columns.length) { setError("Nothing visible to export / 当前无可导出内容"); return; }
-      const blob = await api.exportVehicleAllocation({ country: filters.country, piCode: selectedPi?.header.piCode, piLineCode: selectedLineCode ?? undefined, columns: view.columns, carCodes: view.vehicles.map((vehicle) => vehicle.carCode) });
+      const vehicles = source ?? (selectedOnly ? vinPasteScopeVehicles.filter((v) => selectedCarCodes.has(v.carCode)) : view.vehicles);
+      if (!vehicles.length || !view.columns.length) { setError("Nothing visible to export / 当前无可导出内容"); return; }
+      const blob = await api.exportVehicleAllocation({ country: selectedOnly || pivot ? undefined : filters.country,
+        piCodes: joint ? workspaceCodes : undefined, piCode: selectedPi?.header.piCode,
+        piLineCode: selectedLineCode ?? undefined, columns: view.columns, carCodes: vehicles.map((vehicle) => vehicle.carCode), pivot });
       const country = filters.country || "ALL";
-      buildDownload(blob, `Vehicle_Allocation_${country}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      buildDownload(blob, `Vehicle_${pivot ? "Pivot" : selectedOnly ? "Selected" : "Allocation"}_${country}_${new Date().toISOString().slice(0, 10)}.xlsx`);
     } catch (err: unknown) {
       setError(actionableError(err, "Export failed. Check view filters and retry / 导出未完成，请核对查看筛选后重试。"));
     } finally {
@@ -843,7 +872,7 @@ export function OrderGeniusVehicleAllocationPage() {
           {error ? <div className="va-button-row">
             <button type="button" disabled={scopeBusy} onClick={() => {
               setRefreshKey((key) => key + 1);
-              if (selectedPi) void selectPi(selectedPi.header.piCode);
+              if (workspaceCodes.length) void readWorkspace(workspaceCodes); else if (selectedPi) void selectPi(selectedPi.header.piCode);
             }}>Re-read PI / 重新读取 PI</button>
             <a href="/product/order-genius">Check selection / 核对选品</a>
           </div> : null}
@@ -865,7 +894,7 @@ export function OrderGeniusVehicleAllocationPage() {
         onOpenChange={setToolDrawerOpen}
         triggerPrimary="PI Tools"
         triggerSecondaryOpen="Close tools"
-        triggerSecondaryClosed={selectedPi ? `${selectedPi.summary.totalUnits ?? 0} vehicles` : "Open tools"}
+        triggerSecondaryClosed={checkedPiCodes.length ? `${vinPasteScopeVehicles.length} vehicles` : "Open tools"}
         eyebrow="Order Genius"
         ariaLabel="PI vehicle allocation tools"
         closeLabel="Close"
@@ -943,7 +972,7 @@ export function OrderGeniusVehicleAllocationPage() {
               <VehicleStatusBoard scopeLabel={activeScopeLabel} vehicles={vinPasteScopeVehicles} statusFlow={statusFlow} />
             </details>
             {error ? <p role="alert">{error}<button type="button" disabled={scopeBusy} onClick={() => selectedPi && void selectPi(selectedPi.header.piCode)}>Re-read PI</button></p> : null}
-            {editorTargets.length ? <VehicleAllocationEditor key={editorTargets.map((vehicle) => vehicle.carCode).join("|")} vehicles={editorTargets} readOnly={!canEdit} busy={scopeBusy} allocationOptions={allocationStatusOptions} logisticsOptions={logisticsStatusOptions} onSave={saveEditor} /> : <p>Select vehicle rows, then choose Update selected status. / 请明确勾选车辆后更新；不会自动修改整批 PI。</p>}
+            {editorTargets.length ? <VehicleAllocationEditor key={editorTargets.map((vehicle) => vehicle.carCode).join("|")} vehicles={editorTargets} readOnly={!canEdit || joint} busy={scopeBusy} allocationOptions={allocationStatusOptions} logisticsOptions={logisticsStatusOptions} onSave={saveEditor} /> : <p>Select vehicle rows, then choose Update selected status. / 请明确勾选车辆后更新；不会自动修改整批 PI。</p>}
           </> : null}
           {activeToolTab === "view" ? (
             <>
@@ -955,7 +984,7 @@ export function OrderGeniusVehicleAllocationPage() {
                   <option value="global">Global matches / 全局匹配</option><option value="filtered">Filtered matches / 当前筛选匹配</option>
                 </select></label>
                 <div className="va-button-row">
-                  <button type="button" disabled={!selectedPi || scopeBusy} onClick={searchVinBatch}>Search VIN batch / 搜索 VIN</button>
+                  <button type="button" disabled={!checkedPiCodes.length || scopeBusy} onClick={searchVinBatch}>Search VIN batch / 搜索 VIN</button>
                   <button type="button" disabled={!(vinSelectionScope === "global" ? batchMatches : filteredMatches).length || scopeBusy} onClick={() => {
                     const eligible = vinSelectionScope === "global" ? batchMatches : filteredMatches;
                     changeSelection(new Set(eligible.map((vehicle) => vehicle.carCode)));
@@ -979,17 +1008,10 @@ export function OrderGeniusVehicleAllocationPage() {
                   setVisibleColumnKeys(new Set(DEFAULT_COLUMNS)); setGridResetKey((value) => value + 1);
                 }}>Reset columns & filters / 重置列与筛选</button>
               </fieldset>
-              <LoadingActionButton disabled={!selectedPi || scopeBusy} loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出所见</LoadingActionButton>
+              <LoadingActionButton disabled={!checkedPiCodes.length || scopeBusy} loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出所见</LoadingActionButton>
               <button type="button" className="btn-secondary" disabled={!selectedPi || scopeBusy}
                 onClick={() => setShowInvoiceExport(true)}>Export PI</button>
-              <details className="va-pivot"><summary>PI pivot summary / 整批透视摘要</summary>
-                <p>Whole PI/line, not the current page or view filters / 当前 PI 或明细范围，不是分页或筛选后数量</p>
-                <select aria-label="Pivot by" value={pivotBy} onChange={(event) => {
-                  const value = event.target.value;
-                  if (value === "modelName" || value === "materialCode" || value === "logisticsStatus" || value === "countryCode") setPivotBy(value);
-                }}><option value="modelName">Model / 车型</option><option value="materialCode">Material / 物料</option><option value="logisticsStatus">Logistics / 物流</option><option value="countryCode">Country / 国家</option></select>
-                <table><thead><tr><th>Group / 分组</th><th>Units / 台</th><th>VIN</th><th>Ready for pickup / 可提车</th></tr></thead><tbody>{[...pivotGroups].map(([key, group]) => <tr key={key}><td>{key}</td><td>{group.count}</td><td>{group.vin}</td><td>{group.ready}</td></tr>)}</tbody></table>
-              </details>
+              <button type="button" onClick={() => { setAnalysisView("pivot"); setToolDrawerOpen(false); }}>Open pivot / 打开透视</button>
             </>
           ) : null}
         </div>
@@ -1065,8 +1087,12 @@ export function OrderGeniusVehicleAllocationPage() {
               ) : null}
             </div>
             <a className="va-selection-link" href="/product/order-genius">Create PI in Order Genius</a>
+            <label><input type="checkbox" checked={onlySelectedPis} onChange={(event) => setOnlySelectedPis(event.target.checked)} /> Selected PIs only / 只看已选PI</label>
             <div className="va-pi-list">
-              {piHeaders.map((pi) => (
+              {(onlySelectedPis ? [...new Map([...(selectedPi ? [selectedPi.header] : []), ...workspacePis.map((pi) => pi.header)].map((pi) => [pi.piCode, pi])).values()] : piHeaders).map((pi) => (
+                <div key={pi.piCode} className="va-pi-choice">
+                <input type="checkbox" aria-label={`Include ${pi.piCode}`} checked={checkedPiCodes.includes(pi.piCode)} disabled={scopeBusy}
+                  onChange={(event) => void readWorkspace(event.target.checked ? [...checkedPiCodes, pi.piCode] : checkedPiCodes.filter((code) => code !== pi.piCode))} />
                 <button
                   type="button"
                   key={pi.piCode}
@@ -1078,6 +1104,7 @@ export function OrderGeniusVehicleAllocationPage() {
                   <span>{pi.piCode}</span>
                   <small>{display(pi.officialPiNo)} · {display(pi.orderingAccountCode)} · {marketCountriesText(pi)} · {statusText(pi.status)}</small>
                 </button>
+                </div>
               ))}
             </div>
             {piHeaderTotal > 50 ? (
@@ -1146,6 +1173,16 @@ export function OrderGeniusVehicleAllocationPage() {
           ) : null}
         </aside>
         <main className="va-main">
+          <section className="va-pi-detail" aria-label="PI workspace">
+            <strong>{checkedPiCodes.length} PIs / 已选PI · {[...new Set(vinPasteScopeVehicles.map((v) => v.countryCode))].sort().join(" / ")} · {vinPasteScopeVehicles.length} vehicles / 台</strong>
+            <div className="va-button-row">
+              <button type="button" className="btn-secondary" disabled={scopeBusy || !checkedPiCodes.length} onClick={() => void readWorkspace([])}>Clear PIs / 清空PI</button>
+              <button type="button" className="btn-secondary" disabled={scopeBusy || !checkedPiCodes.length} onClick={() => void readWorkspace(checkedPiCodes)}>Re-read workspace / 重读联合范围</button>
+              <button type="button" className="btn-secondary" aria-pressed={analysisView === "details"} onClick={() => setAnalysisView("details")}>Details / 明细</button>
+              <button type="button" className="btn-secondary" aria-pressed={analysisView === "pivot"} onClick={() => setAnalysisView("pivot")}>Pivot / 透视</button>
+            </div>
+            {joint ? <small>Joint view is read-only. Click a PI to edit/import/export its invoice / 联合查看不合并订单；修改、补录或发票请点击具体PI。</small> : null}
+          </section>
           {selectedPi && (
             <section className="va-pi-detail">
               <div className="va-pi-title">
@@ -1192,12 +1229,22 @@ export function OrderGeniusVehicleAllocationPage() {
           {selectedCarCodes.size > 0 ? (
             <div className="va-selected-actions">
               <span>{selectedCarCodes.size} selected / 已勾选 · {selectedCarCodes.size - currentSelectedCount} outside current filters / 筛选外已选</span>
-              <button type="button" onClick={() => openPiTool("status")}>Update selected status / 更新勾选状态</button>
+              <button type="button" disabled={joint} onClick={() => openPiTool("status")}>Update selected status / 更新勾选状态</button>
+              <button type="button" disabled={scopeBusy || exporting} onClick={() => void exportCurrentView(true)}>Export selected {selectedCarCodes.size} / 导出勾选（含筛选外）</button>
               <button type="button" className="btn-secondary" onClick={clearSelection}>Clear selection / 清除勾选</button>
             </div>
           ) : null}
 
           {piLoading ? <p role="status">Loading PI / 正在读取 PI…</p> : null}
+          {analysisView === "pivot" ? <VehicleAnalysisPivot vehicles={vinPasteScopeVehicles}
+            filtered={vinPasteScopeVehicles.filter((v) => ordinaryCodes.has(v.carCode))} selected={selectedCarCodes} busy={scopeBusy || exporting}
+            onDrill={(codes) => { const wanted = new Set(codes); setInspection(vinPasteScopeVehicles.filter((v) => wanted.has(v.carCode))); }}
+            onExport={(vehicles, pivot) => void exportCurrentView(false, pivot, vehicles)} /> : null}
+          {inspection ? <section className="va-pivot-inspection" aria-label="Pivot source vehicles">
+            <strong>{inspection.length} source vehicles / 透视来源明细</strong><button type="button" onClick={() => setInspection(null)}>Close source / 关闭来源</button>
+            <table className="data-table"><thead><tr><th>PI</th><th>Country</th><th>Car Code</th><th>VIN</th><th>Material</th><th>FOB EUR</th></tr></thead><tbody>{inspection.map((v) => <tr key={v.carCode}><td>{v.piCode}</td><td>{v.countryCode}</td><td>{v.carCode}</td><td>{v.vin || "—"}</td><td>{v.materialCode}</td><td>{v.fobEur ?? "Missing / 缺失"}</td></tr>)}</tbody></table>
+          </section> : null}
+          <div style={{ display: analysisView === "details" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
           <VehicleAllocationGrid
             key={`${selectedPi?.header.piCode ?? ""}:${selectedLineCode ?? ""}:${filters.country ?? ""}`}
             filterScope={`${filters.keyword ?? ""}:${filters.carCode ?? ""}:${batchVins.join(",")}`}
@@ -1219,6 +1266,7 @@ export function OrderGeniusVehicleAllocationPage() {
               return status === "available" ? <button type="button" disabled={cocBusy} onClick={() => void downloadCocs([vehicle.carCode])}>PDF ↓</button> : status === "missing" ? "Missing / 缺 PDF" : status === "awaiting_vin" ? "Awaiting VIN / 待录" : "Search library / 查库";
             }}
           />
+          </div>
         </main>
       </div>
 
@@ -1271,6 +1319,16 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-pi-list button{background:#fff;color:#111827;border-color:#d8dee6;text-align:left;display:grid;gap:2px}
         .va-pi-list button.is-active{border-color:#1c69d4;background:#eef5ff}
         .va-pi-list small{color:#667085}
+        .va-pi-choice{display:flex;gap:8px;align-items:center;min-width:0}
+        .va-pi-choice > button{flex:1;min-width:0}
+        .va-pi-choice > input{width:16px;height:16px;flex:none}
+        [aria-label="PI workspace"] .va-button-row{display:flex;flex-wrap:wrap}
+        [aria-label="PI workspace"] button[aria-pressed="true"]{background:#1c69d4;color:white;border-color:#1c69d4}
+        .va-analysis-pivot{flex:1;min-height:0;overflow:auto;background:white;padding:12px;border:1px solid #d8dee6}
+        .va-analysis-pivot .va-button-row{display:flex;flex-wrap:wrap;align-items:end}
+        .va-analysis-pivot label{display:grid;gap:4px;min-width:150px}
+        .va-analysis-pivot th,.va-analysis-pivot td{padding:8px;white-space:nowrap}
+        .va-pivot-inspection{max-height:45vh;overflow:auto;background:#fff;padding:12px}
         .va-button-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
         .va-filters{display:grid;grid-template-columns:repeat(2,minmax(112px,1fr));gap:10px;padding:12px}
         .va-check{display:flex;align-items:center;gap:6px;min-height:38px;font-size:12px;color:#475467}
