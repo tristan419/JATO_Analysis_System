@@ -398,6 +398,7 @@ def test_month_export_includes_midmonth_release_even_if_month_end_is_stopped(db)
     assert ws["F3"].value == "S" and ws["M3"].value == 1000
     assert ws["N3"].value == "2026-10-01 → 2026-10-10"
     assert "Month-end status" in ws["K1"].value
+    assert ws.row_dimensions[1].height + ws.row_dimensions[2].height >= 80
     assert not any(row[5] == "D" for row in ws.iter_rows(min_row=3, values_only=True))
 
 

@@ -290,8 +290,8 @@ def _write_model_sheet(ws, items: list[dict], countries: list[str], reference_da
     for column in range(fixed_count + 1, fixed_count + len(countries) * stride + 1):
         ws.column_dimensions[get_column_letter(column)].width = 34 if monthly and (column - fixed_count) % stride == 0 else 18
 
-    ws.row_dimensions[1].height = 27
-    ws.row_dimensions[2].height = 26
+    ws.row_dimensions[1].height = 40 if monthly else 27
+    ws.row_dimensions[2].height = 40 if monthly else 26
     ws.freeze_panes = f"{get_column_letter(fixed_count + 1)}3"
     ws.sheet_view.showGridLines = False
     ws.page_setup.orientation = "landscape"
