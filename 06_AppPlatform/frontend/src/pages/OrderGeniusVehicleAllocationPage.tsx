@@ -315,6 +315,17 @@ export function OrderGeniusVehicleAllocationPage() {
       ? selectedPi.vehicles.filter((vehicle) => vehicle.piLineCode === selectedLineCode)
       : selectedPi.vehicles;
   }, [selectedPi, selectedLineCode]);
+  const importedMatchCodes = new Set<string>();
+  if (importPreview?.mode === "pi_vin_fill" && !importPreview.removeVins && importPreview.piCode === selectedPi?.header.piCode) {
+    const vehiclesByCode = new Map(vinPasteScopeVehicles.map((vehicle) => [vehicle.carCode, vehicle]));
+    for (const row of importPreview.previewRows) {
+      const vehicle = row.carCode ? vehiclesByCode.get(row.carCode) : undefined;
+      if (row.action === "skip" && row.errors.length === 0 && vehicle?.vin && (!filters.country || vehicle.countryCode === filters.country) &&
+          vehicle.vin.toUpperCase() === row.vin?.toUpperCase() && vehicle.materialCode === row.materialCode) {
+        importedMatchCodes.add(vehicle.carCode);
+      }
+    }
+  }
   const batchVinSet = new Set(batchVins);
   const batchMatches = vinPasteScopeVehicles.filter((vehicle) => (!filters.country || vehicle.countryCode === filters.country) && vehicle.vin && batchVinSet.has(vehicle.vin.toUpperCase()))
     .sort((a, b) => compareProductModels(a.brand ?? "", a.modelName ?? "", a.powertrain ?? "", b.brand ?? "", b.modelName ?? "", b.powertrain ?? "")
@@ -892,7 +903,7 @@ export function OrderGeniusVehicleAllocationPage() {
               <section className="va-tool-card">
                 <strong>BOM + VIN file import / 物料号与 VIN 文件导入</strong>
                 <p>{selectedPi ? `Whole PI: ${selectedPi.header.piCode} / 匹配整批 PI，不受所选明细或车辆页码限制。` : "Select a PI first / 请先选择 PI"}</p>
-                <p>BOM / Material Code + VIN; optional Car Code / Old VIN for correction. / 必填物料号和 VIN，纠错可加 Car Code 或 Old VIN。</p>
+                <p>BOM / Material Code / 物料号 + VIN; use complete material codes, not groups. / 物料号列填完整颜色物料号，不用“物料号组”；纠错可加 Car Code 或 Old VIN。</p>
                 <label className="va-check"><input type="checkbox" checked={removeVins} disabled={scopeBusy}
                   onChange={(event) => { setRemoveVins(event.target.checked); setImportPreview(null); }} />Remove these VINs from file / 按原文件清 VIN（先预览）</label>
                 <button type="button" disabled={scopeBusy || !selectedCarCodes.size} onClick={() => void previewSelectedVinRemoval()}>Clear selected VINs / 清勾选 VIN（先预览）</button>
@@ -905,6 +916,10 @@ export function OrderGeniusVehicleAllocationPage() {
                   <a href="/product/order-genius">Check order selection / 核对选品订单</a>
                 </div> : null}
                 <VehicleImportDigestPanel preview={importPreview} busy={scopeBusy}
+                  importedMatchCount={importedMatchCodes.size} onSelectImported={() => {
+                    changeSelection(importedMatchCodes);
+                    setNotice(`${importedMatchCodes.size} imported vehicles selected; VINs and filters unchanged / 已勾选已录车辆，不修改 VIN 或筛选；可用“只看勾选”查看。`);
+                  }}
                   onPickFile={() => { if (selectedPi) importInputRef.current?.click(); else setImportError("Select a PI before uploading / 请先选择目标 PI 再上传"); }}
                   onApply={applyVinFile} onClear={() => { setImportPreview(null); setImportError(null); }}
                   onTargetChange={(row, car) => void repreviewVinTargets(allowReplacing, row, car)} />

@@ -393,6 +393,48 @@ async function uploadVinFile() {
 }
 
 describe("PI-scoped BOM + VIN import", () => {
+  it("selects already imported vehicles beyond the displayed page without applying a VIN write", async () => {
+    const existing = vinPreview().previewRows[1];
+    const preview: VehicleImportPreview = { ...vinPreview(), updatedUnits: 0, filledUnits: 0, skippedUnits: 2,
+      previewRows: [existing, { ...existing, sourceRow: 4, carCode: "CAR-10", vin: vehicle(10).vin, oldVin: vehicle(10).vin }] };
+    vi.spyOn(api, "previewVehicleAllocationImport").mockResolvedValue(preview);
+    const apply = vi.spyOn(api, "applyVehicleAllocationImport");
+    await selectPi(); await uploadVinFile();
+    const select = await screen.findByRole("button", { name: "Select imported 2 / 勾选已录车辆" });
+    const digest = select.closest<HTMLElement>(".vehicle-import-digest-panel");
+    if (!digest) throw new Error("Import digest not found");
+    expect(within(digest).getByRole("button", { name: "Apply 0" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(select);
+    await screen.findByText(/2 imported vehicles selected; VINs and filters unchanged/);
+    expect((screen.getByRole("checkbox", { name: "Select CAR-0" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText("2 selected / 已勾选 · 0 outside current filters / 筛选外已选")).toBeTruthy();
+    expect(apply).not.toHaveBeenCalled();
+    expect(api.bulkUpdateVehicleAllocationVehicles).not.toHaveBeenCalled();
+  });
+
+  it("selects only current unambiguous imported matches, excluding fill, conflict and changed VIN rows", async () => {
+    const existing = vinPreview().previewRows[1];
+    vi.spyOn(api, "previewVehicleAllocationImport").mockResolvedValue({ ...vinPreview(), status: "error", errors: ["Conflict"],
+      previewRows: [...vinPreview().previewRows,
+        { ...existing, sourceRow: 4, carCode: "CAR-1", action: "conflict", vin: vehicle(1).vin, errors: ["Conflict"] },
+        { ...existing, sourceRow: 5, carCode: "CAR-2", vin: vehicle(3).vin },
+        { ...existing, sourceRow: 6 },
+      ] });
+    await selectPi(); await uploadVinFile();
+    fireEvent.click(await screen.findByRole("button", { name: "Select imported 1 / 勾选已录车辆" }));
+    await screen.findByText(/1 imported vehicles selected; VINs and filters unchanged/);
+    expect((screen.getByRole("checkbox", { name: "Select CAR-1" }) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole("checkbox", { name: "Select CAR-2" }) as HTMLInputElement).checked).toBe(false);
+    expect(api.bulkUpdateVehicleAllocationVehicles).not.toHaveBeenCalled();
+  });
+
+  it("does not offer imported selection for a VIN-removal preview", async () => {
+    vi.spyOn(api, "previewVehicleAllocationImport").mockResolvedValue({ ...vinPreview(), removeVins: true });
+    await selectPi(); await uploadVinFile();
+    await screen.findByText("Clear VIN preview / 清 VIN 预览");
+    expect(screen.queryByRole("button", { name: /Select imported/ })).toBeNull();
+  });
+
   it("previews selected VIN removal and does not apply a cancelled clear", async () => {
     const removal = { ...vinPreview(), removeVins: true, removedUnits: 1, filledUnits: 0, skippedUnits: 0,
       previewRows: [{ ...vinPreview().previewRows[0], action: "remove" as const }] };

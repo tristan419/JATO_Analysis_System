@@ -17,6 +17,7 @@ HEADER_MAP = {
     "old vin": "old_vin",
     "bom": "bom",
     "material code": "material_code",
+    "物料号": "material_code",
     "brand": "brand",
     "model": "model_name",
     "model name": "model_name",
@@ -53,7 +54,7 @@ def parse_vehicle_allocation_xlsx(file_path: Path, *, vin_fill: bool = False) ->
         ws = wb[wb.sheetnames[0]]
         header_row = _find_header_row(ws, vin_fill=vin_fill)
         if header_row is None:
-            raise ValueError("Use BOM / Material Code + VIN headers / 请提供 BOM 或 Material Code 与 VIN 表头" if vin_fill else "Missing PI vehicle allocation headers")
+            raise ValueError("Use BOM / Material Code / 物料号 + VIN headers / 请提供完整物料号与 VIN 表头，不使用物料号组" if vin_fill else "Missing PI vehicle allocation headers")
         header_map = _header_map(ws, header_row)
         rows: list[dict[str, Any]] = []
         for row_idx in range(header_row + 1, ws.max_row + 1):
@@ -97,7 +98,7 @@ def _find_header_row(ws, *, vin_fill: bool = False) -> int | None:
             str(ws.cell(row=row_idx, column=col_idx).value or "").strip().lower()
             for col_idx in range(1, ws.max_column + 1)
         }
-        if vin_fill and "vin" in values and values.intersection({"bom", "material code"}):
+        if vin_fill and "vin" in values and any(HEADER_MAP.get(value) in {"bom", "material_code"} for value in values):
             return row_idx
         if not vin_fill and "pi code" in values and ("car code" in values or "vin" in values):
             return row_idx
