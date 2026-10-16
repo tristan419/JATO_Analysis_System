@@ -1464,7 +1464,8 @@ def update_remark(
 # ── Export ─────────────────────────────────────────────────────────────
 
 
-def prepare_bom_export_rows(session: Session, items: list[dict], countries: list[str], reference_date: date) -> list[dict]:
+def prepare_bom_export_rows(session: Session, items: list[dict], countries: list[str], reference_date: date,
+                            *, whole_month: bool = False) -> list[dict]:
     """Project saved and month prices through the existing sale-day resolver."""
     skus = {sku.material_code: sku for sku in repo.list_all_material_skus_for_admin(session, limit=None)}
     periods = session.execute(select(CountryTemplateFobPeriod).where(
@@ -1487,7 +1488,7 @@ def prepare_bom_export_rows(session: Session, items: list[dict], countries: list
             schedule = schedules.get((country, sku.bom_template), [])
             current = next((period for period in schedule if period.valid_from <= reference_date
                             and (period.valid_to is None or period.valid_to >= reference_date)), None)
-            if current is not None and (float(current.base_fob_eur) <= 0 or not repo.is_colour_released(current, sku)):
+            if not whole_month and current is not None and (float(current.base_fob_eur) <= 0 or not repo.is_colour_released(current, sku)):
                 continue
             saved = fobs[country].get(sku.material_code)
             quote = resolve_month_effective_fob(
@@ -1500,16 +1501,16 @@ def prepare_bom_export_rows(session: Session, items: list[dict], countries: list
             if historical and not quote["isEditable"] and quote["status"] in {"stopped", "colour_not_released"}:
                 continue
             if not historical and (lifecycle not in {"active", "phase_out"} or not quote["isEditable"]
-                                   or not any(r["from"] <= reference_date.isoformat() <= r["to"] for r in quote["availableRanges"])):
+                                   or (not whole_month and not any(r["from"] <= reference_date.isoformat() <= r["to"] for r in quote["availableRanges"]))):
                 continue
-            default = float(saved.final_fob_eur) if saved is not None else None
+            default = float(saved.final_fob_eur) if saved is not None and float(saved.final_fob_eur) > 0 else None
             month = quote["fobEur"] if quote["isEditable"] else None
             if default is None and month is None:
                 continue
             prices[country] = {"savedFobEur": default, "monthFobEur": month,
                                "status": "historical" if historical else "ready",
                                "availableRanges": quote["availableRanges"]}
-        result.append({**item, "lifecycleStatus": lifecycle, "exportPricesByCountry": prices})
+        result.append({**item, "lifecycleStatus": lifecycle, "exportPricesByCountry": prices, "exportWholeMonth": whole_month})
     return result
 
 

@@ -7,6 +7,7 @@ import { api } from "../../api/client";
 import { OrderGeniusVehicleAllocationPage } from "../../pages/OrderGeniusVehicleAllocationPage";
 import type { PiOrderDetail, PiOrderLine, PiVehicleUnit, VehicleImportPreview } from "../../types/orderGeniusVehicle";
 import { matchesVehicleText, VEHICLE_COLUMNS, VEHICLE_TEXT_FIELDS } from "../../components/vehicleAllocationFields";
+import { VehicleAnalysisPivot, buildVehiclePivot } from "../../components/VehicleAnalysisPivot";
 
 // Multi-step full-page workflows exceed 5 seconds on the shared CI runner.
 vi.setConfig({ testTimeout: 15_000 });
@@ -15,6 +16,7 @@ const testRole = vi.hoisted(() => ({ value: "admin", secondaryCountries: [] as s
 vi.mock("../../contexts/AuthContext", () => ({ useAuth: () => ({ user: { role: testRole.value, brands: ["OMODA", "JAECOO"], primaryCountry: "CH", secondaryCountries: testRole.secondaryCountries } }) }));
 vi.mock("../../hooks/useAccountCountryOptions", () => ({ useAccountCountryOptions: () => ({ countryOptions: [] }) }));
 vi.mock("../../components/CommandSelect", () => ({
+  CommandMultiSelect: (props: { selected: string[]; placeholder: string; options: Array<{ value: string; label: string }>; onChange: (value: string[]) => void }) => <select multiple aria-label={props.placeholder} value={props.selected} onChange={(e) => props.onChange([...e.target.selectedOptions].map((option) => option.value))}>{props.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>,
   CommandSelect: (props: { value: string; placeholder: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) => (
     <select aria-label={props.placeholder} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
       <option value="">{props.placeholder}</option>
@@ -110,6 +112,57 @@ async function selectPi() {
   await screen.findByText("150 units / 台");
   await waitFor(() => expect(screen.getAllByRole("row").length).toBe(6));
 }
+
+it("retains cross-country/month PI choices and exports the whole selected set then prunes removed PI vehicles", async () => {
+  const otherCode = "PI-SE-202610-001";
+  const other = detail();
+  other.header = { ...other.header, piCode: otherCode, countryCode: "SE", orderMonth: "2026-10" };
+  other.vehicles = other.vehicles.map((v, index) => ({ ...v, carCode: `CAR-SE-${index}`, piCode: otherCode, piLineCode: `${otherCode}-L01`, countryCode: "SE", vin: null }));
+  vi.mocked(api.getVehicleAllocationPis).mockResolvedValue({ items: [detail().header, other.header], total: 2 });
+  vi.mocked(api.getVehicleAllocationPi).mockImplementation(async (code) => code === PI ? detail() : other);
+  const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:export"; static revokeObjectURL = vi.fn(); });
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  await selectPi();
+  fireEvent.click(screen.getByRole("checkbox", { name: `Include ${otherCode}` }));
+  await waitFor(() => expect(screen.getByRole("region", { name: "PI workspace" }).textContent).toContain("300 vehicles"));
+  fireEvent.click(screen.getByRole("button", { name: "Oct 2026" }));
+  expect(screen.getByRole("region", { name: "PI workspace" }).textContent).toContain("2 PIs");
+  fireEvent.click(screen.getByLabelText("Select filtered vehicles"));
+  fireEvent.click(screen.getByRole("button", { name: /Export selected 300/ }));
+  await waitFor(() => expect(download).toHaveBeenCalled());
+  expect(download.mock.calls[0][0]?.piCodes).toEqual([PI, otherCode]);
+  expect(download.mock.calls[0][0]?.carCodes).toHaveLength(300);
+  expect((screen.getByRole("button", { name: "Update selected status / 更新勾选状态" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("checkbox", { name: `Include ${PI}` }));
+  await waitFor(() => expect(screen.getByRole("button", { name: /Export selected 150/ })).toBeTruthy());
+  expect(api.bulkUpdateVehicleAllocationVehicles).not.toHaveBeenCalled();
+});
+
+it("never displays a successful subset when one PI in the joint read fails", async () => {
+  const other = { ...detail().header, piCode: "PI-SE-202610-001", countryCode: "SE" };
+  vi.mocked(api.getVehicleAllocationPis).mockResolvedValue({ items: [detail().header, other], total: 2 });
+  vi.mocked(api.getVehicleAllocationPi).mockImplementation(async (code) => { if (code === other.piCode) throw new Error("Forbidden"); return detail(); });
+  await selectPi();
+  fireEvent.click(screen.getByRole("checkbox", { name: `Include ${other.piCode}` }));
+  await screen.findByText(/联合范围读取失败/);
+  expect(screen.getByRole("region", { name: "PI workspace" }).textContent).toContain("0 vehicles");
+  expect(screen.queryByRole("cell", { name: "CAR-1" })).toBeNull();
+});
+
+it("cross-tabulates the complete source and selected subset with exact source drilldown", () => {
+  const source = Array.from({ length: 150 }, (_, index) => vehicle(index));
+  expect([...buildVehiclePivot([...source, source[0]], { rows: ["countryCode"], column: "modelName", measure: "units" }).values()].flatMap((row) => [...row.values()]).flat()).toHaveLength(150);
+  const drill = vi.fn(), output = vi.fn();
+  render(<VehicleAnalysisPivot vehicles={source} filtered={source.slice(0, 10)} selected={new Set(source.slice(120).map((v) => v.carCode))} busy={false} onDrill={drill} onExport={output} />);
+  expect(screen.getByRole("status").textContent).toContain("10 vehicles");
+  fireEvent.change(screen.getByLabelText("Pivot scope"), { target: { value: "selected" } });
+  expect(screen.getByRole("status").textContent).toContain("30 vehicles");
+  fireEvent.click(screen.getAllByRole("button", { name: "30" })[0]);
+  expect(drill.mock.calls[0][0]).toHaveLength(30);
+  fireEvent.click(screen.getByRole("button", { name: /Export pivot/ }));
+  expect(output.mock.calls[0][0]).toHaveLength(30);
+});
 
 it("updates only the page geometry variable on viewport resize", async () => {
   await selectPi();

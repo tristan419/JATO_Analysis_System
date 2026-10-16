@@ -4053,7 +4053,7 @@ export function BomAdminPanel({
   const [bomExportCountry, setBomExportCountry] = useState("");
   const [bomExportDate, setBomExportDate] = useState(() => {
     const today = new Date();
-    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
   });
   const [exportingBomAdmin, setExportingBomAdmin] = useState(false);
   const [bomExportStatus, setBomExportStatus] = useState("");
@@ -7114,10 +7114,10 @@ export function BomAdminPanel({
                     <button className="btn btn-sm btn-primary" type="button" disabled={exportingBomAdmin || !bomExportDate} onClick={() => void handleBomAdminExport()}>
                       {exportingBomAdmin ? "Exporting..." : "Export material workbook"}
                     </button>
-                    <label>Reference date / 参考日期<input type="date" value={bomExportDate} onChange={(event) => setBomExportDate(event.target.value)} required /></label>
+                    <label>Export month / 导出年月<input type="month" value={bomExportDate} onChange={(event) => setBomExportDate(event.target.value)} required /></label>
                   </div>
                   <div style={{ marginTop: 7, fontSize: 9, lineHeight: 1.35, color: "#64748b" }}>
-                    Saved and month FOB are separate. Unpriced/unreleased colours are omitted; Historical reference prices are struck through. / 长期价与当月价分列；无价/未释放不导出，历史参考价划线。
+                    Whole-month availability with exact dates; month-end lifecycle is labelled. / 按整月可售区间导出并列适用日期；月末历史状态参考价划线，无价/全月未释放不导出。
                   </div>
                   {bomExportStatus ? (
                     <div style={{ marginTop: 7, fontSize: 11, color: bomExportStatus.startsWith("Exported") ? "#0f766e" : "#dc2626", fontWeight: 600 }}>

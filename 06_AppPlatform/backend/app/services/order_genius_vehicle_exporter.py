@@ -14,6 +14,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from app.core.config import COC_MATCH_JOB_ROOT
+from app.services.bom_admin_export_service import _normalise_font_xml_order
 
 # Private business documents live with existing slot-scoped operations data,
 # never in the public source tree or an immutable release directory.
@@ -69,7 +70,7 @@ COLUMN_LABELS = dict(zip([
     "dealerCode", "dealerName", "customerRef", "allocationStatus", "logisticsStatus", "readyForPickupDate",
     "shippingScheduleUrl", "feishuTrackingUrl", "remark",
 ], HEADERS))
-COLUMN_LABELS.update({"config": "Config", "fobEur": "FOB (EUR)", "cocPdf": "COC PDF",
+COLUMN_LABELS.update({"config": "Config", "fobEur": "FOB (EUR)", "cocPdf": "COC PDF", "orderMonth": "Order month",
                       "freightEur": "Freight / 运费 (EUR)", "insuranceEur": "Insurance / 保费 (EUR)",
                       "actualDepartureDate": "Actual departure", "actualArrivalDate": "Actual arrival",
                       "piCode": "PI", "materialCode": "Material", "exteriorColorName": "Exterior",
@@ -132,6 +133,10 @@ def generate_vehicle_allocation_excel(vehicles: list[dict], columns: list[str] |
             cell.border = THIN_BORDER
 
     ws.freeze_panes = "A2"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(1, len(vehicles) + 1)}"
     for col_idx, header in enumerate(headers, 1):
         width = max(12, min(28, len(header) + 4))
@@ -140,7 +145,7 @@ def generate_vehicle_allocation_excel(vehicles: list[dict], columns: list[str] |
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
-    return output
+    return _normalise_font_xml_order(output)
 
 
 def _excel_value(value: object) -> object:
@@ -151,6 +156,81 @@ def _excel_value(value: object) -> object:
     if isinstance(value, date):
         return value.isoformat()
     return value
+
+
+def generate_vehicle_pivot_excel(vehicles: list[dict], config: dict) -> io.BytesIO:
+    """Export the authorized source set plus formula-driven cross-tab; no repricing."""
+    dimensions = {"countryCode", "piCode", "orderMonth", "modelName", "version", "materialCode",
+                  "exteriorColorName", "allocationStatus", "logisticsStatus"}
+    rows, column, measure = config.get("rows"), config.get("column"), config.get("measure")
+    if (not isinstance(rows, list) or not rows or len(rows) > len(dimensions)
+            or any(not isinstance(key, str) or key not in dimensions for key in rows)
+            or len(rows) != len(set(rows)) or not isinstance(column, str) or column not in dimensions
+            or not isinstance(measure, str) or measure not in {"units", "vin", "missingVin", "allocated", "ready", "fob"}):
+        raise ValueError("Invalid pivot dimensions/measure / 透视维度或指标无效")
+    vehicles = list({v["carCode"]: v for v in vehicles}.values())
+    if not vehicles:
+        raise ValueError("No vehicles for pivot / 无可透视车辆")
+    row_keys = sorted({tuple(str(v.get(key) or "—") for key in rows) for v in vehicles})
+    col_keys = sorted({str(v.get(column) or "—") for v in vehicles})
+    if len(row_keys) > 1000 or len(col_keys) > 100:
+        raise ValueError("Pivot too large; narrow filters / 透视组合过多，请收窄筛选")
+    row_ids = {key: i for i, key in enumerate(row_keys, 1)}
+    col_ids = {key: i for i, key in enumerate(col_keys, 1)}
+    source_columns = list(dict.fromkeys(["carCode", "piCode", "countryCode", *rows, column,
+                                       "vin", "fobEur", "allocationStatus", "logisticsStatus"]))
+    wb = openpyxl.load_workbook(generate_vehicle_allocation_excel(vehicles, source_columns))
+    source = wb.worksheets[0]; source.title = "Source vehicles"
+    metric_col = source.max_column + 3
+    source.cell(1, metric_col - 2, "Row group"); source.cell(1, metric_col - 1, "Column group")
+    source.cell(1, metric_col, f"Metric: {measure}")
+    totals: dict[tuple[int, int], Decimal] = {}
+    for index, vehicle in enumerate(vehicles, 2):
+        r = row_ids[tuple(str(vehicle.get(key) or "—") for key in rows)]
+        c = col_ids[str(vehicle.get(column) or "—")]
+        value = {"units": 1, "vin": int(bool(vehicle.get("vin"))), "missingVin": int(not vehicle.get("vin")),
+                 "allocated": int(vehicle.get("allocationStatus") == "allocated"),
+                 "ready": int(vehicle.get("logisticsStatus") == "ready_for_pickup"),
+                 "fob": vehicle.get("fobEur") or 0}[measure]
+        source.cell(index, metric_col - 2, r); source.cell(index, metric_col - 1, c)
+        source.cell(index, metric_col, value)
+        totals[r, c] = totals.get((r, c), Decimal(0)) + Decimal(str(value))
+    ws = wb.create_sheet("Pivot", 0)
+    ws.append([*rows, *[_excel_value(key) for key in col_keys], "Total"])
+    cached = {}
+    metric, row_col, col_col = (get_column_letter(metric_col - delta) for delta in (0, 2, 1))
+    last = max(2, len(vehicles) + 1)
+    for r, labels in enumerate(row_keys, 1):
+        ws.append([_excel_value(label) for label in labels])
+        for c in range(1, len(col_keys) + 1):
+            cell = ws.cell(r + 1, len(rows) + c,
+                f"=SUMIFS('Source vehicles'!${metric}$2:${metric}${last},'Source vehicles'!${row_col}$2:${row_col}${last},{r},'Source vehicles'!${col_col}$2:${col_col}${last},{c})")
+            cached[cell.coordinate] = totals.get((r, c), Decimal(0))
+        cell = ws.cell(r + 1, len(rows) + len(col_keys) + 1,
+                       f"=SUM({get_column_letter(len(rows) + 1)}{r + 1}:{get_column_letter(len(rows) + len(col_keys))}{r + 1})")
+        cached[cell.coordinate] = sum(totals.get((r, c), Decimal(0)) for c in range(1, len(col_keys) + 1))
+    total_row = len(row_keys) + 2
+    ws.cell(total_row, 1, "Total")
+    for c in range(len(rows) + 1, len(rows) + len(col_keys) + 2):
+        cell = ws.cell(total_row, c, f"=SUM({get_column_letter(c)}2:{get_column_letter(c)}{total_row - 1})")
+        cached[cell.coordinate] = sum(cached.get(f"{get_column_letter(c)}{r}", 0) for r in range(2, total_row))
+    ws.cell(total_row + 2, 1, f"{len(vehicles)} source vehicles; metric: {measure}; missing FOB: {sum(v.get('fobEur') is None for v in vehicles)}. Known amounts only; never repriced.")
+    ws.merge_cells(start_row=total_row + 2, start_column=1, end_row=total_row + 2, end_column=ws.max_column)
+    ws.row_dimensions[total_row + 2].height = 42
+    for sheet in (ws, source):
+        sheet.freeze_panes = "A2"; sheet.sheet_view.showGridLines = False
+        sheet.page_setup.orientation = "landscape"; sheet.page_setup.fitToWidth = 1; sheet.page_setup.fitToHeight = 0
+        sheet.sheet_properties.pageSetUpPr.fitToPage = True
+        for c in range(1, sheet.max_column + 1):
+            sheet.column_dimensions[get_column_letter(c)].width = 24
+        for row in sheet:
+            for cell in row:
+                cell.font = HEADER_FONT if cell.row == 1 else NORMAL_FONT
+                if cell.row == 1: cell.fill = HEADER_FILL
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+                if cell.data_type == "f": cell.number_format = '#,##0.00' if measure == "fob" else '#,##0'
+        sheet.row_dimensions[1].height = 36
+    return _normalise_font_xml_order(_save_invoice(wb, cached))
 
 
 def pi_invoice_context(detail: dict, template: dict | None = None) -> dict:

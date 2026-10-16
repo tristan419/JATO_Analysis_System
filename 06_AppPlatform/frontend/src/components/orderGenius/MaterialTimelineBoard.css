@@ -87,3 +87,22 @@
 .og-material-notice-summary > span, .og-material-notice-summary > label { font-size: 12px; }
 .og-material-notice > details { margin-top: 6px; font-size: 12px; }
 .og-material-notice > details p { margin: 4px 0; }
+.og-swimlane-axis{display:grid;grid-template-columns:245px minmax(0,1fr);height:48px;padding:10px 8px}
+.og-swimlane-axis>div{position:relative;margin-right:40px}
+.og-swimlane-axis span{position:absolute;transform:translateX(-50%);font-size:11px;white-space:nowrap}
+.og-swimlane-axis span:first-child{transform:none}.og-swimlane-axis span:last-child{transform:translateX(-100%)}
+.og-swimlane-body{display:grid;grid-template-columns:245px minmax(0,1fr);position:relative}
+.og-swimlane-labels,.og-swimlane-tracks{position:relative;min-width:0}
+.og-swimlane-tracks{margin-right:40px}
+.og-swimlane-trim{position:absolute;left:8px;font-size:12px;color:#334155}
+.og-swimlane-label{position:absolute;left:8px;right:12px;min-height:68px;display:grid;gap:3px;text-align:left;border:1px solid #d8dee6;border-left:4px solid;padding:7px;background:#f8fafc;border-radius:5px}
+.og-swimlane-label strong{font-size:12px;overflow-wrap:anywhere}.og-swimlane-label span,.og-swimlane-label small{font-size:10px}
+.og-swimlane-track{position:absolute;left:0;right:0;height:76px}
+.og-swimlane-baseline{position:absolute;top:25px;left:0;right:0;height:2px;background:#dce5ed}
+.og-swimlane-period{position:absolute;top:17px;height:16px;background:var(--og-timeline-powertrain);opacity:.3;border:0;border-radius:8px}
+.og-swimlane-period.is-historical{opacity:.16;border:1px dashed #64748b}
+.og-swimlane-pin{position:absolute;top:19px;width:14px;height:14px;padding:0;border:2px solid white;border-radius:50%;background:var(--og-timeline-powertrain);transform:translateX(-50%)}
+.og-swimlane-dates,.og-swimlane-relation{position:absolute;top:42px;left:0;padding:2px 4px;border:0;background:white;font-size:10px;color:#475569}
+.og-swimlane-relation{left:auto;right:0;max-width:50%;overflow-wrap:anywhere}
+.og-swimlane-wvta{position:absolute;left:0;right:0;height:22px;padding:1px 3px;border:0;background:#f1f5f9;text-align:left;font-size:10px;overflow:hidden}
+.og-swimlane-wvta i{position:absolute;top:0;height:100%;background:var(--og-timeline-powertrain);opacity:.15;pointer-events:none}

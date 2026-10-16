@@ -2257,6 +2257,15 @@ def export_bom_admin(
     """Export the managed BOM/material master as a human-readable XLSX."""
     country_code = clean_text(body.get("countryCode")).upper() or None
     reference_date = _parse_iso_date(body.get("referenceDate"), "referenceDate") or date.today()
+    reference_month = clean_text(body.get("referenceMonth"))
+    if reference_month:
+        try:
+            first = date.fromisoformat(reference_month + "-01")
+            reference_date = first.replace(day=monthrange(first.year, first.month)[1])
+        except ValueError as exc:
+            raise HTTPException(400, "referenceMonth must be YYYY-MM / 请选择有效年月") from exc
+        if body.get("referenceDate"):
+            raise HTTPException(400, "Choose referenceMonth or referenceDate, not both")
     if country_code is not None and len(country_code) != 2:
         raise HTTPException(status_code=400, detail="countryCode must be a two-letter code")
 
@@ -2264,7 +2273,8 @@ def export_bom_admin(
         validate_country_access(session, user.name, user.role, country_code)
     items, countries = repo.list_bom_with_fob(session, limit=5000, allowed_brands=ordering_brands(session, user),
                                              allowed_countries=ordering_countries(session, user))
-    items = prepare_bom_export_rows(session, items, [country_code] if country_code else countries, reference_date)
+    items = prepare_bom_export_rows(session, items, [country_code] if country_code else countries, reference_date,
+                                    whole_month=bool(reference_month))
     try:
         workbook = build_bom_admin_workbook(
             items,
@@ -2276,7 +2286,7 @@ def export_bom_admin(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     scope = country_code or "ALL"
-    file_name = f"BOM_Admin_Material_Master_{scope}.xlsx"
+    file_name = f"BOM_Admin_Material_Master_{scope}{'_' + reference_month if reference_month else ''}.xlsx"
     return StreamingResponse(
         workbook,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2342,10 +2352,13 @@ def post_wvta_reference(
 
 @router.get("/material-replacements")
 def get_material_replacements(
+    bom_template: str | None = Query(default=None, alias="bomTemplate"),
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
-    return replacement_catalog(session, ordering_brands(session, user))
+    if not bom_template:
+        raise HTTPException(400, "Choose a model base / 请从具体Model物料进入关联维护")
+    return replacement_catalog(session, ordering_brands(session, user), bom_template.strip().upper())
 
 
 @router.put("/material-replacements")

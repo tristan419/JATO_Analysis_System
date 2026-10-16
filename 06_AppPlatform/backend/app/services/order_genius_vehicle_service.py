@@ -16,7 +16,7 @@ from app.db.models import PiOrderHeader, PiOrderLine, PiOrderLineAllocation, PiV
 from app.infra import order_genius_repository as og_repo
 from app.infra import order_genius_vehicle_repository as repo
 from app.services.order_genius_service import resolve_date_effective_fob, resolve_month_effective_fob
-from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel
+from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel, generate_vehicle_pivot_excel
 from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
 
 
@@ -931,7 +931,8 @@ def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_c
             "removedUnits": preview.get("removedUnits", 0), "skippedUnits": preview["skippedUnits"], "warnings": []}
 
 
-def export_vehicle_units(session: Session, *, columns: list[str] | None = None, car_codes: list[str] | None = None, **filters):
+def export_vehicle_units(session: Session, *, columns: list[str] | None = None, car_codes: list[str] | None = None,
+                         pivot: dict | None = None, **filters):
     result = list_vehicle_units(session, **filters)
     if result["total"] > len(result["items"]):
         raise HTTPException(400, "Export too large: narrow the view / 导出范围过大，请缩小筛选")
@@ -947,6 +948,10 @@ def export_vehicle_units(session: Session, *, columns: list[str] | None = None, 
         for vehicle in vehicles:
             vehicle["cocPdf"] = "Awaiting VIN / 待录 VIN" if not vehicle["vin"] else "Available / 有 PDF" if vehicle["vin"] in available else "Missing / 缺 PDF"
     try:
+        if pivot is not None:
+            if not isinstance(pivot, dict):
+                raise ValueError("Invalid pivot / 透视配置无效")
+            return generate_vehicle_pivot_excel(vehicles, pivot)
         return generate_vehicle_allocation_excel(vehicles, columns)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

@@ -40,6 +40,7 @@ export function MaterialTimelineBoard({ countries, noticeCountries = countries, 
   const [onlySelection, setOnlySelection] = useState(false);
   const [focusModel, setFocusModel] = useState<string | null>(null);
   const [selected, setSelected] = useState<NodeRef | null>(null);
+  const [noticeFocus, setNoticeFocus] = useState<{ brand: string; model: string; country: string; base?: string } | null>(null);
   useEffect(() => { setExpandedModels([]); }, [authorizationKey, countryKey]);
   useEffect(() => {
     let current = true;
@@ -61,6 +62,18 @@ export function MaterialTimelineBoard({ countries, noticeCountries = countries, 
 
   // Never render a previous country's response during a new request.
   const data = load.scope === scope && load.status === "ready" ? load.data : [];
+  useEffect(() => {
+    if (!noticeFocus || load.scope !== scope || load.status !== "ready") return;
+    const response = load.data.find((item) => item.countryCode === noticeFocus.country);
+    const node = response?.nodes.find((item) => item.brand === noticeFocus.brand && item.modelName === noticeFocus.model
+      && (!noticeFocus.base || item.bomTemplate === noticeFocus.base));
+    if (!node) return;
+    setFocusModel(`${node.brand}|${node.modelName}`); setSelected({ country: noticeFocus.country, node });
+    const frame = requestAnimationFrame(() => {
+      [...document.querySelectorAll<HTMLElement>(".og-timeline-model")].find((item) => item.dataset.model === node.modelName)?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [noticeFocus, load, scope]);
   const grouped: ModelGroup[] = [];
   for (const item of data) {
     const visible = new Set<string>();
@@ -132,7 +145,12 @@ export function MaterialTimelineBoard({ countries, noticeCountries = countries, 
       <label><input type="checkbox" checked={showWvta} onChange={(event) => setShowWvta(event.currentTarget.checked)} /> Show WVTA reference / 叠加WVTA参考（不改变BOM下单日期）</label>
       {canManageReference ? <WvtaReferenceUpload onSaved={() => setRevision((value) => value + 1)} /> : null}
     </div> : null}
-    {!bomEditing ? <MaterialNotices countries={noticeCountries} authorizationKey={authorizationKey} revision={revision} defaultExpanded={!canMaintainRelations} onViewModel={onViewModel} /> : null}
+    {!bomEditing ? <MaterialNotices countries={noticeCountries} authorizationKey={authorizationKey} revision={revision} defaultExpanded={!canMaintainRelations}
+      onViewModel={(brand, model, country, base) => {
+        if (!country) return;
+        setExpanded(true); setOnlySelection(false); setNoticeFocus({ brand, model, country, base });
+        onViewModel(brand, model, country);
+      }} /> : null}
     {expanded && !busy && load.status === "ready" ? <div className="og-timeline-content">
       <p>As of / 按今天 {data[0]?.today} · {data[0]?.windowFrom} – {data[0]?.windowTo} · Not the selected order month / 不随选品月份</p>
       {showWvta ? <p className="og-wvta-source">{data[0]?.wvtaReference?.status === "ready"
@@ -161,7 +179,7 @@ export function MaterialTimelineBoard({ countries, noticeCountries = countries, 
             nodes={group.nodes} response={response} left={left} right={right} zoom={zoom} showWvta={showWvta}
             open={focusModel === `${group.brand}|${group.model}` || expandedModels.includes(group.key)}
             onToggle={() => setExpandedModels((values) => values.includes(group.key) ? values.filter((key) => key !== group.key) : [...values, group.key])}
-            onSelect={(node, certificate, relationship) => setSelected({ country: group.country, node, certificate, relationship })} />;
+            onSelect={(node, certificate, relationship) => { setNoticeFocus(null); setSelected({ country: group.country, node, certificate, relationship }); }} />;
         })}
       </div>
       {selectedNode && selected ? <div className="og-timeline-detail" role="region" aria-label="Material change detail">

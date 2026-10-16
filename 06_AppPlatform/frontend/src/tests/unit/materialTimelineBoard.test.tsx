@@ -24,20 +24,47 @@ async function expand() {
 }
 
 describe("Model material changes board", () => {
-  it("uses one model ruler for two saved branches and collapses unlinked bases by default", async () => {
+  it("groups parallel bases under saved trims without requiring replacement links", async () => {
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset("SE", [node("A"), node("B"), node("C", { version: "Premium" })]));
+    render(<MaterialTimelineBoard {...props} />); await expand();
+    expect(document.querySelectorAll(".og-swimlane-trim")).toHaveLength(2);
+    expect(document.querySelectorAll(".og-swimlane-track")).toHaveLength(3);
+    expect(document.querySelectorAll(".og-lineage-links path")).toHaveLength(0);
+  });
+
+  it("opens the model swimlane and exact base from a personal reminder without acknowledging it", async () => {
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset());
+    vi.mocked(api.getMaterialNotices).mockResolvedValue({ countryCode: "SE", notices: [{
+      key: "notice-key", brand: "JAECOO", modelName: "JAECOO5 BEV", bomTemplate: "NEW", countryCode: "SE",
+      kind: "start", date: "2026-10-15", target: null, note: "", read: false,
+    }] });
+    const mark = vi.spyOn(api, "readMaterialNotice");
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+    render(<MaterialTimelineBoard {...props} />);
+    await screen.findByText(/^My material reminders.*1 unread/);
+    fireEvent.click(screen.getByText(/^JAECOO · JAECOO5 BEV · 1 changes/));
+    fireEvent.click(screen.getByRole("button", { name: /View model \/ 查看泳道/ }));
+    await screen.findByRole("region", { name: "Material change detail" });
+    expect(screen.getByRole("region", { name: "Material change detail" }).textContent).toContain("NEW-BW");
+    expect(document.querySelector(".og-timeline-model")?.hasAttribute("open")).toBe(true);
+    expect(mark).not.toHaveBeenCalled();
+  });
+
+  it("uses one model ruler and one fixed lane per base including unlinked materials", async () => {
     const data = dataset("SE", [node("A1"), node("A2"), node("B1"), node("B2"), node("UNLINKED")]);
     data.links = [{ from: "A1", to: "A2", note: "Battery upgrade" }, { from: "B1", to: "B2" }];
     vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
     render(<MaterialTimelineBoard {...props} />); await expand();
-    expect(document.querySelectorAll(".og-lineage-axis")).toHaveLength(1);
-    expect(document.querySelectorAll(".og-lineage-branch")).toHaveLength(2);
-    expect(document.querySelector(".og-lineage-pending")?.hasAttribute("open")).toBe(false);
+    expect(document.querySelectorAll(".og-swimlane-axis")).toHaveLength(1);
+    expect(document.querySelectorAll(".og-swimlane-track")).toHaveLength(5);
+    expect(document.querySelector(".og-lineage-pending")).toBeNull();
     expect(document.querySelectorAll(".og-timeline-version-details")).toHaveLength(0);
-    fireEvent.click(screen.getByText(/^SE · JAECOO · JAECOO5 BEV · 2 chains/));
-    fireEvent.click(screen.getByRole("button", { name: "A1 → A2 · Note / 备注" }));
+    fireEvent.click(screen.getByText(/^SE · JAECOO · JAECOO5 BEV · 5 bases/));
+    expect(screen.getByRole("button", { name: /^UNLINKED · Select-FWD/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "→ A2 · Note / 备注" }));
     expect(screen.getByRole("region", { name: "Material change detail" }).textContent).toContain("Battery upgrade");
     fireEvent.change(screen.getByRole("combobox", { name: "Time zoom" }), { target: { value: "2" } });
-    expect((document.querySelector(".og-lineage-map") as HTMLElement).style.minWidth).toBe("1600px");
+    expect((document.querySelector(".og-swimlane-map") as HTMLElement).style.minWidth).toBe("1700px");
   });
 
   it("retains overlapping windows and does not stretch missing dates into an invented period", async () => {
@@ -45,10 +72,10 @@ describe("Model material changes board", () => {
     data.links = [{ from: "OLD", to: "NEW" }, { from: "NEW", to: "FUTURE" }];
     vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
     render(<MaterialTimelineBoard {...props} />); await expand();
-    const versions = [...document.querySelectorAll<HTMLElement>(".og-lineage-version")];
-    expect(versions).toHaveLength(2);
-    expect(versions.map((version) => version.style.top)).toEqual(["0px", "84px"]);
-    expect(screen.getByText(/FUTURE · Start not set/)).toBeTruthy();
+    const versions = [...document.querySelectorAll<HTMLElement>(".og-swimlane-track")];
+    expect(versions).toHaveLength(3);
+    expect(new Set(versions.map((version) => version.style.top)).size).toBe(3);
+    expect(screen.getByText("Dates not maintained / 日期待维护")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "FUTURE starts" })).toBeNull();
   });
 
@@ -67,8 +94,8 @@ describe("Model material changes board", () => {
     render(<MaterialTimelineBoard {...props} />); await expand();
     expect(screen.getByRole("button", { name: "OPEN starts 2026-10-01" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^OPEN ends/ })).toBeNull();
-    expect(document.querySelectorAll(".og-lineage-period")).toHaveLength(1);
-    expect(screen.getByText(/OPEN · 2026-10-01 → End not set/)).toBeTruthy();
+    expect(document.querySelectorAll(".og-swimlane-period")).toHaveLength(1);
+    expect(screen.getByText(/2026-10-01 → End not set/)).toBeTruthy();
   });
 
   it("keeps personal reminder countries independent of the temporary timeline filter", async () => {
@@ -96,13 +123,13 @@ describe("Model material changes board", () => {
     await waitFor(() => expect(screen.getByText(/Reference \/ 参考：reference.pdf/)).toBeTruthy());
     expect(request).toHaveBeenLastCalledWith("SE", true);
     expect(screen.getByRole("status").textContent).toBe(summary);
-    expect(document.querySelectorAll(".og-wvta-segment > i").length).toBe(2);
-    expect(document.querySelector(".og-wvta-segment.is-cancelled > i")).toBeNull();
+    expect(document.querySelectorAll(".og-swimlane-wvta > i").length).toBe(2);
+    expect(document.querySelectorAll(".og-swimlane-wvta").length).toBe(3);
     fireEvent.click(screen.getAllByRole("button", { name: /WVTA · e4.*00273\*02/ })[0]);
     expect(screen.getByRole("region", { name: "Material change detail" }).textContent).toContain("2026-10-15");
     expect(screen.getByRole("region", { name: "Material change detail" }).textContent).toContain("P3 · row / 行 40");
     fireEvent.click(checkbox);
-    await waitFor(() => expect(document.querySelector(".og-wvta-segment")).toBeNull());
+    await waitFor(() => expect(document.querySelector(".og-swimlane-wvta")).toBeNull());
     expect(write).not.toHaveBeenCalled();
   });
 
@@ -187,10 +214,12 @@ describe("Model material changes board", () => {
     }]} />);
     await expand();
     fireEvent.click(screen.getByRole("checkbox", { name: /Only current selection/ }));
-    expect(screen.getByText("Saved relation / 已保存关联：OLD → MID → NEW")).toBeTruthy();
+    expect(document.querySelectorAll(".og-swimlane-track")).toHaveLength(3);
+    expect(screen.getByText("→ MID")).toBeTruthy();
+    expect(screen.getByText("→ NEW")).toBeTruthy();
     expect(screen.queryByText("UNRELATED")).toBeNull();
     expect(screen.getAllByText("OLD").length).toBeGreaterThan(0);
-    expect(document.querySelectorAll(".og-timeline-chain").length).toBe(1);
+    expect(document.querySelectorAll(".og-swimlane-axis").length).toBe(1);
   });
 
   it("disables selection filtering until the full selection has loaded", async () => {

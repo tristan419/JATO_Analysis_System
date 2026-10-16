@@ -28,7 +28,7 @@ it("aggregates country × base into one unread event and requires an explicit vi
   expect((screen.getByRole("button", { name: /View model/ }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.change(screen.getByRole("combobox"), { target: { value: "SE" } });
   fireEvent.click(screen.getByRole("button", { name: /View model/ }));
-  expect(view).toHaveBeenCalledWith("OMODA", "OMODA5 HEV", "SE");
+  expect(view).toHaveBeenCalledWith("OMODA", "OMODA5 HEV", "SE", "A");
   fireEvent.click(screen.getByRole("button", { name: /Mark read/ }));
   await screen.findByText(/^My material reminders.*0 unread changes/);
   expect(mark).toHaveBeenCalledTimes(4);

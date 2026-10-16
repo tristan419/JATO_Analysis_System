@@ -271,6 +271,7 @@ export interface VehicleAllocationListResponse<T> {
 export interface VehicleAllocationFilters {
   keyword?: string;
   piCode?: string;
+  piCodes?: string[];
   piLineCode?: string;
   carCode?: string;
   vin?: string;
