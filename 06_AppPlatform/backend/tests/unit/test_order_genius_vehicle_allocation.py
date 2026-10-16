@@ -1878,6 +1878,28 @@ def test_vin_fill_parser_accepts_bom_vin_below_title(tmp_path):
         parse_vehicle_allocation_xlsx(path)
 
 
+@pytest.mark.parametrize("header,key", [("BOM", "bom"), ("Material Code", "material_code"), ("物料号", "material_code")])
+def test_vin_fill_parser_material_header_aliases(tmp_path, header, key):
+    workbook = openpyxl.Workbook()
+    workbook.active.append([header, "VIN"])
+    workbook.active.append(["T71604NCLMH0035", "LVTDB21B9RD123456"])
+    path = tmp_path / "material-vin.xlsx"
+    workbook.save(path)
+    assert parse_vehicle_allocation_xlsx(path, vin_fill=True) == [
+        {"sourceRow": 2, key: "T71604NCLMH0035", "vin": "LVTDB21B9RD123456"},
+    ]
+
+
+def test_vin_fill_parser_rejects_material_group_header(tmp_path):
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["物料号组", "VIN"])
+    workbook.active.append(["T71604N**MH0035", "LVTDB21B9RD123456"])
+    path = tmp_path / "material-group.xlsx"
+    workbook.save(path)
+    with pytest.raises(ValueError, match="完整物料号"):
+        parse_vehicle_allocation_xlsx(path, vin_fill=True)
+
+
 def test_vin_fill_incremental_full_file_and_duplicate_reupload(vehicle_db):
     pi, vehicles = _vin_fill_pi(vehicle_db, ("BOM-A", "BOM-B"), quantity=225)
     rows = _vin_rows("BOM-A", 225) + _vin_rows("BOM-B", 225, offset=225)

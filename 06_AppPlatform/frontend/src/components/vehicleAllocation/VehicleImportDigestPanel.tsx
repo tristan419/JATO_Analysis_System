@@ -16,6 +16,8 @@ interface VehicleImportDigestPanelProps {
   onExport?: () => void | Promise<void>;
   onClear?: () => void;
   onTargetChange?: (sourceRow: number, carCode: string) => void;
+  importedMatchCount?: number;
+  onSelectImported?: () => void;
 }
 
 interface VehicleImportSummary {
@@ -112,6 +114,8 @@ export function VehicleImportDigestPanel({
   onExport,
   onClear,
   onTargetChange,
+  importedMatchCount = 0,
+  onSelectImported,
 }: VehicleImportDigestPanelProps) {
   const summary = useMemo(() => summarizePreview(preview), [preview]);
   const scoped = preview?.mode === "pi_vin_fill";
@@ -181,6 +185,11 @@ export function VehicleImportDigestPanel({
             {onClear && preview ? (
               <button type="button" className="btn btn-ghost" onClick={onClear} disabled={busy}>
                 Clear
+              </button>
+            ) : null}
+            {scoped && !removing && onSelectImported ? (
+              <button type="button" className="btn btn-secondary" disabled={busy || importedMatchCount === 0} onClick={onSelectImported}>
+                Select imported {importedMatchCount} / 勾选已录车辆
               </button>
             ) : null}
             <LoadingActionButton
