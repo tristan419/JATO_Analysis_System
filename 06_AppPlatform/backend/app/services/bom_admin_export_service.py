@@ -163,7 +163,7 @@ def _write_model_sheet(ws, items: list[dict], countries: list[str], reference_da
     stride = 3 if monthly else 2
     for column, label in enumerate(_FIXED_HEADERS, start=1):
         if column == fixed_count:
-            label += f"\n{'Month-end status' if monthly else 'As of'} {reference_date.isoformat()}"
+            label += (f"\nMonth-end status\n{reference_date.isoformat()}" if monthly else f"\nAs of {reference_date.isoformat()}")
         cell = ws.cell(1, column, label)
         ws.merge_cells(start_row=1, start_column=column, end_row=2, end_column=column)
         cell.font = _HEADER_FONT
