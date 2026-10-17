@@ -618,7 +618,7 @@ export function OrderGeniusVehicleAllocationPage() {
     setError(null);
     setNotice(null);
     if (!/^(PI-|CAR-)/i.test(keyword) && !/^[A-HJ-NPR-Z0-9]{17}$/i.test(keyword)) {
-      setBatchVins([]); clearSelection();
+      setBatchVins([]); setEditorTargets([]);
       setFilters((current) => ({ ...current, keyword, carCode: undefined, vin: undefined, page: 1 }));
       return;
     }
@@ -821,7 +821,7 @@ export function OrderGeniusVehicleAllocationPage() {
     if (vins.length > 1000 || vins.some((vin) => !/^[A-HJ-NPR-Z0-9]{17}$/.test(vin))) {
       setError("Use up to 1,000 complete 17-character VINs / 请使用最多 1,000 个完整的 17 位 VIN。"); return;
     }
-    setError(null); clearSelection(); setBatchVins(vins);
+    setError(null); setEditorTargets([]); setBatchVins(vins);
     setFilters({ country: filters.country, piCode: selectedPi?.header.piCode, piLineCode: selectedLineCode ?? undefined, page: 1, pageSize });
   }
 
@@ -924,7 +924,7 @@ export function OrderGeniusVehicleAllocationPage() {
                   </select></label>
                   <div style={{ maxHeight: 220, overflow: "auto" }}>
                     {cocResult.items.filter((item) => cocFilter === "all" || item.status === cocFilter).map((item) => <div key={item.carCode}>
-                      <button type="button" onClick={() => { clearSelection(); setFilters({ country: filters.country, piCode: selectedPi?.header.piCode, carCode: item.carCode, page: 1, pageSize }); setToolDrawerOpen(false); }}>{item.carCode}</button> · {item.vin || "Awaiting VIN / 待录 VIN"} · {item.status === "available" ? "PDF available / 有 PDF" : item.status === "missing" ? "Missing PDF / 缺 PDF" : "—"}
+                      <button type="button" onClick={() => { setEditorTargets([]); setFilters({ country: filters.country, piCode: selectedPi?.header.piCode, carCode: item.carCode, page: 1, pageSize }); setToolDrawerOpen(false); }}>{item.carCode}</button> · {item.vin || "Awaiting VIN / 待录 VIN"} · {item.status === "available" ? "PDF available / 有 PDF" : item.status === "missing" ? "Missing PDF / 缺 PDF" : "—"}
                     </div>)}
                   </div>
                 </> : null}
@@ -990,7 +990,7 @@ export function OrderGeniusVehicleAllocationPage() {
                     changeSelection(new Set(eligible.map((vehicle) => vehicle.carCode)));
                     setNotice(`${batchMatches.length} global matches · ${filteredMatches.length} filtered matches · ${eligible.length} selected / 全局匹配、当前筛选匹配、已选`);
                   }}>Select matches / 勾选匹配</button>
-                  <button type="button" className="btn-secondary" onClick={() => { setBatchVins([]); setVinBatchText(""); clearSelection(); }}>Clear batch search / 清除批量搜索</button>
+                  <button type="button" className="btn-secondary" onClick={() => { setBatchVins([]); setVinBatchText(""); setEditorTargets([]); }}>Clear batch search / 清除批量搜索</button>
                 </div>
                 {batchVins.length ? <p role="status">{batchMatches.length} global matches / 全局匹配 · {filteredMatches.length} filtered matches / 当前匹配 · {missingVins.length} not found in this PI/line / 本范围未找到{missingVins.length ? `: ${missingVins.join(", ")}` : ""}</p> : null}
                 <p>Current filtered selected / 当前筛选已选 {currentSelectedCount}/{ordinaryCodes.size} · Global selected / 全局已选 {selectedCarCodes.size}/{vinPasteScopeVehicles.length} · Outside current filters / 筛选外已选 {selectedCarCodes.size - currentSelectedCount}</p>
@@ -1003,7 +1003,7 @@ export function OrderGeniusVehicleAllocationPage() {
                   </label>)}</div>
                 </details>)}
                 <button type="button" className="btn-secondary" onClick={() => {
-                  clearSelection(); setBatchVins([]); setVinBatchText(""); setSearchTerm("");
+                  setEditorTargets([]); setBatchVins([]); setVinBatchText(""); setSearchTerm("");
                   setFilters((current) => ({ country: current.country, piCode: current.piCode }));
                   setVisibleColumnKeys(new Set(DEFAULT_COLUMNS)); setGridResetKey((value) => value + 1);
                 }}>Reset columns & filters / 重置列与筛选</button>
@@ -1252,7 +1252,7 @@ export function OrderGeniusVehicleAllocationPage() {
             cocStatuses={cocStatuses}
             visibleKeys={visibleColumnKeys} selectedCodes={selectedCarCodes} busy={scopeBusy}
             resetKey={gridResetKey} onEdit={selectVehicle} onSelection={changeSelection}
-            onFilterChange={clearSelection} onViewChange={changeGridView}
+            onFilterChange={() => setEditorTargets([])} onViewChange={changeGridView}
             renderCell={(vehicle, key) => {
               if (key === "exteriorColorName") {
                 const swatch = parseOrderGeniusColourSwatch(vehicle.colourHex);

@@ -129,6 +129,11 @@ it("retains cross-country/month PI choices and exports the whole selected set th
   fireEvent.click(screen.getByRole("button", { name: "Oct 2026" }));
   expect(screen.getByRole("region", { name: "PI workspace" }).textContent).toContain("2 PIs");
   fireEvent.click(screen.getByLabelText("Select filtered vehicles"));
+  fireEvent.click(screen.getByRole("button", { name: "Change grid filter" }));
+  fireEvent.change(screen.getByPlaceholderText(/Search PI, Car Code/), { target: { value: "NO-SUCH-MODEL" } });
+  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  await screen.findByText("0 filtered");
+  expect(screen.getByText("300 selected / 已勾选 · 300 outside current filters / 筛选外已选")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /Export selected 300/ }));
   await waitFor(() => expect(download).toHaveBeenCalled());
   expect(download.mock.calls[0][0]?.piCodes).toEqual([PI, otherCode]);
@@ -666,7 +671,7 @@ describe("unified Grid editing contract", () => {
     expect(screen.getByText("All months", { selector: "summary" }).parentElement?.hasAttribute("open")).toBe(true);
     expect(api.listVehicleAllocationVehicles).not.toHaveBeenCalled();
   });
-  it("filters the complete PI locally and invalidates the old selection/editor", async () => {
+  it("filters the complete PI locally, preserving selected targets outside filters but closing the editor", async () => {
     await selectPi();
     fireEvent.click(screen.getByLabelText("Select CAR-1"));
     fireEvent.click(screen.getByRole("button", { name: /Update selected status/ }));
@@ -675,6 +680,7 @@ describe("unified Grid editing contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     expect(screen.getByText("75 filtered")).toBeTruthy();
     expect(screen.queryByLabelText("ETD")).toBeNull();
+    expect(screen.getByText("1 selected / 已勾选 · 1 outside current filters / 筛选外已选")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save changes / 保存修改" }).hasAttribute("disabled")).toBe(true);
   });
   it("never implicitly updates the whole PI with an empty selection", async () => {
@@ -720,13 +726,20 @@ describe("unified Grid editing contract", () => {
   it("keeps input on version conflicts and clears invalid editor on header filtering", async () => {
     vi.mocked(api.bulkUpdateVehicleAllocationVehicles).mockRejectedValueOnce(new Error("Selection changed; nothing saved / 勾选车辆已变化，未保存"));
     await selectPi(); fireEvent.click(screen.getByLabelText("Select filtered vehicles"));
-    fireEvent.click(screen.getByRole("button", { name: /Update selected status/ }));
-    fireEvent.change(screen.getByLabelText("ETD"), { target: { value: "2026-10-12" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes / 保存修改" }));
+    const actions = document.querySelector<HTMLElement>(".va-selected-actions");
+    if (!actions) throw new Error("Missing selected actions");
+    fireEvent.click(within(actions).getByRole("button", { name: /Update selected status/ }));
+    const panel = document.querySelector<HTMLElement>(".vehicle-allocation-tool-panel");
+    const main = document.querySelector<HTMLElement>(".va-main");
+    if (!panel || !main) throw new Error("Missing allocation panel");
+    const etd = within(panel).getByLabelText("ETD") as HTMLInputElement;
+    fireEvent.change(etd, { target: { value: "2026-10-12" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save changes / 保存修改" }));
     await waitFor(() => expect(screen.getAllByText(/勾选车辆已变化/).length).toBeGreaterThan(0));
-    expect((screen.getByLabelText("ETD") as HTMLInputElement).value).toBe("2026-10-12");
-    fireEvent.click(screen.getByRole("button", { name: "Change grid filter" }));
+    expect(etd.value).toBe("2026-10-12");
+    fireEvent.click(within(main).getByRole("button", { name: "Change grid filter" }));
     expect(screen.queryByLabelText("ETD")).toBeNull();
+    expect(within(main).getByRole("button", { name: /Export selected 150 / })).toBeTruthy();
   });
   it("exports the entire visible view with the same columns, not a display page", async () => {
     const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
