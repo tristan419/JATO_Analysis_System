@@ -884,18 +884,21 @@ def get_status_flow_config(
     return get_vehicle_status_flow_config(selected_country, _clean(ordering_account))
 
 
-@router.get("/search")
+@router.post("/search")
 def search_allocation(
-    keyword: str = Query(min_length=1),
+    body: dict,
     session: Session = Depends(get_db_session),
     user: UserContext = Depends(require_min_role("viewer")),
 ) -> dict:
-    result = search_vehicle_allocation(session, keyword)
-    if result.get("type") == "pi":
-        result["item"] = _accessible_pi_detail(session, user, result["item"]["header"]["piCode"])
-    elif result.get("type") == "vehicle":
-        _validate_vehicle_access(session, user, result["item"])
-    return result
+    keyword, vins = body.get("keyword", ""), body.get("vins")
+    if not isinstance(keyword, str) or (vins is not None and (not isinstance(vins, list) or
+            any(not isinstance(vin, str) for vin in vins))):
+        raise HTTPException(400, "Invalid search / 搜索格式不正确")
+    page = body.get("page", 1)
+    if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+        raise HTTPException(400, "Invalid page / 页码不正确")
+    return search_vehicle_allocation(session, keyword, vins=vins, page=page,
+        allowed_countries=ordering_countries(session, user), allowed_brands=ordering_brands(session, user))
 
 
 @router.get("/order-matrix-plan")

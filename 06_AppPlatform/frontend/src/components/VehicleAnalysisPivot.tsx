@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import type { PiVehicleUnit } from "../types/orderGeniusVehicle";
 import { CommandMultiSelect } from "./CommandSelect";
+import { orderGeniusPowertrainColor } from "../utils/orderGeniusBomAdmin";
 
 export const PIVOT_DIMENSIONS = {
   countryCode: "Country / 国家", piCode: "PI", orderMonth: "Order month / 订单月",
@@ -16,6 +17,7 @@ interface Props {
   vehicles: PiVehicleUnit[]; filtered: PiVehicleUnit[]; selected: ReadonlySet<string>; busy: boolean;
   onDrill: (codes: string[]) => void;
   onExport: (vehicles: PiVehicleUnit[], pivot: VehiclePivotConfig) => void;
+  statusLabels?: Record<string, string>;
 }
 export function pivotValue(vehicle: PiVehicleUnit, measure: Measure): number {
   if (measure === "units") return 1;
@@ -35,7 +37,7 @@ export function buildVehiclePivot(vehicles: PiVehicleUnit[], config: VehiclePivo
   }
   return result;
 }
-export function VehicleAnalysisPivot({ vehicles, filtered, selected, busy, onDrill, onExport }: Props) {
+export function VehicleAnalysisPivot({ vehicles, filtered, selected, busy, onDrill, onExport, statusLabels = {} }: Props) {
   const [rows, setRows] = useState<Dimension[]>(["countryCode", "modelName"]);
   const [column, setColumn] = useState<Dimension>("logisticsStatus");
   const [measure, setMeasure] = useState<Measure>("units");
@@ -46,6 +48,8 @@ export function VehicleAnalysisPivot({ vehicles, filtered, selected, busy, onDri
   const columns = [...new Set(source.map((v) => String(v[column] || "—")))].sort();
   const oversized = groups.size > 1000 || columns.length > 100;
   const missing = measure === "fob" ? source.filter((v) => v.fobEur === null).length : 0;
+  const label = (key: Dimension, text: string): string => key === "allocationStatus" || key === "logisticsStatus"
+    ? statusLabels[text] ?? text.replaceAll("_", " ") : text;
   const value = (items: PiVehicleUnit[]): string => items.reduce((sum, item) => sum + pivotValue(item, measure), 0)
     .toLocaleString(undefined, { maximumFractionDigits: measure === "fob" ? 2 : 0 });
   return <section className="va-analysis-pivot" aria-label="Vehicle pivot / 车辆透视">
@@ -58,12 +62,14 @@ export function VehicleAnalysisPivot({ vehicles, filtered, selected, busy, onDri
       <button type="button" disabled={busy || !source.length || oversized} onClick={() => onExport(source, config)}>Export pivot / 导出透视</button>
     </div>
     <p role="status">{source.length} vehicles / 台 · {groups.size} row groups / 行分组 · Click a value to inspect source vehicles / 点击数字查看来源车辆{missing ? ` · ${missing} missing FOB / 缺成交价，未按零价补齐；合计仅含已知金额` : ""}</p>
-    {oversized ? <p role="alert">Too many row/column combinations. Narrow filters or dimensions / 行列组合过多，请收窄筛选或维度；未截断数据。</p> : <div style={{ overflow: "auto" }}><table className="data-table"><thead><tr>{rows.map((key) => <th key={key}>{PIVOT_DIMENSIONS[key]}</th>)}{columns.map((c) => <th key={c}>{c}</th>)}<th>Total / 合计</th></tr></thead>
+    {oversized ? <p role="alert">Too many row/column combinations. Narrow filters or dimensions / 行列组合过多，请收窄筛选或维度；未截断数据。</p> : <div style={{ overflow: "auto" }}><table className="data-table va-pivot-table"><thead><tr>{rows.map((key) => <th key={key}>{PIVOT_DIMENSIONS[key]}</th>)}{columns.map((c) => <th key={c}>{label(column, c)}</th>)}<th>Total / 合计</th></tr></thead>
       <tbody>{[...groups].sort(([a], [b]) => a.localeCompare(b)).map(([key, cells]) => {
         const labels: string[] = JSON.parse(key);
         const all = [...cells.values()].flat();
-        return <tr key={key}>{labels.map((label, index) => <th key={index}>{label}</th>)}{columns.map((c) => { const items = cells.get(c) ?? []; return <td key={c}>{items.length ? <button type="button" onClick={() => onDrill(items.map((v) => v.carCode))}>{value(items)}</button> : "—"}</td>; })}
-          <td><button type="button" onClick={() => onDrill(all.map((v) => v.carCode))}>{value(all)}</button></td></tr>;
-      })}<tr><th colSpan={Math.max(1, rows.length)}>Total / 合计</th>{columns.map((c) => <td key={c}>{value(source.filter((v) => String(v[column] || "—") === c))}</td>)}<td>{value(source)}</td></tr></tbody></table></div>}
+        const colors = new Set(all.map((v) => orderGeniusPowertrainColor(v.powertrain)));
+        return <tr key={key} style={{ "--va-pivot-accent": colors.size === 1 ? [...colors][0] : "#94a3b8" } as CSSProperties}>
+          {labels.map((text, index) => <th scope="row" key={index}>{label(rows[index], text)}</th>)}{columns.map((c) => { const items = cells.get(c) ?? []; return <td key={c}>{items.length ? <button className="va-pivot-value" type="button" onClick={() => onDrill(items.map((v) => v.carCode))}>{value(items)}</button> : "—"}</td>; })}
+          <td className="va-pivot-total"><button className="va-pivot-value" type="button" onClick={() => onDrill(all.map((v) => v.carCode))}>{value(all)}</button></td></tr>;
+      })}<tr className="va-pivot-total"><th colSpan={Math.max(1, rows.length)}>Total / 合计</th>{columns.map((c) => <td key={c}>{value(source.filter((v) => String(v[column] || "—") === c))}</td>)}<td>{value(source)}</td></tr></tbody></table></div>}
   </section>;
 }

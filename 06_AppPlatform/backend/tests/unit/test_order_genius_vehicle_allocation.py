@@ -1461,9 +1461,51 @@ def test_pi_read_and_search_hide_other_market_vehicles(vehicle_db, mixed_market_
     assert detail["summary"]["totalUnits"] == detail["vehicleTotal"] == 2
     assert detail["lines"][0]["quantity"] == 2
     assert detail["header"]["marketCountryCodes"] == ["CH"]
-    monkeypatch.setattr(vehicle_route, "search_vehicle_allocation", lambda *_: {"type": "pi", "item": vehicle_service.get_pi_detail(vehicle_db, pi)})
-    assert vehicle_route.search_allocation(pi, vehicle_db, user)["item"] == detail
+    preview = vehicle_route.search_allocation({"keyword": pi}, vehicle_db, user)
+    assert preview["total"] == 1 and preview["matched"] == 2
+    assert preview["items"][0]["carCodes"] == [car.car_code for car in cars[:2]]
+    assert preview["items"][0]["countries"] == ["CH"]
     assert vehicle_route.get_pi_order(pi, vehicle_db, UserContext(role="editor", name="editor"))["vehicleTotal"] == 4
+
+
+def test_search_combines_terms_on_one_vehicle_and_normalizes_months(vehicle_db):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=2)
+    cars[0].model_name, cars[0].powertrain, cars[0].exterior_color_code = "JAECOO5", "BEV", "BW"
+    cars[1].model_name, cars[1].powertrain, cars[1].exterior_color_code = "JAECOO7", "HEV", "CL"
+    vehicle_db.flush()
+    for month in ("2026-09", "202609", "2026/09"):
+        result = vehicle_service.search_vehicle_allocation(vehicle_db, f"ch {month} jaecoo5 bev")
+        assert result["matched"] == 1 and result["items"][0]["carCodes"] == [cars[0].car_code]
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, "JAECOO5 CL")["total"] == 0
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, "JAECOO5 BW； JAECOO7 CL")["matched"] == 2
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, "%")["total"] == 0
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, "CH 已下单")["matched"] == 2
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, pi, allowed_brands=set())["total"] == 0
+
+
+def test_search_bulk_vins_deduplicates_and_hides_unauthorized(vehicle_db, mixed_market_pi):
+    pi, cars = mixed_market_pi
+    for index, car in enumerate(cars):
+        car.vin = f"LVTDB21B9RD{index:06d}"
+    vehicle_db.flush()
+    result = vehicle_service.search_vehicle_allocation(vehicle_db, "", vins=[cars[0].vin, cars[0].vin, cars[2].vin],
+        allowed_countries={"CH"}, allowed_brands={"OMODA"})
+    assert result["matched"] == 1 and result["items"][0]["carCodes"] == [cars[0].car_code]
+    assert result["missingVins"] == [cars[2].vin]
+    assert result["items"][0]["vehicleTotal"] == 2 and result["items"][0]["countries"] == ["CH"]
+    with pytest.raises(HTTPException):
+        vehicle_service.search_vehicle_allocation(vehicle_db, "", vins=["INVALID"])
+
+
+def test_search_paginates_after_matching_and_returns_complete_pi_counts(vehicle_db):
+    for _ in range(10):
+        _vin_fill_pi(vehicle_db, quantity=2)
+    first = vehicle_service.search_vehicle_allocation(vehicle_db, "CH")
+    second = vehicle_service.search_vehicle_allocation(vehicle_db, "CH", page=2)
+    assert first["total"] == second["total"] == 10
+    assert first["matched"] == second["matched"] == 20
+    assert len(first["items"]) == 8 and len(second["items"]) == 2
+    assert not {item["piCode"] for item in first["items"]} & {item["piCode"] for item in second["items"]}
 
 
 @pytest.mark.parametrize("role,username,expected", [

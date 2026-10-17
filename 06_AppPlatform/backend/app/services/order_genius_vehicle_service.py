@@ -683,20 +683,20 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
     }
 
 
-def search_vehicle_allocation(session: Session, keyword: str) -> dict:
-    kw = keyword.strip()
-    if not kw:
-        return {"type": "empty", "item": None}
-    header = repo.get_header_by_code(session, kw.upper())
-    if header:
-        return {"type": "pi", "item": get_pi_detail(session, header.pi_code)}
-    vehicle = repo.get_vehicle_by_car_code(session, kw.upper())
-    if vehicle:
-        return {"type": "vehicle", "item": vehicle_to_dict(session, vehicle)}
-    vehicle = repo.get_vehicle_by_vin(session, kw)
-    if vehicle:
-        return {"type": "vehicle", "item": vehicle_to_dict(session, vehicle)}
-    return {"type": "empty", "item": None}
+def search_vehicle_allocation(session: Session, keyword: str, *, vins: list[str] | None = None,
+                              allowed_countries: set[str] | None = None, allowed_brands: set[str] | None = None,
+                              page: int = 1, page_size: int = 8) -> dict:
+    vins = [vin.strip().upper() for vin in vins] if vins is not None else None
+    if len(keyword) > 20000 or (vins is not None and (len(vins) > 1000 or
+            any(not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin) for vin in vins))):
+        raise HTTPException(400, "Use at most 1,000 complete VINs / 最多1000个完整VIN")
+    if vins is None and len(re.findall(r"[^\s,;，；]+", keyword)) > 64:
+        raise HTTPException(400, "Use at most 64 search terms / 组合搜索最多64个词")
+    flow = get_vehicle_status_flow_config(None, None)
+    labels = {step["key"]: f'{step["key"]} {step["labelEn"]} {step.get("labelZh", "")}'
+              for step in [*flow["allocation"], *flow["logistics"]]}
+    return repo.search_allocation_preview(session, keyword.strip(), vins=list(dict.fromkeys(vins)) if vins is not None else None,
+        allowed_countries=allowed_countries, allowed_brands=allowed_brands, page=page, page_size=page_size, status_labels=labels)
 
 
 def preview_vehicle_import(

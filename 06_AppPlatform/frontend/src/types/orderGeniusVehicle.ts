@@ -308,8 +308,13 @@ export interface PiOrderFilters {
 }
 
 export interface VehicleAllocationSearchResult {
-  type: "empty" | "pi" | "vehicle";
-  item: PiOrderDetail | PiVehicleUnit | null;
+  items: Array<{ piCode: string; orderMonth: string | null; countries: string[]; powertrains: string[];
+    matched: number; vehicleTotal: number; carCodes: string[] }>;
+  total: number;
+  matched: number;
+  page: number;
+  pageSize: number;
+  missingVins: string[];
 }
 
 export interface VehicleAllocationLineItem {
