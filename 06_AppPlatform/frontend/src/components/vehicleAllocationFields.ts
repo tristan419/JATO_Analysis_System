@@ -41,8 +41,24 @@ export const COLUMN_GROUPS = [
 ];
 export const VEHICLE_TEXT_FIELDS = VEHICLE_COLUMNS.filter((column): column is VehicleColumn & { key: VehicleTextField; editOrder: number } => column.editOrder !== undefined)
   .sort((a, b) => a.editOrder - b.editOrder);
-const SEARCH_KEYS: Array<keyof PiVehicleUnit> = ["brand", "bom", "modelName", "version", "powertrain",
+const SEARCH_KEYS: Array<keyof PiVehicleUnit> = ["brand", "bom", "modelName", "version", "powertrain", "orderMonth", "exteriorColorCode", "officialPiNo", "piLineCode",
   ...VEHICLE_COLUMNS.filter((column): column is VehicleColumn & { key: keyof PiVehicleUnit } => column.key !== "config" && column.key !== "cocPdf" && column.kind !== "number" && column.kind !== "date").map((column) => column.key)];
-export function matchesVehicleText(vehicle: PiVehicleUnit, query: string): boolean {
-  return SEARCH_KEYS.some((key) => String(vehicle[key] ?? "").toLowerCase().includes(query));
+export function matchesVehicleText(vehicle: PiVehicleUnit, query: string, statusLabels: Record<string, string> = {}): boolean {
+  const fields = SEARCH_KEYS.map((key) => compactVehicleSearch(String(vehicle[key] ?? "")));
+  fields.push(...[vehicle.allocationStatus, vehicle.logisticsStatus].map((key) => compactVehicleSearch(statusLabels[key] ?? "")));
+  return query.split(/[,;，；\n\r]+/).filter((group) => group.trim()).some((group) =>
+    group.trim().split(/\s+/).every((term) => fields.some((field) => field.includes(compactVehicleSearch(term)))));
+}
+
+function compactVehicleSearch(value: string): string { return value.toUpperCase().replace(/[-_/\s]/g, ""); }
+
+export function parseVehicleSearch(value: string): { vins: string[] | null; duplicates: number; invalid: string[]; error: string } {
+  const entries = value.toUpperCase().split(/[\s,;，；]+/).filter(Boolean);
+  const batch = entries.some((entry) => /^[A-Z0-9]{17}$/.test(entry));
+  if (!batch) return { vins: null, duplicates: 0, invalid: [], error: "" };
+  const unique = [...new Set(entries)];
+  const vins = unique.filter((entry) => /^[A-HJ-NPR-Z0-9]{17}$/.test(entry));
+  return { vins,
+    duplicates: entries.length - unique.length, invalid: unique.filter((entry) => !/^[A-HJ-NPR-Z0-9]{17}$/.test(entry)),
+    error: unique.length > 1000 ? "Use at most 1,000 VINs / 最多1000个VIN" : !vins.length ? "No valid VIN / 没有有效VIN，请核对格式" : "" };
 }

@@ -113,6 +113,16 @@ async function selectPi() {
   await waitFor(() => expect(screen.getAllByRole("row").length).toBe(6));
 }
 
+async function applySearch(query: string): Promise<void> {
+  fireEvent.change(screen.getByLabelText("Search scope / 搜索范围"), { target: { value: "vehicles" } });
+  fireEvent.change(screen.getByLabelText("Search PI, VIN, material / 搜索"), { target: { value: query } });
+  const form = screen.getByLabelText("Search PI, VIN, material / 搜索").closest("form");
+  if (!form) throw new Error("Search form missing");
+  const button = within(form).getByRole("button", { name: "Search" }) as HTMLButtonElement;
+  await waitFor(() => expect(button.disabled).toBe(false));
+  fireEvent.click(button);
+}
+
 it("retains cross-country/month PI choices and exports the whole selected set then prunes removed PI vehicles", async () => {
   const otherCode = "PI-SE-202610-001";
   const other = detail();
@@ -130,8 +140,7 @@ it("retains cross-country/month PI choices and exports the whole selected set th
   expect(screen.getByRole("region", { name: "PI workspace" }).textContent).toContain("2 PIs");
   fireEvent.click(screen.getByLabelText("Select filtered vehicles"));
   fireEvent.click(screen.getByRole("button", { name: "Change grid filter" }));
-  fireEvent.change(screen.getByPlaceholderText(/Search PI, Car Code/), { target: { value: "NO-SUCH-MODEL" } });
-  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  await applySearch("NO-SUCH-MODEL");
   await screen.findByText("0 filtered");
   expect(screen.getByText("300 selected / 已勾选 · 300 outside current filters / 筛选外已选")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /Export selected 300/ }));
@@ -153,6 +162,29 @@ it("never displays a successful subset when one PI in the joint read fails", asy
   await screen.findByText(/联合范围读取失败/);
   expect(screen.getByRole("region", { name: "PI workspace" }).textContent).toContain("0 vehicles");
   expect(screen.queryByRole("cell", { name: "CAR-1" })).toBeNull();
+});
+
+it.each(["failed read", "changed VIN"])("preserves the workspace and selection when search addition has a %s", async (failure) => {
+  const other = detail(); const code = "PI-SE-202610-001"; const vin = "LVTDB21B9RD123456";
+  other.header = { ...other.header, piCode: code };
+  other.vehicles = [{ ...vehicle(0), piCode: code, carCode: "CAR-SE-1", vin: "LVTDB21B9RD654321" }];
+  const lookup = vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue({ items: [{ piCode: code, countries: ["SE"],
+    orderMonth: "2026-10", powertrains: ["HEV"], matched: 1, vehicleTotal: 1, carCodes: ["CAR-SE-1"] }], total: 1,
+    matched: 1, missingVins: [], page: 1, pageSize: 8 });
+  await selectPi(); fireEvent.click(screen.getByLabelText("Select CAR-1"));
+  vi.mocked(api.getVehicleAllocationPi).mockImplementation(async (pi) => {
+    if (pi !== code) return detail(); if (failure === "failed read") throw new Error("Forbidden"); return other;
+  });
+  fireEvent.change(screen.getByLabelText("Search PI, VIN, material / 搜索"), { target: { value: vin } });
+  const option = await screen.findByRole("option", { name: new RegExp(code) });
+  expect(lookup).toHaveBeenCalledTimes(1); expect(api.getVehicleAllocationPi).toHaveBeenCalledTimes(1);
+  fireEvent.click(option); fireEvent.click(screen.getByRole("button", { name: /Add 1 PIs and select 1 vehicles/ }));
+  await waitFor(() => expect(screen.getByRole("status").textContent).toContain(failure === "failed read" ? "Forbidden" : "匹配车辆或权限已变化"));
+  expect(screen.getByRole("region", { name: "PI workspace" }).textContent).toContain("1 PIs / 已选PI · CH · 150 vehicles");
+  expect(screen.getByRole("heading", { name: PI })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Export selected 1 / })).toBeTruthy();
+  expect(screen.queryByRole("cell", { name: "CAR-SE-1" })).toBeNull();
+  expect(api.bulkUpdateVehicleAllocationVehicles).not.toHaveBeenCalled();
 });
 
 it("cross-tabulates the complete source and selected subset with exact source drilldown", () => {
@@ -247,8 +279,7 @@ describe("vehicle detail search and view", () => {
     await selectPi();
     expect(screen.getByText("150 filtered")).toBeTruthy();
     expect(screen.getByText("20 VIN assigned / 已录")).toBeTruthy();
-    fireEvent.change(screen.getByPlaceholderText("Search PI, Car Code, VIN, material, model, colour…"), { target: { value: "BOM-ONE" } });
-    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await applySearch("BOM-ONE");
     expect(screen.getByText("75 filtered")).toBeTruthy();
     expect(screen.getByText("150 units / 台")).toBeTruthy();
   });
@@ -676,8 +707,7 @@ describe("unified Grid editing contract", () => {
     fireEvent.click(screen.getByLabelText("Select CAR-1"));
     fireEvent.click(screen.getByRole("button", { name: /Update selected status/ }));
     fireEvent.change(screen.getByLabelText("ETD"), { target: { value: "2026-10-12" } });
-    fireEvent.change(screen.getByPlaceholderText(/Search PI, Car Code/), { target: { value: "BOM-TWO" } });
-    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await applySearch("BOM-TWO");
     expect(screen.getByText("75 filtered")).toBeTruthy();
     expect(screen.queryByLabelText("ETD")).toBeNull();
     expect(screen.getByText("1 selected / 已勾选 · 1 outside current filters / 筛选外已选")).toBeTruthy();

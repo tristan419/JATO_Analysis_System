@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+import re
 
 from sqlalchemy import Integer, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Session
@@ -199,6 +200,63 @@ def list_headers(
         .limit(page_size)
     ).scalars().all()
     return list(rows), total
+
+
+def search_allocation_preview(session: Session, keyword: str, *, vins: list[str] | None,
+                              allowed_countries: set[str] | None, allowed_brands: set[str] | None,
+                              page: int, page_size: int, status_labels: dict[str, str]) -> dict:
+    """Search authorized snapshot vehicles first; aggregate and paginate PI candidates afterwards."""
+    vehicle = PiVehicleUnit
+    permitted = []
+    if allowed_countries is not None:
+        permitted.append(vehicle.country_code.in_(allowed_countries))
+    if allowed_brands is not None:
+        permitted.append(func.upper(vehicle.brand).in_(allowed_brands))
+    fields = [vehicle.pi_code, vehicle.pi_line_code, vehicle.car_code, vehicle.vin, vehicle.material_code, vehicle.bom,
+              vehicle.brand, vehicle.model_name, vehicle.version, vehicle.powertrain, vehicle.exterior_color_name,
+              vehicle.exterior_color_code, vehicle.interior_color_name, vehicle.country_code, vehicle.ship_name,
+              vehicle.dealer_code, vehicle.dealer_name, vehicle.customer_ref, vehicle.remark,
+              vehicle.allocation_status, vehicle.logistics_status, PiOrderHeader.order_month,
+              PiOrderHeader.official_pi_no]
+    fields.extend(case(status_labels, value=column, else_=column)
+                  for column in (vehicle.allocation_status, vehicle.logistics_status))
+    def compact(value):
+        expression = func.upper(func.coalesce(value, ""))
+        for char in ("-", "_", "/", " "):
+            expression = func.replace(expression, char, "")
+        return expression
+    groups = [[re.sub(r"[-_/\s]", "", term.upper()) for term in group.split()]
+              for group in re.split(r"[,;，；\n\r]+", keyword) if group.strip()]
+    if vins is not None:
+        match = func.upper(vehicle.vin).in_(vins)
+    elif groups:
+        match = or_(*(and_(*(or_(*(compact(field).contains(term, autoescape=True) for field in fields))
+                            for term in terms)) for terms in groups))
+    else:
+        match = vehicle.car_code.is_(None)
+    base = select(vehicle).join(PiOrderHeader, vehicle.pi_id == PiOrderHeader.pi_id).where(*permitted)
+    matched = base.where(match)
+    grouped = matched.with_only_columns(vehicle.pi_code, func.count().label("matched")).group_by(vehicle.pi_code).subquery()
+    total = session.scalar(select(func.count()).select_from(grouped)) or 0
+    matched_total = session.scalar(select(func.count()).select_from(matched.subquery())) or 0
+    headers = session.execute(select(PiOrderHeader, grouped.c.matched).join(
+        grouped, PiOrderHeader.pi_code == grouped.c.pi_code).order_by(PiOrderHeader.order_month.desc(), PiOrderHeader.pi_code)
+        .offset((page - 1) * page_size).limit(page_size)).all()
+    codes = [header.pi_code for header, _ in headers]
+    matches = session.scalars(matched.where(vehicle.pi_code.in_(codes))).all() if codes else []
+    authorized = session.execute(base.with_only_columns(vehicle.pi_code, vehicle.country_code, vehicle.powertrain)
+                                 .where(vehicle.pi_code.in_(codes))).all() if codes else []
+    items = []
+    for header, count in headers:
+        scope = [row for row in authorized if row.pi_code == header.pi_code]
+        items.append({"piCode": header.pi_code, "orderMonth": header.order_month,
+                      "countries": sorted({row.country_code for row in scope}),
+                      "powertrains": sorted({row.powertrain for row in scope if row.powertrain}),
+                      "matched": count, "vehicleTotal": len(scope),
+                      "carCodes": [row.car_code for row in matches if row.pi_code == header.pi_code]})
+    found = set(session.scalars(matched.with_only_columns(func.upper(vehicle.vin))).all()) if vins is not None else set()
+    return {"items": items, "total": total, "matched": matched_total, "page": page, "pageSize": page_size,
+            "missingVins": [vin for vin in vins or [] if vin not in found]}
 
 
 def list_lines_by_pi(session: Session, pi_id) -> list[PiOrderLine]:

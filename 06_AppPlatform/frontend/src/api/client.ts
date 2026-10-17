@@ -5468,10 +5468,9 @@ export const api = {
       { method: "POST", body: JSON.stringify(body) },
     ),
 
-  searchVehicleAllocation: (keyword: string) => {
-    const qs = new URLSearchParams({ keyword });
+  searchVehicleAllocation: (keyword: string, vins?: string[], page = 1, signal?: AbortSignal) => {
     return request<VehicleAllocationSearchResult>(
-      `/order-genius/vehicle-allocation/search?${qs.toString()}`,
+      "/order-genius/vehicle-allocation/search", { method: "POST", body: JSON.stringify({ keyword, vins, page }), signal },
     );
   },
 

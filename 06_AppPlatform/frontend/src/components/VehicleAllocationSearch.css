@@ -1,0 +1,40 @@
+.vehicle-allocation-page .va-header { flex-wrap: wrap; }
+.va-search-container { position: relative; flex: 0 1 640px; width: min(640px, 100%); min-width: min(480px, 100%); }
+.vehicle-allocation-page .va-search { display: flex; gap: 8px; min-width: 0; }
+.va-search-control { display: flex; flex: 1; min-width: 0; align-items: center; border: 1px solid #cfd6df; border-radius: 6px; background: white; }
+.va-search-control:focus-within { outline: 2px solid #b5cff4; outline-offset: 2px; }
+.va-search-control select { max-width: 155px; border: 0; border-right: 1px solid #d8dee6; background: transparent; color: #344054; font-size: 12px; padding: 8px; }
+.va-search-control textarea { resize: none; border: 0; outline: 0; background: transparent; flex: 1; min-width: 0; padding: 9px; height: 40px; font: inherit; font-size: 13px; }
+.va-search-control textarea:not([readonly]):focus { outline: none; }
+.va-search-feedback { font-size: 12px; color: #475467; overflow-wrap: anywhere; }
+.va-search-feedback:empty { display: none; }
+.va-search-batch { font-size: 12px; }
+.va-search-batch textarea { width: 100%; min-height: 100px; }
+.va-search-preview { position: absolute; z-index: 80; top: 100%; right: 0; width: 100%; min-width: 0; max-height: min(540px, 65dvh); overflow: auto; padding: 12px; background: white; color: #1e293b; border: 1px solid #cfd6df; border-radius: 8px; box-shadow: 0 12px 30px #0f172a24; }
+.va-search-preview p { font-size: 12px; margin: 0 0 8px; }
+.vehicle-allocation-page .va-search-result { display: grid; gap: 3px; width: 100%; background: #fff; color: #344054; border: 1px solid #e2e8f0; border-left-width: 4px; text-align: left; margin-bottom: 6px; font-size: 12px; }
+.vehicle-allocation-page .va-search-result span { color: #475467; }
+.vehicle-allocation-page .va-search-result:hover, .vehicle-allocation-page .va-search-result.is-focused { background: #f1f6fd; border-top-color: #b5cff4; border-right-color: #b5cff4; border-bottom-color: #b5cff4; }
+.vehicle-allocation-page .va-search-result[aria-selected="true"] { background: #eaf2ff; box-shadow: inset 0 0 0 1px #1c69d4; }
+.va-search-preview .va-button-row { display: flex; flex-wrap: wrap; }
+.vehicle-allocation-page button, .va-pivot-table th, .va-pivot-table td { transition: background-color 150ms, color 150ms, border-color 150ms; }
+.vehicle-allocation-page button:focus-visible { outline: 2px solid #1c69d4; outline-offset: 2px; }
+.vehicle-allocation-page [aria-label="PI workspace"] button[aria-pressed="true"]:hover { background: #1858b1; color: white; border-color: #1858b1; }
+.va-analysis-pivot table.va-pivot-table th { position: static; letter-spacing: normal; text-transform: none; font-size: 12px; color: #1e293b; border-bottom-color: #dbe3ef; }
+.va-analysis-pivot table.va-pivot-table thead th { background: #eef3fa; position: sticky; top: 0; z-index: 1; }
+.va-analysis-pivot table.va-pivot-table tbody th, .va-analysis-pivot table.va-pivot-table tbody td { background: color-mix(in srgb, var(--va-pivot-accent, #94a3b8) 6%, white); }
+.va-analysis-pivot table.va-pivot-table tbody th { color: color-mix(in srgb, var(--va-pivot-accent, #475467) 55%, #172033); }
+.va-analysis-pivot table.va-pivot-table tbody tr:nth-child(even) :is(th, td) { background: color-mix(in srgb, var(--va-pivot-accent, #94a3b8) 10%, white); }
+.va-analysis-pivot table.va-pivot-table tbody tr:hover :is(th, td) { background: color-mix(in srgb, var(--va-pivot-accent, #94a3b8) 17%, white); }
+.va-analysis-pivot table.va-pivot-table td { text-align: right; }
+.va-analysis-pivot table.va-pivot-table .va-pivot-total, .va-analysis-pivot table.va-pivot-table .va-pivot-total :is(th, td) { background: #eaf1fb; font-weight: 700; color: #1e293b; }
+.vehicle-allocation-page .va-pivot-value { background: transparent; color: #1756a9; border-color: transparent; padding: 7px 10px; min-width: 40px; }
+.vehicle-allocation-page .va-pivot-value:hover { background: #dceaff; border-color: #9bbbe8; }
+@media (max-width: 760px) {
+  .va-search-container { flex-basis: 100%; width: 100%; min-width: 0; }
+  .va-search-control select { max-width: 120px; }
+  .va-search-preview { max-height: 55dvh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vehicle-allocation-page button, .va-pivot-table th, .va-pivot-table td { transition: none; }
+}
