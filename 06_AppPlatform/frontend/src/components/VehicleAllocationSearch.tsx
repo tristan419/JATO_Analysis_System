@@ -110,10 +110,11 @@ export function VehicleAllocationSearch({ vehicles, piCodes, busy, applied, onAp
           rows={rawOpen ? 4 : 1} readOnly={!rawOpen && parsed.vins !== null} style={rawOpen ? { height: "100px" } : undefined}
           value={!rawOpen && parsed.vins !== null ? `${parsed.vins.length} VINs` : query}
           placeholder="CH JAECOO5 BEV; SE 202608…" onChange={(event) => edit(event.target.value)}
-          onPaste={(event) => { const text = event.clipboardData.getData("text"); if (/[\n\r\t]/.test(text)) { event.preventDefault(); edit(text); } }}
+          onPaste={(event) => { const text = event.clipboardData.getData("text"); if (event.currentTarget.readOnly || /[\n\r\t]/.test(text)) { event.preventDefault(); edit(text); } }}
           onFocus={() => setOpen(true)} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing) return;
+            if (event.currentTarget.readOnly && (event.key === "Backspace" || event.key === "Delete")) { event.preventDefault(); edit(""); return; }
             if (event.key === "Escape") { event.preventDefault(); setOpen(false); }
             if ((event.key === "ArrowDown" || event.key === "ArrowUp") && result?.items.length) {
               event.preventDefault(); setOpen(true); setActive((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + result.items.length) % result.items.length);
