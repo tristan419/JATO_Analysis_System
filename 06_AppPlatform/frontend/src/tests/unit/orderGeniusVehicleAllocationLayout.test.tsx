@@ -726,14 +726,20 @@ describe("unified Grid editing contract", () => {
   it("keeps input on version conflicts and clears invalid editor on header filtering", async () => {
     vi.mocked(api.bulkUpdateVehicleAllocationVehicles).mockRejectedValueOnce(new Error("Selection changed; nothing saved / 勾选车辆已变化，未保存"));
     await selectPi(); fireEvent.click(screen.getByLabelText("Select filtered vehicles"));
-    fireEvent.click(screen.getByRole("button", { name: /Update selected status/ }));
-    fireEvent.change(screen.getByLabelText("ETD"), { target: { value: "2026-10-12" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes / 保存修改" }));
+    const actions = document.querySelector<HTMLElement>(".va-selected-actions");
+    if (!actions) throw new Error("Missing selected actions");
+    fireEvent.click(within(actions).getByRole("button", { name: /Update selected status/ }));
+    const panel = document.querySelector<HTMLElement>(".vehicle-allocation-tool-panel");
+    const main = document.querySelector<HTMLElement>(".va-main");
+    if (!panel || !main) throw new Error("Missing allocation panel");
+    const etd = within(panel).getByLabelText("ETD") as HTMLInputElement;
+    fireEvent.change(etd, { target: { value: "2026-10-12" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save changes / 保存修改" }));
     await waitFor(() => expect(screen.getAllByText(/勾选车辆已变化/).length).toBeGreaterThan(0));
-    expect((screen.getByLabelText("ETD") as HTMLInputElement).value).toBe("2026-10-12");
-    fireEvent.click(screen.getByRole("button", { name: "Change grid filter" }));
+    expect(etd.value).toBe("2026-10-12");
+    fireEvent.click(within(main).getByRole("button", { name: "Change grid filter" }));
     expect(screen.queryByLabelText("ETD")).toBeNull();
-    expect(screen.getByRole("button", { name: /Export selected 150 / })).toBeTruthy();
+    expect(within(main).getByRole("button", { name: /Export selected 150 / })).toBeTruthy();
   });
   it("exports the entire visible view with the same columns, not a display page", async () => {
     const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
