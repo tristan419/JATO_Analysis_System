@@ -83,4 +83,20 @@ describe("allocation search", () => {
     expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(2); expect(search.mock.calls.at(-1)?.[2]).toBe(2);
     fireEvent.pointerDown(document.body); expect(screen.queryByRole("listbox")).toBeNull();
   });
+
+  it("replaces a VIN summary with a pasted single VIN or CSV and clears it with Backspace", async () => {
+    const search = vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue(result);
+    const { input, onApply } = setup();
+    fireEvent.change(input, { target: { value: "LVTDB21B9RD123456" } });
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    expect((input as HTMLTextAreaElement).readOnly).toBe(true);
+    for (const text of ["LVTDB21B9RD123457", "LVTDB21B9RD123458,LVTDB21B9RD123459"]) {
+      fireEvent.paste(input, { clipboardData: { getData: () => text } });
+      await waitFor(() => expect(search.mock.calls.at(-1)?.[1]).toEqual(text.split(",")));
+    }
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect((input as HTMLTextAreaElement).value).toBe("");
+    expect(onApply).toHaveBeenLastCalledWith("", null);
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
 });
