@@ -8,6 +8,10 @@ backend · source: git_commit
 
 ## Summary
 feat: JATO monthly update — publish blocker classification + resolution panels + info flowchart
+- 2026-07-21: routine country updates now treat active history as immutable by default and require an explicit per-country historical decision when the uploaded workbook differs.
+- `keep_active` preserves active rows through each country's active latest month and uses uploaded rows only after that boundary.
+- `use_latest` is limited to explicit historical reclassification when historical monthly sales totals remain stable; historical sales changes remain blocked from the routine fast path.
+- Review approval and Publish fail closed when decisions, validation coverage, fingerprints, country partitions, or historical guards are incomplete.
 - Backend: publish_jato_monthly_update_job() now returns structured 409
   detail for country_regression (regressions[]) and sales_doubling
   (anomalies[]) instead of flat string messages
@@ -28,6 +32,8 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 - `POST /monthly-update-jobs/{job_id}/recheck`
 - `POST /monthly-update-jobs/{job_id}/cancel`
 - `GET /monthly-update-jobs/{job_id}/review`
+- `POST /monthly-update-jobs/{job_id}/historical-reclassification-resolution`
+- `POST /monthly-update-jobs/{job_id}/review-approval`
 - `POST /monthly-update-jobs/{job_id}/publish`
 - `POST /v1/msrp/monthly-update-jobs/{job_id}/recheck`
 - `POST /v1/msrp/monthly-update-jobs/{job_id}/cancel`
@@ -80,6 +86,11 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 - _run_single_country_job() — background runner: validate country, skip prepare/compare, run refresh with supplement
 - Upload-time validation: reject if uploaded month <= active latest for that country
 - POST /v1/msrp/monthly-update-jobs/single-country route
+- Historical Review reports `decisionRequired`, `allowedDecisions`, monthly-total stability, and country-level differences.
+- `_keep_active_history_country_frame()` reuses active history through the active latest month and accepts candidate rows only after that boundary.
+- Smart Merge validates non-overlapping month boundaries and rebuilds the full candidate without changing untouched-country partitions.
+- Approval requires exact `keep_active` validation coverage and rejects missing, failed, duplicated, or extra validation records.
+- Publish retains live historical sales/configuration, fingerprint, duplicate, regression, and suspected-accumulation hard gates.
 
 ## Frontend
 
@@ -95,6 +106,9 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 - Added hasSmartMerge state variable to disable re-merge after completion
 - Updated info section to remove '功能开发中' label for Smart Merge
 - Checkbox on existing upload form to enable single-country quick mode with country/month fields
+- Historical Review renders only backend-authorized decisions; it does not auto-select a replacement policy.
+- Countries with unstable historical monthly totals show `use_latest` as locked and require `keep_active` in the routine flow.
+- A resolved `keep_active` decision is shown as safe only after matching backend `resolutionValidation=pass`; otherwise approval remains locked.
 
 ## Tests
 
@@ -107,6 +121,8 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 - **frontendTsc**: clean
 - **frontendVitest**: 129/129 passed
 - **integration**: 5/5 passed
+- **2026-07-21 backend JATO suite**: 212 passed
+- **2026-07-21 frontend suite**: 58 files, 310 tests passed; typecheck and production build passed
 
 ## Linked Dev Events
 
@@ -138,6 +154,7 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 ## Docs
 
 - Markdown_Readme/features/feature.jato_monthly_update.md
+- Markdown_Readme/Fullstack/04_DevOps/JATO_MONTHLY_UPDATE_DATA_LIFECYCLE_2026-05-17.md
 
 ## Risks
 
@@ -146,7 +163,9 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 - MarketScan first request after a real JATO publish still performs one cold compute; Redis/local warm path should be fast after that.
 - Existing runtime pipelines must run once to create fresh standard status files for MSRP dryrun/ingest; Hermes still falls back to legacy scheduled status until then.
 - Smart Merge rebuilds partition/manifest/fingerprint via subprocess — if the rebuild script fails, the job enters smart_merge_failed phase and user must retry
-- Works only for country_regression blocker, not sales_doubling (which indicates deeper data integrity issue)
+- Sales-doubling remains a deeper data-integrity blocker and cannot be resolved by historical reclassification.
+- The routine flow intentionally does not permit correcting changed historical sales totals. That requires an explicit high-risk historical-correction mode with a bounded country/month scope and separate approval.
+- `use_latest` can deliberately change historical analysis dimensions when monthly totals are stable; the Review diff and explicit user decision are therefore mandatory audit evidence.
 - No CSV upload support — only xlsx
 - Upload-time month check is best-effort; publish guard still runs separately
 
