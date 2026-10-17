@@ -1,5 +1,7 @@
 # Order Genius — PI Vehicle Allocation & Delivery Tracker 历史基础规格
 
+> 2026-10-17真实验收续修：筛选与选择分开。列头/普通关键词/VIN批量及清除或恢复筛选只关闭editor，保留所选PI授权集合内的selectedCarCodes；0条可见仍可导出/透视已选全集。显式清勾选、真实PI/line切换、删除及撤权继续清理失效选择。修复原Page的clearSelection回调，不新增状态/接口/数据库；#293旧“本地已通过”不等于该真实边界已通过，最终发布/验收见Progress。
+
 > 2026-10-16最新授权（实现及本地回归完成，发布/真实Candidate验收只见交接Progress）：业务唯一见交接Goal3.5.2/4.1/4.2。BOM国家＋年月按全月有效区间输出，标适用日期，所选月末仅作明示状态/划线，不以月底空价判全月无价。PI复选可跨国家/月，浏览不清空既选；完整授权车辆按CarCode去重，明细/行列透视共用筛选与勾选。筛选导出、勾选全集导出、透视结果与单张正式发票分开；金额取订单快照。透视XLSX为SUMIFS公式汇总＋完整来源sheet，不宣称原生Excel PivotTable。联合查看不自动补录或拆分批量写入，业务修改仍明确单PI。Model→Trim→每base固定泳道，未关联也显示BOM日期；候选/保存限定Model内，旧跨Model关系只提示核对不删改，WVTA仅参考。物料通知定位泳道，已读不代表切换完成。不新增表/Enterprise/进销存台账，不改Active价格/日期/旧PI、不自动推广Active/intl；下方单PI摘要/已关联链优先为旧批事实。
 
 > 2026-10-16导入表头/勾选续修：补录解析接受BOM、Material Code和中文“物料号”，均指完整颜色SKU，不识别“物料号组”为完整物料列。当前授权PI/line/明确市场范围内、同物料同VIN且无冲突的已录skip行，可显式Select imported，即使全部skip/Apply 0；沿现有selectedCarCodes跨页勾选，不Apply、不写VIN/订单、不清筛选。清VIN预览不提供此入口，未录/冲突/过期匹配不混入。完整规则见交接Goal4.1，BOM报价导出仍沿既有共享判定，新增透视不在本批。
