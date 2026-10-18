@@ -507,18 +507,20 @@ describe("COC library lookup and downloads", () => {
       items: [{ carCode: "CAR-0", vin: vehicle(0).vin, status: "available" }, { carCode: "CAR-1", vin: vehicle(1).vin, status: "missing" }] });
     const download = vi.spyOn(api, "piCocDownload").mockResolvedValue(new Blob());
     await selectPi();
-    fireEvent.click(screen.getByRole("button", { name: "COC library / 在线库" }));
-    fireEvent.click(screen.getByRole("button", { name: "Search library / 在库里查找" }));
-    await screen.findByText(/COC PDF 1\/150 · Awaiting/);
-    fireEvent.click(screen.getByLabelText("Select CAR-1"));
-    fireEvent.click(screen.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
+    fireEvent.click(screen.getByText("COC library / 在线库", { selector: "button" }));
+    const tools = within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" }));
+    const table = within(screen.getByRole("table", { name: "Vehicle details" }));
+    fireEvent.click(tools.getByRole("button", { name: "Search library / 在库里查找" }));
+    await tools.findByText(/COC PDF 1\/150 · Awaiting/);
+    fireEvent.click(table.getByLabelText("Select CAR-1"));
+    fireEvent.click(tools.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
     await screen.findByText(/勾选车辆均无可下载 PDF/);
     expect(download).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("Select CAR-0"));
-    fireEvent.click(screen.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
-    expect(screen.getByRole("button", { name: "Confirm available only / 确认仅下载可用" })).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("Select CAR-0"));
-    expect(screen.queryByRole("button", { name: "Confirm available only / 确认仅下载可用" })).toBeNull();
+    fireEvent.click(table.getByLabelText("Select CAR-0"));
+    fireEvent.click(tools.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
+    expect(screen.getByText("Confirm available only / 确认仅下载可用", { selector: "button" })).toBeTruthy();
+    fireEvent.click(table.getByLabelText("Select CAR-0"));
+    expect(screen.queryByText("Confirm available only / 确认仅下载可用", { selector: "button" })).toBeNull();
   });
 
   it("shows row download errors with the tools closed and does not show raw codes", async () => {
