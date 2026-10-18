@@ -1,6 +1,6 @@
 import type { PiVehicleUnit } from "../types/orderGeniusVehicle";
 
-export type VehicleColumnKey = keyof PiVehicleUnit | "config" | "cocPdf";
+export type VehicleColumnKey = keyof PiVehicleUnit | "config" | "cocPdf" | `custom:${string}`;
 export type VehicleTextField = "vin" | "engineId" | "productionDate" | "etd" | "eta" | "actualDepartureDate" | "actualArrivalDate" | "readyForPickupDate" | "shipName" | "dealerCode" | "dealerName" | "customerRef" | "remark";
 export interface VehicleColumn {
   key: VehicleColumnKey;

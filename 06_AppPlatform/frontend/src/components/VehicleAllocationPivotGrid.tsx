@@ -12,6 +12,7 @@ export interface VehicleGridView { vehicles: PiVehicleUnit[]; ordinaryVehicles: 
 const DEFAULT_COLUMN: ColDef<PiVehicleUnit> = { sortable: true, resizable: true, minWidth: 100 };
 const SELECTION_COLUMN: ColDef<PiVehicleUnit> = { pinned: "left", width: 45, minWidth: 45, maxWidth: 45, suppressMovable: true };
 interface Props {
+  preferenceKey?: string;
   vehicles: PiVehicleUnit[];
   ordinaryVehicles: PiVehicleUnit[];
   columns: VehicleColumn[];
@@ -29,9 +30,10 @@ interface Props {
   onViewChange: (view: VehicleGridView) => void;
 }
 function cellValue(vehicle: PiVehicleUnit, key: VehicleColumnKey, cocStatuses: Props["cocStatuses"]): string | number | null {
+  if (key.startsWith("custom:")) return vehicle.customValues?.[key.slice(7)] ?? null;
   if (key === "config") return [vehicle.modelName, vehicle.version, vehicle.powertrain].filter(Boolean).join(" / ");
   if (key === "cocPdf") return cocStatuses.get(vehicle.carCode) ?? "not_searched";
-  const value = vehicle[key];
+  const value = key in vehicle ? vehicle[key as keyof PiVehicleUnit] : null;
   return typeof value === "string" || typeof value === "number" ? value : null;
 }
 function ValueListFilter({ api, getValue, model, onModelChange }: CustomFilterProps<PiVehicleUnit, unknown, string[]>) {
@@ -57,7 +59,7 @@ function ValueListFilter({ api, getValue, model, onModelChange }: CustomFilterPr
     <button type="button" onClick={() => onModelChange(null)}>All values / 全部值</button>
   </div>;
 }
-export function VehicleAllocationGrid({ vehicles, ordinaryVehicles, columns, groups, visibleKeys, selectedCodes, busy, resetKey, filterScope, cocStatuses, renderCell, onEdit, onSelection, onFilterChange, onViewChange }: Props) {
+export function VehicleAllocationGrid({ vehicles, ordinaryVehicles, columns, groups, visibleKeys, selectedCodes, busy, resetKey, filterScope, cocStatuses, renderCell, onEdit, onSelection, onFilterChange, onViewChange, preferenceKey }: Props) {
   const grid = useRef<AgGridReact<PiVehicleUnit>>(null);
   const syncingSelection = useRef(false);
   const renderer = useRef(renderCell);
@@ -172,11 +174,22 @@ export function VehicleAllocationGrid({ vehicles, ordinaryVehicles, columns, gro
         paginationPageSize={100}
         paginationPageSizeSelector={[50, 100, 200]}
         suppressDragLeaveHidesColumns
-        onGridReady={(event) => { event.api.applyColumnState({ state: columns.map((column) => ({ colId: column.key, hide: !visibleKeys.has(column.key) })) }); publish(event.api); }}
+        onGridReady={(event) => {
+          if (preferenceKey) {
+            try {
+              const saved: unknown = JSON.parse(localStorage.getItem(`${preferenceKey}:order`) ?? "null");
+              if (Array.isArray(saved) && saved.every((key) => typeof key === "string")) event.api.applyColumnState({ state: saved.map((colId: string) => ({ colId })), applyOrder: true });
+            } catch { /* Personal browser preferences do not gate vehicle data. */ }
+          }
+          event.api.applyColumnState({ state: columns.map((column) => ({ colId: column.key, hide: !visibleKeys.has(column.key) })) }); publish(event.api);
+        }}
         onModelUpdated={(event) => publish(event.api)}
         onRowDataUpdated={(event) => syncSelection(event.api)}
         onDisplayedColumnsChanged={(event) => publish(event.api)}
-        onColumnMoved={(event) => { if (event.finished) publish(event.api); }}
+        onColumnMoved={(event) => { if (event.finished) {
+          if (preferenceKey) { try { localStorage.setItem(`${preferenceKey}:order`, JSON.stringify(event.api.getColumnState().map((c) => c.colId))); } catch { /* Browser storage may be disabled. */ } }
+          publish(event.api);
+        } }}
         onSortChanged={(event) => publish(event.api)}
         onFilterChanged={(event) => {
           // Selected-only clears/restores the existing filters; this is a view switch, not a user filter change.

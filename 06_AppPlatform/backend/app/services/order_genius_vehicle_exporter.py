@@ -80,16 +80,17 @@ COLUMN_LABELS.update({"config": "Config", "fobEur": "FOB (EUR)", "cocPdf": "COC 
                       "readyForPickupDate": "Ready for pickup / 可提车"})
 
 
-def generate_vehicle_allocation_excel(vehicles: list[dict], columns: list[str] | None = None) -> io.BytesIO:
-    if columns is not None and (not columns or len(columns) != len(set(columns)) or any(key not in COLUMN_LABELS for key in columns)):
+def generate_vehicle_allocation_excel(vehicles: list[dict], columns: list[str] | None = None, *, custom_labels: dict[str, str] | None = None) -> io.BytesIO:
+    labels = {**COLUMN_LABELS, **(custom_labels or {})}
+    if columns is not None and (not columns or len(columns) != len(set(columns)) or any(key not in labels for key in columns)):
         raise ValueError("Invalid export columns / 导出列无效，请恢复默认列后重试")
-    headers = [COLUMN_LABELS[key] for key in columns] if columns is not None else HEADERS
+    headers = [labels[key] for key in columns] if columns is not None else HEADERS
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Vehicle Allocation"
 
     for col_idx, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell = ws.cell(row=1, column=col_idx, value=_excel_value(header))
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
         cell.alignment = CENTER_ALIGN

@@ -2230,10 +2230,11 @@ def get_bom_admin(
     user=Depends(require_min_role("editor")),
 ) -> dict:
     """Return BOM data with FOB per country, for the BOM admin panel."""
+    permitted_countries = ordering_countries(session, user)
     items, countries, fob_conflicts = repo.list_bom_with_fob(
         session,
         allowed_brands=ordering_brands(session, user),
-        allowed_countries=ordering_countries(session, user),
+        allowed_countries=permitted_countries,
         brand=brand,
         search=search,
         country_code=country,
@@ -2241,9 +2242,9 @@ def get_bom_admin(
     )
     return {
         "items": items,
-        "countries": ([code for code in dict.fromkeys(["NL", country.upper()]) if code in countries]
-                      if country else countries),
-        "activeFobCountries": countries,
+        "countries": countries,
+        "activeFobCountries": [code for code in repo.list_active_fob_country_codes(session)
+                               if permitted_countries is None or code in permitted_countries],
         "fobConflicts": fob_conflicts,
     }
 

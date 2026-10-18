@@ -209,6 +209,7 @@ import type {
   VehicleAllocationListResponse,
   VehicleAllocationPlan,
   VehicleAllocationSearchResult,
+  VehicleCustomColumn,
   VehicleImportParsedRowsPayload,
   VehicleImportPreview,
   VehicleImportResult,
@@ -5467,6 +5468,11 @@ export const api = {
       "/order-genius/vehicle-allocation/vehicles/bulk-update",
       { method: "POST", body: JSON.stringify(body) },
     ),
+
+  getVehicleCustomColumns: () => request<{ items: VehicleCustomColumn[] }>("/order-genius/vehicle-allocation/custom-columns"),
+  createVehicleCustomColumn: (label: string) => request<VehicleCustomColumn>("/order-genius/vehicle-allocation/custom-columns", { method: "POST", body: JSON.stringify({ label }) }),
+  deleteVehicleCustomColumn: (id: string) => request<{ deleted: boolean }>(`/order-genius/vehicle-allocation/custom-columns/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  updateVehicleCustomValues: (body: BulkVehicleUpdatePayload) => request<BulkVehicleUpdateResult>("/order-genius/vehicle-allocation/custom-values", { method: "POST", body: JSON.stringify(body) }),
 
   searchVehicleAllocation: (keyword: string, vins?: string[], page = 1, signal?: AbortSignal) => {
     return request<VehicleAllocationSearchResult>(

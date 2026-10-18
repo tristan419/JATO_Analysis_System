@@ -87,6 +87,12 @@ function detail(): PiOrderDetail {
 }
 
 beforeEach(() => {
+  localStorage.clear();
+  vi.spyOn(api, "getVehicleCustomColumns").mockResolvedValue({ items: [] });
+  vi.spyOn(api, "searchVehicleAllocation").mockImplementation(async (keyword, vins) => {
+    const vehicles = detail().vehicles.filter((v) => vins ? Boolean(v.vin && vins.includes(v.vin)) : matchesVehicleText(v, keyword));
+    return { vehicles, items: [], total: vehicles.length ? 1 : 0, matched: vehicles.length, page: 1, pageSize: 8, missingVins: [] };
+  });
   // jsdom has no layout observer; real shell resize geometry is covered in Chrome.
   vi.stubGlobal("ResizeObserver", class { observe(): void {} disconnect(): void {} });
   testRole.value = "admin";
@@ -110,17 +116,14 @@ async function selectPi() {
   await waitFor(() => expect(api.getVehicleAllocationPis).toHaveBeenCalled());
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${PI}`) }, { timeout: 5000 }));
   await screen.findByText("150 units / 台");
-  await waitFor(() => expect(screen.getAllByRole("row").length).toBe(6));
+  const table = within(screen.getByRole("table", { name: "Vehicle details" }));
+  await waitFor(() => expect(table.getAllByRole("row").length).toBe(6));
 }
 
 async function applySearch(query: string): Promise<void> {
-  fireEvent.change(screen.getByLabelText("Search scope / 搜索范围"), { target: { value: "vehicles" } });
   fireEvent.change(screen.getByLabelText("Search PI, VIN, material / 搜索"), { target: { value: query } });
-  const form = screen.getByLabelText("Search PI, VIN, material / 搜索").closest("form");
-  if (!form) throw new Error("Search form missing");
-  const button = within(form).getByRole("button", { name: "Search" }) as HTMLButtonElement;
-  await waitFor(() => expect(button.disabled).toBe(false));
-  fireEvent.click(button);
+  if (query) await waitFor(() => expect(api.searchVehicleAllocation).toHaveBeenCalledWith(query, undefined, 1, expect.any(AbortSignal)));
+  await waitFor(() => expect(screen.queryByText("查询中…")).toBeNull());
 }
 
 it("retains cross-country/month PI choices and exports the whole selected set then prunes removed PI vehicles", async () => {
@@ -168,7 +171,7 @@ it.each(["failed read", "changed VIN"])("preserves the workspace and selection w
   const other = detail(); const code = "PI-SE-202610-001"; const vin = "LVTDB21B9RD123456";
   other.header = { ...other.header, piCode: code };
   other.vehicles = [{ ...vehicle(0), piCode: code, carCode: "CAR-SE-1", vin: "LVTDB21B9RD654321" }];
-  const lookup = vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue({ items: [{ piCode: code, countries: ["SE"],
+  const lookup = vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue({ vehicles: [{ ...other.vehicles[0], vin }], items: [{ piCode: code, countries: ["SE"],
     orderMonth: "2026-10", powertrains: ["HEV"], matched: 1, vehicleTotal: 1, carCodes: ["CAR-SE-1"] }], total: 1,
     matched: 1, missingVins: [], page: 1, pageSize: 8 });
   await selectPi(); fireEvent.click(screen.getByLabelText("Select CAR-1"));
@@ -176,7 +179,7 @@ it.each(["failed read", "changed VIN"])("preserves the workspace and selection w
     if (pi !== code) return detail(); if (failure === "failed read") throw new Error("Forbidden"); return other;
   });
   fireEvent.change(screen.getByLabelText("Search PI, VIN, material / 搜索"), { target: { value: vin } });
-  const select = await screen.findByRole("button", { name: /Select only these 1 vehicles/ });
+  const select = await screen.findByRole("button", { name: "勾选这 1 台" });
   expect(lookup).toHaveBeenCalledTimes(1); expect(api.getVehicleAllocationPi).toHaveBeenCalledTimes(1);
   fireEvent.click(select);
   await waitFor(() => expect(screen.getByRole("status").textContent).toContain(failure === "failed read" ? "Forbidden" : "匹配车辆或权限已变化"));
@@ -201,17 +204,35 @@ it("cross-tabulates the complete source and selected subset with exact source dr
   expect(output.mock.calls[0][0]).toHaveLength(30);
 });
 
+it("exports live cross-PI search results without selecting or opening their PIs", async () => {
+  const hits = [vehicle(1), { ...vehicle(2), piCode: "PI-SE-202608-001", carCode: "CAR-SE-2", countryCode: "SE" }];
+  vi.mocked(api.searchVehicleAllocation).mockResolvedValue({ vehicles: hits, items: [], total: 2, matched: 2, page: 1, pageSize: 8, missingVins: [] });
+  const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:export"; static revokeObjectURL = vi.fn(); });
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  render(<OrderGeniusVehicleAllocationPage />);
+  await applySearch("CH SE");
+  expect(api.getVehicleAllocationPi).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: /Export selected/ })).toBeNull();
+  openView(); fireEvent.click(screen.getByRole("button", { name: "Export current view / 导出所见" }));
+  await waitFor(() => expect(download).toHaveBeenCalled());
+  expect(download.mock.calls[0][0]?.piCodes).toEqual(hits.map((v) => v.piCode));
+  expect(download.mock.calls[0][0]?.piCode).toBeUndefined();
+  expect(download.mock.calls[0][0]?.country).toBeUndefined();
+  expect(download.mock.calls[0][0]?.carCodes).toEqual(hits.map((v) => v.carCode));
+});
+
 it("selects a VIN subset across PIs and confirms one logistics-only bulk request", async () => {
   const other = detail(), code = "PI-SE-202608-001", first = vehicle(1), second = { ...vehicle(2), piCode: code, carCode: "CAR-SE-2", countryCode: "SE" };
   other.header = { ...other.header, piCode: code, countryCode: "SE", orderMonth: "2026-08" };
   other.vehicles = [second, { ...second, carCode: "CAR-SE-3", vin: "LVTDB21B9RD123456" }];
   vi.mocked(api.getVehicleAllocationPi).mockImplementation(async (pi) => pi === code ? other : detail());
-  vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue({ items: [first, second].map((v) => ({ piCode: v.piCode, orderMonth: "2026-08", countries: [v.countryCode], powertrains: ["HEV"], matched: 1, vehicleTotal: 150, carCodes: [v.carCode] })), total: 2, matched: 2, page: 1, pageSize: 2, missingVins: [] });
+  vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue({ vehicles: [first, second], items: [first, second].map((v) => ({ piCode: v.piCode, orderMonth: "2026-08", countries: [v.countryCode], powertrains: ["HEV"], matched: 1, vehicleTotal: 150, carCodes: [v.carCode] })), total: 2, matched: 2, page: 1, pageSize: 2, missingVins: [] });
   await selectPi(); fireEvent.click(screen.getByLabelText("Select CAR-0"));
   fireEvent.change(screen.getByLabelText("Search PI, VIN, material / 搜索"), { target: { value: `${first.vin}\n${second.vin}` } });
-  fireEvent.click(await screen.findByRole("button", { name: /Select only these 2 vehicles/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "勾选这 2 台" }));
   await screen.findByRole("button", { name: /Export selected 2 / });
-  expect((screen.getByLabelText("Select CAR-0") as HTMLInputElement).checked).toBe(false);
+  expect(screen.queryByLabelText("Select CAR-0")).toBeNull(); // Search displays only matches, never the rest of the PI.
   fireEvent.click(screen.getByRole("button", { name: /Update selected status/ }));
   const form = document.getElementById("vehicle-edit-form"); if (!form) throw new Error("Editor missing");
   expect(within(form).getByText(/Costs \/ 运保费/)).toBeTruthy();
@@ -337,7 +358,7 @@ describe("vehicle detail search and view", () => {
     expect(screen.getByText("20 VIN assigned / 已录")).toBeTruthy();
     await applySearch("BOM-ONE");
     expect(screen.getByText("75 filtered")).toBeTruthy();
-    expect(screen.getByText("150 units / 台")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "PI workspace" }).textContent).toContain("150 vehicles / 台");
   });
 
   it("ignores a slow previous PI and clears the old editor before reading", async () => {
@@ -747,7 +768,8 @@ describe("PI allocation layout and scope", () => {
 
   it("uses one column list for headers, cells and restore defaults", async () => {
     await selectPi();
-    openView();
+    fireEvent.click(screen.getByRole("button", { name: "Columns / 列设置" }));
+    fireEvent.click(screen.getByText("系统列"));
     const columns = within(screen.getByRole("group", { name: "Columns / 显示列" }));
     const table = screen.getByRole("table", { name: "Vehicle details" });
     const headers = within(table.querySelector("thead")!);
@@ -756,7 +778,12 @@ describe("PI allocation layout and scope", () => {
     expect(table.querySelectorAll("tbody td").length).toBe(5 * table.querySelectorAll("thead th").length);
     fireEvent.click(columns.getByRole("checkbox", { name: "Production" }));
     expect(headers.getByRole("columnheader", { name: "Production" })).toBeTruthy();
-    fireEvent.click(columns.getByRole("button", { name: /Reset columns & filters/ }));
+    expect(columns.getByRole("checkbox", { name: "Engine ID / 发动机序号" }).getAttribute("checked")).toBeNull();
+    fireEvent.click(columns.getByRole("checkbox", { name: "Engine ID / 发动机序号" }));
+    expect(headers.getByRole("columnheader", { name: "Engine ID / 发动机序号" })).toBeTruthy();
+    expect(columns.queryByRole("button", { name: "删除" })).toBeNull();
+    openView();
+    fireEvent.click(screen.getByRole("button", { name: /Reset columns & filters/ }));
     expect(headers.getByRole("columnheader", { name: "Interior" })).toBeTruthy();
     expect(headers.queryByRole("columnheader", { name: "Production" })).toBeNull();
   });
@@ -783,7 +810,7 @@ describe("unified Grid editing contract", () => {
     await applySearch("BOM-TWO");
     expect(screen.getByText("75 filtered")).toBeTruthy();
     expect(screen.queryByLabelText("ETD")).toBeNull();
-    expect(screen.getByText("1 selected / 已勾选 · 1 outside current filters / 筛选外已选")).toBeTruthy();
+    expect(await screen.findByText("1 selected / 已勾选 · 1 outside current filters / 筛选外已选")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save changes / 保存修改" }).hasAttribute("disabled")).toBe(true);
   });
   it("never implicitly updates the whole PI with an empty selection", async () => {
@@ -848,10 +875,15 @@ describe("unified Grid editing contract", () => {
     const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
     vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:export"; static revokeObjectURL = vi.fn(); });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
-    await selectPi(); openView();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Interior" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Note / 备注" }));
-    fireEvent.click(screen.getByRole("button", { name: "Export current view / 导出所见" }));
+    await selectPi();
+    fireEvent.click(screen.getByRole("button", { name: "Columns / 列设置" }));
+    const columns = within(screen.getByRole("group", { name: "Columns / 显示列" }));
+    fireEvent.click(columns.getByText("系统列"));
+    fireEvent.click(columns.getByRole("checkbox", { name: "Interior" }));
+    fireEvent.click(columns.getByRole("checkbox", { name: "Note / 备注" }));
+    openView();
+    const tools = within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" }));
+    fireEvent.click(tools.getByRole("button", { name: "Export current view / 导出所见" }));
     await waitFor(() => expect(download).toHaveBeenCalled());
     expect(download.mock.calls[0][0]?.carCodes).toHaveLength(150);
     expect(download.mock.calls[0][0]?.columns).not.toContain("interiorColorName");

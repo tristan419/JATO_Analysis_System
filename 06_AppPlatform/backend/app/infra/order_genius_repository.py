@@ -1832,8 +1832,18 @@ def list_bom_with_fob(
     all_countries = list_active_fob_country_codes(session)
     if allowed_countries is not None:
         all_countries = [country for country in all_countries if country in allowed_countries]
-    skus = list_all_material_skus_for_admin(session, brand=brand, search=search, country_code=country_code,
+    import re
+    terms = re.split(r"[\s,，;；]+", search or "")
+    requested_countries = {term.upper() for term in terms if term.upper() in set(list_active_fob_country_codes(session))}
+    if country_code:
+        requested_countries.add(country_code.upper())
+    remaining_search = " ".join(term for term in terms if term.upper() not in requested_countries)
+    if requested_countries and allowed_countries is not None and not requested_countries.intersection(allowed_countries):
+        return ([], [], []) if include_conflicts else ([], [])
+    skus = list_all_material_skus_for_admin(session, brand=brand, search=remaining_search, country_code=requested_countries or None,
                                            limit=limit, allowed_brands=allowed_brands)
+    if requested_countries:
+        all_countries = [country for country in all_countries if country in requested_countries]
     if not skus:
         empty_result = ([], all_countries, [])
         return empty_result if include_conflicts else empty_result[:2]
@@ -2370,7 +2380,7 @@ def copy_country_material_finance_template(
 
 def list_all_material_skus_for_admin(
     session: Session,
-    country_code: str | None = None,
+    country_code: str | set[str] | None = None,
     brand: str | None = None,
     search: str | None = None,
     limit: int | None = 500,
@@ -2384,15 +2394,24 @@ def list_all_material_skus_for_admin(
     if allowed_brands is not None:
         stmt = stmt.where(func.upper(MaterialSkuMaster.brand).in_(allowed_brands))
     if country_code:
-        stmt = stmt.where(MaterialSkuMaster.material_code.in_(list_active_fob_material_codes(session, country_code)))
+        countries = [country_code] if isinstance(country_code, str) else sorted(country_code)
+        materials = {code for country in countries for code in list_active_fob_material_codes(session, country)}
+        stmt = stmt.where(MaterialSkuMaster.material_code.in_(materials))
     if brand:
         stmt = stmt.where(MaterialSkuMaster.brand == brand)
     if search:
-        stmt = stmt.where(
-            MaterialSkuMaster.material_code.ilike(f"%{search}%")
-            | MaterialSkuMaster.model_name.ilike(f"%{search}%")
-            | MaterialSkuMaster.brand.ilike(f"%{search}%")
-        )
+        from app.infra.business_search import search_expression, facet_words
+        columns = [MaterialSkuMaster.brand, MaterialSkuMaster.powertrain, MaterialSkuMaster.model_name,
+                   MaterialSkuMaster.version, MaterialSkuMaster.material_code]
+        vocabulary = session.execute(stmt.with_only_columns(*columns).distinct()).all()
+        facets = [([column], facet_words(row[i] for row in vocabulary)) for i, column in enumerate(columns)]
+        facets[1][1].update({"EV", "SHS"})
+        import re
+        facets[4][1].update(term.upper() for term in re.split(r"[\s,，;；]+", search)
+                            if re.fullmatch(r"\d{2,5}|T\d[A-Za-z0-9]+", term, re.IGNORECASE))
+        expression = search_expression(search, columns, facets)
+        if expression is not None:
+            stmt = stmt.where(expression)
     stmt = stmt.order_by(
         MaterialSkuMaster.material_code,
         MaterialSkuMaster.is_active.desc(),

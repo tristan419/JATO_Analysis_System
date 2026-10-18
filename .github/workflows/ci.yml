@@ -209,6 +209,7 @@ jobs:
             tests/unit/test_jato_monthly_update_enabled_gate.py \
             tests/unit/test_readiness_service.py \
             tests/unit/test_security.py \
+            tests/unit/test_order_genius_vehicle_allocation.py \
             tests/unit/test_account_brand_access.py \
             tests/unit/test_bom_pricing_workflows.py \
             tests/unit/test_coc_fill_service.py \

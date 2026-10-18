@@ -211,6 +211,7 @@ export interface PiVehicleUnit {
   carCode: string;
   vin: string | null;
   engineId?: string | null;
+  customValues?: Record<string, string | null>;
   materialCode: string | null;
   bom: string | null;
   brand: string | null;
@@ -308,7 +309,10 @@ export interface PiOrderFilters {
   pageSize?: number;
 }
 
+export interface VehicleCustomColumn { id: string; label: string; createdBy: string; canDelete: boolean }
+
 export interface VehicleAllocationSearchResult {
+  vehicles: PiVehicleUnit[];
   items: Array<{ piCode: string; orderMonth: string | null; countries: string[]; powertrains: string[];
     matched: number; vehicleTotal: number; carCodes: string[] }>;
   total: number;
@@ -457,6 +461,7 @@ export interface VehicleVinListExtract {
 }
 
 export interface UpdateVehiclePayload {
+  customValues?: Record<string, string | null>;
   engineId?: string | null;
   rowVersion?: number;
   freightEur?: number | null;
