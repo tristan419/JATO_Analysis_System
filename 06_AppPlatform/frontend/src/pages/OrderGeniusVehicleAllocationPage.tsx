@@ -1266,7 +1266,7 @@ export function OrderGeniusVehicleAllocationPage() {
             <button type="button" disabled={scopeBusy} onClick={() => changeSelection(new Set([...selectedCarCodes, ...inspection.map((v) => v.carCode)]))}>Append this group / 追加此组</button>
             <table className="data-table"><thead><tr><th>PI</th><th>Country</th><th>Car Code</th><th>VIN</th><th>Material</th><th>FOB EUR</th></tr></thead><tbody>{inspection.map((v) => <tr key={v.carCode}><td>{v.piCode}</td><td>{v.countryCode}</td><td>{v.carCode}</td><td>{v.vin || "—"}</td><td>{v.materialCode}</td><td>{v.fobEur ?? "Missing / 缺失"}</td></tr>)}</tbody></table>
           </section> : null}
-          <div style={{ display: analysisView === "details" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
+          <div style={{ display: analysisView === "details" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 }}>
           <VehicleAllocationGrid
             key={`${selectedPi?.header.piCode ?? ""}:${selectedLineCode ?? ""}:${filters.country ?? ""}`}
             filterScope={`${filters.keyword ?? ""}:${filters.carCode ?? ""}:${batchVins.join(",")}`}

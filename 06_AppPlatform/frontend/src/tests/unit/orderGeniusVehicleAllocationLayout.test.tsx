@@ -114,7 +114,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function selectPi() {
   render(<OrderGeniusVehicleAllocationPage />);
   await waitFor(() => expect(api.getVehicleAllocationPis).toHaveBeenCalled());
-  fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${PI}`) }, { timeout: 5000 }));
+  fireEvent.click(await screen.findByText(PI, { selector: ".va-pi-list button > span" }, { timeout: 5000 }));
   await screen.findByText("150 units / 台");
   const table = within(screen.getByRole("table", { name: "Vehicle details" }));
   await waitFor(() => expect(table.getAllByRole("row").length).toBe(6));
@@ -288,6 +288,14 @@ it("updates only the page geometry variable on viewport resize", async () => {
   expect(api.bulkUpdateVehicleAllocationVehicles).not.toHaveBeenCalled();
 });
 
+it("stretches the details grid across its wrapper at narrow widths", async () => {
+  await selectPi();
+  const wrapper = screen.getByRole("table", { name: "Vehicle details" }).parentElement;
+  expect(wrapper?.style.display).toBe("flex");
+  expect(wrapper?.style.flexDirection).toBe("column");
+  expect(wrapper?.style.minWidth).toBe("0px");
+});
+
 async function chooseOctober() {
   fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2026" } });
   await screen.findByRole("button", { name: "Oct 2026" }, { timeout: 5000 });
@@ -439,9 +447,9 @@ describe("PI month browsing", () => {
     vi.mocked(api.getVehicleAllocationPiMonths).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
     render(<OrderGeniusVehicleAllocationPage />);
     fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2025" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Sep 2025" }).textContent).toBe("Sep60"));
+    await waitFor(() => expect(screen.getByLabelText("Sep 2025").textContent).toBe("Sep60"));
     resolveOld({ year: 2026, items: [] });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Sep 2025" }).textContent).toBe("Sep60"));
+    await waitFor(() => expect(screen.getByLabelText("Sep 2025").textContent).toBe("Sep60"));
   });
 });
 
@@ -499,18 +507,20 @@ describe("COC library lookup and downloads", () => {
       items: [{ carCode: "CAR-0", vin: vehicle(0).vin, status: "available" }, { carCode: "CAR-1", vin: vehicle(1).vin, status: "missing" }] });
     const download = vi.spyOn(api, "piCocDownload").mockResolvedValue(new Blob());
     await selectPi();
-    fireEvent.click(screen.getByRole("button", { name: "COC library / 在线库" }));
-    fireEvent.click(screen.getByRole("button", { name: "Search library / 在库里查找" }));
-    await screen.findByText(/COC PDF 1\/150 · Awaiting/);
-    fireEvent.click(screen.getByLabelText("Select CAR-1"));
-    fireEvent.click(screen.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
+    fireEvent.click(screen.getByText("COC library / 在线库", { selector: "button" }));
+    const tools = within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" }));
+    const table = within(screen.getByRole("table", { name: "Vehicle details" }));
+    fireEvent.click(tools.getByRole("button", { name: "Search library / 在库里查找" }));
+    await tools.findByText(/COC PDF 1\/150 · Awaiting/);
+    fireEvent.click(table.getByLabelText("Select CAR-1"));
+    fireEvent.click(tools.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
     await screen.findByText(/勾选车辆均无可下载 PDF/);
     expect(download).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("Select CAR-0"));
-    fireEvent.click(screen.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
-    expect(screen.getByRole("button", { name: "Confirm available only / 确认仅下载可用" })).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("Select CAR-0"));
-    expect(screen.queryByRole("button", { name: "Confirm available only / 确认仅下载可用" })).toBeNull();
+    fireEvent.click(table.getByLabelText("Select CAR-0"));
+    fireEvent.click(tools.getByRole("button", { name: "Download selected COCs / 下载勾选 COC" }));
+    expect(screen.getByText("Confirm available only / 确认仅下载可用", { selector: "button" })).toBeTruthy();
+    fireEvent.click(table.getByLabelText("Select CAR-0"));
+    expect(screen.queryByText("Confirm available only / 确认仅下载可用", { selector: "button" })).toBeNull();
   });
 
   it("shows row download errors with the tools closed and does not show raw codes", async () => {
@@ -530,8 +540,8 @@ describe("COC library lookup and downloads", () => {
   });
 });
 function openView() {
-  fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
-  fireEvent.click(screen.getByRole("tab", { name: /View/ }));
+  fireEvent.click(screen.getByText("PI Tools", { selector: "button > span" }));
+  fireEvent.click(within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" })).getByRole("tab", { name: /View/ }));
 }
 
 function vinPreview(replacing = false): VehicleImportPreview {
@@ -876,11 +886,11 @@ describe("unified Grid editing contract", () => {
     vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:export"; static revokeObjectURL = vi.fn(); });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     await selectPi();
-    fireEvent.click(screen.getByRole("button", { name: "Columns / 列设置" }));
+    fireEvent.click(screen.getByText("Columns / 列设置", { selector: "button" }));
     const columns = within(screen.getByRole("group", { name: "Columns / 显示列" }));
     fireEvent.click(columns.getByText("系统列"));
-    fireEvent.click(columns.getByRole("checkbox", { name: "Interior" }));
-    fireEvent.click(columns.getByRole("checkbox", { name: "Note / 备注" }));
+    fireEvent.click(columns.getByLabelText("Interior"));
+    fireEvent.click(columns.getByLabelText("Note / 备注"));
     openView();
     const tools = within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" }));
     fireEvent.click(tools.getByRole("button", { name: "Export current view / 导出所见" }));
@@ -888,6 +898,6 @@ describe("unified Grid editing contract", () => {
     expect(download.mock.calls[0][0]?.carCodes).toHaveLength(150);
     expect(download.mock.calls[0][0]?.columns).not.toContain("interiorColorName");
     expect(download.mock.calls[0][0]?.columns).toContain("remark");
-    expect(screen.queryByRole("button", { name: "Move VIN left" })).toBeNull();
+    expect(screen.queryByText("Move VIN left", { selector: "button" })).toBeNull();
   });
 });
