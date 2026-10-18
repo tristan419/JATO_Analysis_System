@@ -149,11 +149,12 @@ export function VehicleImportDigestPanel({
     <section className={`vehicle-import-digest-panel${compact ? " is-compact" : ""}`}>
       <UploadDigestPanel
         title={removing ? "Clear VIN preview / 清 VIN 预览" : scoped ? "BOM + VIN preview / 匹配预览" : "Vehicle import preview"}
-        subtitle={scoped ? `PI: ${preview.piCode} · VIN only; no new vehicles / 仅补 VIN，不新增车辆。确认目标后再 Apply。` : "Excel workbooks and parsed image rows use the same digest and apply workflow. Preview first, then apply valid rows."}
+        subtitle={scoped ? `${preview.piCodes?.length ?? 1} PIs · VIN / Engine ID only; no new vehicles / 只补VIN和发动机序号，不改国家/FOB，不新增车辆。${preview.fileRows !== undefined ? ` 全表 ${preview.fileRows} · 可见 ${preview.visibleRows} · 本次 ${preview.totalRows}${preview.includeHidden ? '（含隐藏行）' : '（仅可见行）'}` : ''}` : "Excel workbooks and parsed image rows use the same digest and apply workflow. Preview first, then apply valid rows."}
         metrics={scoped ? [
           { label: "Rows / 文件行", value: preview.totalRows },
           { label: removing ? "Clear / 清除" : "Fill / 新增", value: (removing ? preview.removedUnits : preview.filledUnits) ?? 0 },
           ...(!removing ? [{ label: "Replace / 替换", value: preview.replacedUnits ?? 0 }] : []),
+          ...(!removing ? [{ label: "Engine ID / 发动机序号", value: preview.engineUpdatedUnits ?? 0 }] : []),
           { label: removing ? "Skip / 已清跳过" : "Skip / 已录跳过", value: preview.skippedUnits ?? 0 },
           { label: "Conflicts / 冲突", value: preview.conflictUnits ?? 0, tone: preview.status === "error" ? "danger" : "neutral" },
           { label: "Remaining / 应用后待录", value: preview.remainingUnits ?? 0 },
@@ -209,6 +210,7 @@ export function VehicleImportDigestPanel({
             title="By material / 按物料分组"
             groups={groups}
             columns={[{ key: "row", label: "Row / 行" }, { key: "vin", label: "Old → new VIN / 旧→新 VIN" },
+              ...(!removing ? [{ key: "engine", label: "Old → new Engine ID / 发动机序号" }] : []),
               { key: "target", label: "Target CarCode / 目标车辆" }, { key: "status", label: "Status / 状态" }]}
             expandedGroupKeys={expandedGroups} previewTouched={previewTouched} emptyText="No file rows / 文件无数据"
             onToggleGroup={(group, expanded) => {
@@ -221,6 +223,7 @@ export function VehicleImportDigestPanel({
               <tr key={row.sourceRow}>
                 <td>{row.sourceRow}</td>
                 <td>{removing ? `${row.vin} → —` : `${row.oldVin ?? "—"} → ${row.vin}`}</td>
+                {!removing && <td>{row.engineId ? `${row.oldEngineId ?? "—"} → ${row.engineId}` : "Keep / 保留"}</td>}
                 <td>
                   {editingRow === row.sourceRow ? <select aria-label={`Target CarCode row ${row.sourceRow}`} value={row.carCode ?? ""}
                     disabled={busy || row.action === "skip"} onChange={(event) => { setEditingRow(null); onTargetChange?.(row.sourceRow, event.target.value); }}>
@@ -233,7 +236,7 @@ export function VehicleImportDigestPanel({
                     {row.carCode ?? "Select target / 指定目标"}
                   </button>}
                 </td>
-                <td>{row.errors.length ? row.errors.join("; ") : ({ fill: "Ready to fill / 待补录", replace: "Replace / 替换", remove: "Clear VIN only / 仅清 VIN", skip: removing ? "Already empty / 已清跳过" : "Already imported / 已录跳过", conflict: "Conflict / 冲突", create: "", update: "" })[row.action]}</td>
+                <td>{row.errors.length ? row.errors.join("; ") : ({ fill: "Ready to fill / 待补录", replace: "Replace / 替换", remove: "Clear VIN only / 仅清 VIN", skip: removing ? "Already empty / 已清跳过" : "Already imported / 已录跳过", conflict: "Conflict / 冲突", create: "", update: "Engine ID update / 补发动机序号" })[row.action]}</td>
               </tr>
             )}
           />

@@ -8,8 +8,8 @@ import "./VehicleAllocationSearch.css";
 interface Props {
   vehicles: PiVehicleUnit[]; piCodes: string[]; busy: boolean; applied: string;
   onApply: (query: string, vins: string[] | null) => void;
-  onAdd: (pis: string[], cars: string[], query: string, vins: string[] | null) => Promise<void>;
-  onSelect?: (cars: string[]) => void;
+  onAdd: (pis: string[], cars: string[], query: string, vins: string[] | null, replace?: boolean) => Promise<void>;
+  onSelect?: (cars: string[], replace?: boolean) => void;
   statusLabels?: Record<string, string>;
 }
 
@@ -43,7 +43,7 @@ export function VehicleAllocationSearch({ vehicles, piCodes, busy, applied, onAp
         const matches = vehicles.filter((vehicle) => parsed.vins !== null
           ? Boolean(vehicle.vin && parsed.vins.includes(vehicle.vin.toUpperCase())) : matchesVehicleText(vehicle, query, statusLabels));
         const codes = [...new Set(matches.map((vehicle) => vehicle.piCode))];
-        next = { items: codes.slice((page - 1) * 8, page * 8).map((piCode) => {
+        next = { items: (parsed.vins !== null ? codes : codes.slice((page - 1) * 8, page * 8)).map((piCode) => {
           const scope = vehicles.filter((vehicle) => vehicle.piCode === piCode);
           const hits = matches.filter((vehicle) => vehicle.piCode === piCode);
           return { piCode, orderMonth: scope[0]?.orderMonth ?? null, countries: [...new Set(scope.map((v) => v.countryCode))],
@@ -91,6 +91,16 @@ export function VehicleAllocationSearch({ vehicles, piCodes, busy, applied, onAp
     } catch (reason: unknown) { setError(reason instanceof Error ? reason.message : "Could not load PIs / 读取失败，请重试"); }
   }
 
+  async function selectVins(replace: boolean): Promise<void> {
+    if (!result || loading || busy || result.items.length !== result.total) return;
+    const cars = result.items.flatMap((item) => item.carCodes);
+    try {
+      if (mode === "vehicles") onSelect?.(cars, replace);
+      else await onAdd(result.items.map((item) => item.piCode), cars, query, parsed.vins, replace);
+      setOpen(false);
+    } catch (reason: unknown) { setError(reason instanceof Error ? reason.message : "Could not load vehicles / 车辆读取失败，请重试"); }
+  }
+
   function submit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault(); setOpen(true);
     if (error) { setRetry((value) => value + 1); return; }
@@ -105,7 +115,7 @@ export function VehicleAllocationSearch({ vehicles, piCodes, busy, applied, onAp
         <select aria-label="Search scope / 搜索范围" value={mode} onChange={(event) => {
           request.current += 1; abort.current?.abort(); setResult(null); setMode(event.target.value === "pis" ? "pis" : "vehicles"); setOpen(true);
         }}><option value="pis">Find PIs / 找 PI</option><option value="vehicles">Current vehicles / 筛当前车辆</option></select>
-        <textarea aria-label="Search PI, VIN, material / 搜索" role="combobox" aria-expanded={Boolean(open && result?.items.length)}
+        <textarea disabled={busy} aria-label="Search PI, VIN, material / 搜索" role="combobox" aria-expanded={Boolean(open && result?.items.length && parsed.vins === null)}
           aria-controls="va-search-results" aria-activedescendant={open && !loading && result?.items[active] ? `va-search-result-${active}` : undefined}
           rows={rawOpen ? 4 : 1} readOnly={!rawOpen && parsed.vins !== null} style={rawOpen ? { height: "100px" } : undefined}
           value={!rawOpen && parsed.vins !== null ? `${parsed.vins.length} VINs` : query}
@@ -122,7 +132,7 @@ export function VehicleAllocationSearch({ vehicles, piCodes, busy, applied, onAp
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault(); if (loading || busy || !eligible) return;
               if (mode === "vehicles" && result) { onApply(query, parsed.vins); setOpen(false); }
-              else if (open && result?.items[active]) choose(result.items[active].piCode);
+              else if (parsed.vins === null && open && result?.items[active]) choose(result.items[active].piCode);
               else setOpen(true);
             }
           }} />
@@ -140,7 +150,12 @@ export function VehicleAllocationSearch({ vehicles, piCodes, busy, applied, onAp
     {open && !loading && !error && !parsed.error && result && result.items.length > 0 && <section className="va-search-preview" aria-label="Search preview / 搜索预览">
       <p>{mode === "pis" ? "All authorized PIs / 全部授权PI" : `${piCodes.length} selected PIs / 已选PI`} · {result.matched} matches / 台 · {result.total} PIs
         {parsed.vins !== null && ` · ${result.missingVins.length} unmatched or inaccessible / 未匹配或无权访问`}</p>
-      <div id="va-search-results" role="listbox" aria-label="PI results / PI结果" aria-multiselectable="true">{result.items.map((item, index) => <button type="button" role="option" id={`va-search-result-${index}`} key={item.piCode}
+      {parsed.vins !== null ? <>
+        <p>VIN selection only; other vehicles in these PIs are not selected. / 仅勾选命中VIN，不连带整张PI。</p>
+        <details><summary>{result.total} related PIs / 关联PI（仅归属信息）</summary>{result.items.map((item) => <p key={item.piCode}>{item.piCode} · {item.countries.join(" / ")} · {item.matched} vehicles / 台</p>)}</details>
+        <div className="va-button-row"><button type="button" disabled={busy || result.items.length !== result.total} onClick={() => void selectVins(true)}>Select only these {result.matched} vehicles / 仅勾选本次命中</button>
+          <button type="button" className="btn-secondary" disabled={busy || result.items.length !== result.total} onClick={() => void selectVins(false)}>Append {result.matched} matches / 追加勾选</button></div>
+      </> : <><div id="va-search-results" role="listbox" aria-label="PI results / PI结果" aria-multiselectable="true">{result.items.map((item, index) => <button type="button" role="option" id={`va-search-result-${index}`} key={item.piCode}
         aria-selected={chosen.has(item.piCode)} className={`va-search-result${active === index ? " is-focused" : ""}`}
         style={{ borderLeftColor: item.powertrains.length === 1 ? orderGeniusPowertrainColor(item.powertrains[0]) : "#94a3b8" }}
         onClick={() => { setActive(index); choose(item.piCode); }}>
@@ -159,6 +174,7 @@ export function VehicleAllocationSearch({ vehicles, piCodes, busy, applied, onAp
           onSelect?.(selectedItems.flatMap((item) => item.carCodes)); setOpen(false);
         }}>Select {cars} matched vehicles / 勾选匹配车辆</button>}
       </div>
+      </>}
     </section>}
   </div>;
 }

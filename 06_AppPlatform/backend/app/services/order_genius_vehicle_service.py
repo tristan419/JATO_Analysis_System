@@ -601,7 +601,9 @@ def update_vehicle_unit(session: Session, car_code: str, payload: dict[str, Any]
     return vehicle_to_dict(session, vehicle)
 
 
-def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], username: str) -> dict:
+def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], username: str, *,
+                              allowed_countries: set[str] | None = None,
+                              allowed_brands: set[str] | None = None) -> dict:
     raw_codes = payload.get("carCodes", payload.get("car_codes"))
     if (not isinstance(raw_codes, list) or not raw_codes
             or any(not isinstance(code, str) or not code.strip() for code in raw_codes)):
@@ -625,9 +627,7 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
         if pi_code and line.pi_code != pi_code:
             raise HTTPException(status_code=400, detail="PI Line does not belong to PI")
         pi_code = line.pi_code
-    if not pi_code:
-        raise HTTPException(status_code=400, detail="piCode or piLineCode is required")
-    if not repo.get_header_by_code(session, pi_code):
+    if pi_code and not repo.get_header_by_code(session, pi_code):
         raise HTTPException(status_code=404, detail="PI not found")
 
     vehicles = repo.list_vehicles_for_bulk_update(
@@ -635,6 +635,7 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
         pi_code=pi_code,
         pi_line_code=pi_line_code,
         lock=True,
+        car_codes=car_codes,
     )
     code_set = set(car_codes)
     vehicles = [vehicle for vehicle in vehicles if vehicle.car_code in code_set]
@@ -643,8 +644,17 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
             or any(versions[vehicle.car_code] != vehicle.row_version for vehicle in vehicles)):
         raise HTTPException(409, "Selection changed; nothing saved. Re-read PI and select again / 勾选车辆已变化，未保存，请重新读取 PI 并重新勾选")
 
+    if any((allowed_countries is not None and vehicle.country_code not in allowed_countries)
+           or (allowed_brands is not None and str(vehicle.brand or "").upper() not in allowed_brands)
+           for vehicle in vehicles):
+        raise HTTPException(403, "Selected vehicles are outside your access / 勾选车辆超出授权范围，整批未保存")
+
     field_payload = _bulk_field_payload(payload.get("fields"))
     vin_list = _bulk_vin_list(payload.get("vinList") or payload.get("vins"))
+    if not pi_code and (vin_list or not isinstance(payload.get("fields"), dict)
+            or set(payload["fields"]) - {"shipName", "logisticsStatus", "etd", "eta", "actualDepartureDate",
+                                        "actualArrivalDate", "readyForPickupDate", "remark", "freightEur", "insuranceEur"}):
+        raise HTTPException(400, "Cross-PI edits support logistics and freight/insurance; use file preview for VIN/Engine ID / 跨PI仅物流及运保费；VIN和发动机序号请逐行预览")
     if not field_payload and not vin_list:
         raise HTTPException(status_code=400, detail="No VINs or bulk fields provided")
 
@@ -702,10 +712,10 @@ def search_vehicle_allocation(session: Session, keyword: str, *, vins: list[str]
 def preview_vehicle_import(
     session: Session, rows: list[dict[str, Any]], *, pi_code: str | None = None,
     allow_replacing: bool = False, allowed_countries: set[str] | None = None, remove_vins: bool = False,
-    allowed_brands: set[str] | None = None,
+    allowed_brands: set[str] | None = None, pi_codes: list[str] | None = None,
 ) -> dict:
-    if pi_code:
-        return _preview_pi_vin_fill(session, rows, pi_code, allow_replacing, allowed_countries, remove_vins, allowed_brands)
+    if pi_code or pi_codes:
+        return _preview_pi_vin_fill(session, rows, [pi_code] if pi_code else pi_codes, allow_replacing, allowed_countries, remove_vins, allowed_brands)
     warnings: list[str] = []
     errors: list[str] = []
     preview_rows: list[dict[str, Any]] = []
@@ -803,13 +813,13 @@ def apply_vehicle_import(
 
 
 def _preview_pi_vin_fill(
-    session: Session, rows: list[dict[str, Any]], pi_code: str,
+    session: Session, rows: list[dict[str, Any]], pi_codes: list[str],
     allow_replacing: bool, allowed_countries: set[str] | None, remove_vins: bool = False,
     allowed_brands: set[str] | None = None,
 ) -> dict:
-    if not repo.get_header_by_code(session, pi_code):
+    if not pi_codes or any(not repo.get_header_by_code(session, code) for code in pi_codes):
         raise HTTPException(404, "PI no longer exists. Select a PI again / PI 已不存在，请重新选择")
-    vehicles = [v for v in repo.list_vehicles_for_bulk_update(session, pi_code=pi_code)
+    vehicles = [v for code in dict.fromkeys(pi_codes) for v in repo.list_vehicles_for_bulk_update(session, pi_code=code)
                 if (allowed_countries is None or v.country_code in allowed_countries)
                 and (allowed_brands is None or str(v.brand or "").strip().upper() in allowed_brands)]
     by_car = {v.car_code: v for v in vehicles}
@@ -835,6 +845,8 @@ def _preview_pi_vin_fill(
         issues: list[str] = []
         candidates = by_material.get(material, [])
         target = by_car.get(row["car_code"]) if row["car_code"] else existing.get(row["old_vin"])
+        if target and target.car_code not in by_car:
+            target = None
         occupied = existing.get(vin)
         if not VIN_CODE_RE.fullmatch(vin):
             issues.append("Invalid VIN: use 17 letters/digits / VIN 无效，请使用17位文本")
@@ -868,6 +880,9 @@ def _preview_pi_vin_fill(
             issues.append("Target used by another file row: select another CarCode / 目标已分配给本文件其他行，请换目标")
         action = ("remove" if occupied and target and not issues else "skip") if remove_vins else (
             "skip" if occupied and not issues else "replace" if target and target.vin else "fill")
+        engine_id = _clean(row.get("engine_id"))
+        if not remove_vins and action == "skip" and engine_id and target and engine_id != target.engine_id:
+            action = "update"
         if action == "replace" and not allow_replacing:
             issues.append("Replacement is off: enable and confirm old → new VIN / 替换未开启，请勾选并确认旧→新 VIN")
         if issues:
@@ -876,17 +891,21 @@ def _preview_pi_vin_fill(
             used.add(target.car_code)
         errors.extend(f"Row {row.get('sourceRow')}: {issue}" for issue in issues)
         preview_rows.append({
-            "sourceRow": row.get("sourceRow"), "action": action, "piCode": pi_code,
+            "sourceRow": row.get("sourceRow"), "action": action, "piCode": target.pi_code if target else None,
             "carCode": target.car_code if target else None, "vin": vin, "materialCode": material,
+            "engineId": engine_id, "oldEngineId": target.engine_id if target else None,
             "oldVin": target.vin if target else None, "rowVersion": target.row_version if target else None,
             "requestedCarCode": row["car_code"] or None, "inputOldVin": row["old_vin"] or None,
             "warnings": [], "errors": issues,
         })
-    counts = {action: sum(r["action"] == action for r in preview_rows) for action in ("fill", "replace", "remove", "skip", "conflict")}
+    counts = {action: sum(r["action"] == action for r in preview_rows) for action in ("fill", "replace", "remove", "skip", "conflict", "update")}
     return {
-        "mode": "pi_vin_fill", "piCode": pi_code, "allowReplacing": allow_replacing, "removeVins": remove_vins,
+        "mode": "pi_vin_fill", "piCode": pi_codes[0] if len(pi_codes) == 1 else None, "piCodes": pi_codes,
+        "allowReplacing": allow_replacing, "removeVins": remove_vins,
         "totalRows": len(rows), "newHeaders": 0, "newLines": 0, "newUnits": 0,
-        "updatedUnits": counts["fill"] + counts["replace"] + counts["remove"], "removedUnits": counts["remove"], "filledUnits": counts["fill"],
+        "updatedUnits": counts["fill"] + counts["replace"] + counts["remove"] + counts["update"],
+        "engineUpdatedUnits": sum(r["action"] not in {"skip", "conflict", "remove"} and bool(r["engineId"]) and r["engineId"] != r["oldEngineId"] for r in preview_rows),
+        "removedUnits": counts["remove"], "filledUnits": counts["fill"],
         "replacedUnits": counts["replace"], "skippedUnits": counts["skip"], "conflictUnits": counts["conflict"],
         "remainingUnits": sum(not v.vin for v in vehicles) - counts["fill"] + counts["remove"],
         "warnings": [], "errors": errors, "previewRows": preview_rows,
@@ -900,10 +919,11 @@ def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_c
                        allowed_brands: set[str] | None = None) -> dict:
     if preview.get("status") != "ok":
         raise HTTPException(400, "Fix all preview conflicts before applying / 请先解决全部预览冲突")
-    pi_code = preview["piCode"]
+    pi_codes = preview["piCodes"]
     try:
         with session.begin_nested():
-            vehicles = repo.list_vehicles_for_bulk_update(session, pi_code=pi_code, lock=True)
+            codes = [r["carCode"] for r in preview["previewRows"] if r["carCode"]]
+            vehicles = repo.list_vehicles_for_bulk_update(session, car_codes=codes, lock=True) if codes else []
             by_car = {v.car_code: v for v in vehicles}
             rows = preview["previewRows"]
             existing = {v.vin: v for v in repo.list_vehicles_by_vins(session, {r["vin"] for r in rows})}
@@ -913,7 +933,7 @@ def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_c
                         raise HTTPException(409, "VIN changed: preview again / VIN 已变化，请重新预览")
                     continue
                 vehicle = by_car.get(row["carCode"])
-                if (not vehicle or (allowed_countries is not None and vehicle.country_code not in allowed_countries)
+                if (not vehicle or vehicle.pi_code not in pi_codes or (allowed_countries is not None and vehicle.country_code not in allowed_countries)
                         or (allowed_brands is not None and str(vehicle.brand or "").strip().upper() not in allowed_brands)
                         or (vehicle.material_code or "").upper() != row["materialCode"]
                         or vehicle.vin != row["oldVin"] or vehicle.row_version != row["rowVersion"]):
@@ -923,7 +943,10 @@ def _apply_pi_vin_fill(session: Session, preview: dict, username: str, allowed_c
                     raise HTTPException(409, "VIN was assigned after preview: preview again / VIN 已被占用，请重新预览")
             for row in rows:
                 if row["action"] != "skip":
-                    _apply_vehicle_updates(session, by_car[row["carCode"]], {"vin": None if row["action"] == "remove" else row["vin"]}, username)
+                    fields = {"vin": None if row["action"] == "remove" else row["vin"]}
+                    if row["action"] != "remove" and row["engineId"]:
+                        fields["engineId"] = row["engineId"]
+                    _apply_vehicle_updates(session, by_car[row["carCode"]], fields, username)
             session.flush()
     except IntegrityError as exc:
         raise HTTPException(409, "VIN changed concurrently: preview again; nothing applied / VIN 并发变化，请重新预览，未写入任何车辆") from exc
@@ -1077,6 +1100,7 @@ def vehicle_to_dict(
         "piLineCode": vehicle.pi_line_code,
         "carCode": vehicle.car_code,
         "vin": vehicle.vin,
+        "engineId": vehicle.engine_id,
         "fobEur": prices[key],
         "freightEur": _float(vehicle.freight_eur),
         "insuranceEur": _float(vehicle.insurance_eur),
@@ -1630,6 +1654,7 @@ def _apply_vehicle_updates(session: Session, vehicle: PiVehicleUnit, payload: di
             raise HTTPException(status_code=409, detail=f"VIN already assigned: {vin}")
     string_fields = {
         "vin": "vin",
+        "engine_id": "engineId",
         "dealer_code": "dealerCode",
         "dealer_name": "dealerName",
         "customer_ref": "customerRef",
@@ -1765,6 +1790,7 @@ def _line_code_for_import_row(session: Session, row: dict[str, Any]) -> str | No
 
 def _import_row_to_update_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
+        **({"engineId": _clean(row["engine_id"])} if _clean(row.get("engine_id")) else {}),
         "vin": _clean(row.get("vin")),
         "productionDate": row.get("production_date"),
         "etd": row.get("etd"),

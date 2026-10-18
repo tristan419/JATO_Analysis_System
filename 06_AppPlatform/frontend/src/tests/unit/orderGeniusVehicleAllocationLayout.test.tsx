@@ -147,7 +147,7 @@ it("retains cross-country/month PI choices and exports the whole selected set th
   await waitFor(() => expect(download).toHaveBeenCalled());
   expect(download.mock.calls[0][0]?.piCodes).toEqual([PI, otherCode]);
   expect(download.mock.calls[0][0]?.carCodes).toHaveLength(300);
-  expect((screen.getByRole("button", { name: "Update selected status / 更新勾选状态" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Update selected status / 更新勾选状态" }) as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(screen.getByRole("checkbox", { name: `Include ${PI}` }));
   await waitFor(() => expect(screen.getByRole("button", { name: /Export selected 150/ })).toBeTruthy());
   expect(api.bulkUpdateVehicleAllocationVehicles).not.toHaveBeenCalled();
@@ -176,9 +176,9 @@ it.each(["failed read", "changed VIN"])("preserves the workspace and selection w
     if (pi !== code) return detail(); if (failure === "failed read") throw new Error("Forbidden"); return other;
   });
   fireEvent.change(screen.getByLabelText("Search PI, VIN, material / 搜索"), { target: { value: vin } });
-  const option = await screen.findByRole("option", { name: new RegExp(code) });
+  const select = await screen.findByRole("button", { name: /Select only these 1 vehicles/ });
   expect(lookup).toHaveBeenCalledTimes(1); expect(api.getVehicleAllocationPi).toHaveBeenCalledTimes(1);
-  fireEvent.click(option); fireEvent.click(screen.getByRole("button", { name: /Add 1 PIs and select 1 vehicles/ }));
+  fireEvent.click(select);
   await waitFor(() => expect(screen.getByRole("status").textContent).toContain(failure === "failed read" ? "Forbidden" : "匹配车辆或权限已变化"));
   expect(screen.getByRole("region", { name: "PI workspace" }).textContent).toContain("1 PIs / 已选PI · CH · 150 vehicles");
   expect(screen.getByRole("heading", { name: PI })).toBeTruthy();
@@ -189,7 +189,7 @@ it.each(["failed read", "changed VIN"])("preserves the workspace and selection w
 
 it("cross-tabulates the complete source and selected subset with exact source drilldown", () => {
   const source = Array.from({ length: 150 }, (_, index) => vehicle(index));
-  expect([...buildVehiclePivot([...source, source[0]], { rows: ["countryCode"], column: "modelName", measure: "units" }).values()].flatMap((row) => [...row.values()]).flat()).toHaveLength(150);
+  expect([...buildVehiclePivot([...source, source[0]], { rows: ["countryCode"], columns: ["modelName"], measures: ["units"], filters: {} }).values()].flatMap((row) => [...row.values()]).flat()).toHaveLength(150);
   const drill = vi.fn(), output = vi.fn();
   render(<VehicleAnalysisPivot vehicles={source} filtered={source.slice(0, 10)} selected={new Set(source.slice(120).map((v) => v.carCode))} busy={false} onDrill={drill} onExport={output} />);
   expect(screen.getByRole("status").textContent).toContain("10 vehicles");
@@ -199,6 +199,62 @@ it("cross-tabulates the complete source and selected subset with exact source dr
   expect(drill.mock.calls[0][0]).toHaveLength(30);
   fireEvent.click(screen.getByRole("button", { name: /Export pivot/ }));
   expect(output.mock.calls[0][0]).toHaveLength(30);
+});
+
+it("selects a VIN subset across PIs and confirms one logistics-only bulk request", async () => {
+  const other = detail(), code = "PI-SE-202608-001", first = vehicle(1), second = { ...vehicle(2), piCode: code, carCode: "CAR-SE-2", countryCode: "SE" };
+  other.header = { ...other.header, piCode: code, countryCode: "SE", orderMonth: "2026-08" };
+  other.vehicles = [second, { ...second, carCode: "CAR-SE-3", vin: "LVTDB21B9RD123456" }];
+  vi.mocked(api.getVehicleAllocationPi).mockImplementation(async (pi) => pi === code ? other : detail());
+  vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue({ items: [first, second].map((v) => ({ piCode: v.piCode, orderMonth: "2026-08", countries: [v.countryCode], powertrains: ["HEV"], matched: 1, vehicleTotal: 150, carCodes: [v.carCode] })), total: 2, matched: 2, page: 1, pageSize: 2, missingVins: [] });
+  await selectPi(); fireEvent.click(screen.getByLabelText("Select CAR-0"));
+  fireEvent.change(screen.getByLabelText("Search PI, VIN, material / 搜索"), { target: { value: `${first.vin}\n${second.vin}` } });
+  fireEvent.click(await screen.findByRole("button", { name: /Select only these 2 vehicles/ }));
+  await screen.findByRole("button", { name: /Export selected 2 / });
+  expect((screen.getByLabelText("Select CAR-0") as HTMLInputElement).checked).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: /Update selected status/ }));
+  const form = document.getElementById("vehicle-edit-form"); if (!form) throw new Error("Editor missing");
+  expect(within(form).getByText(/Costs \/ 运保费/)).toBeTruthy();
+  expect(within(form).queryByLabelText("VIN")).toBeNull();
+  fireEvent.change(within(form).getByLabelText("Ship"), { target: { value: "SHIP ALPHA" } });
+  fireEvent.change(within(form).getByLabelText("ETA"), { target: { value: "2026-11-01" } });
+  fireEvent.change(within(form).getByLabelText("Freight / 运费 (EUR)"), { target: { value: "1700" } });
+  fireEvent.submit(form);
+  const dialog = await screen.findByRole("dialog", { name: /Confirm vehicle update/ });
+  expect(dialog.textContent).toContain("2 vehicles / 台 · 2 PIs");
+  expect(api.bulkUpdateVehicleAllocationVehicles).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole("button", { name: /Confirm save/ }));
+  await waitFor(() => expect(api.bulkUpdateVehicleAllocationVehicles).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(api.bulkUpdateVehicleAllocationVehicles).mock.calls[0][0]).toEqual({ piCode: undefined,
+    carCodes: [first.carCode, second.carCode], rowVersions: { [first.carCode]: 1, [second.carCode]: 1 }, fields: { shipName: "SHIP ALPHA", eta: "2026-11-01", freightEur: 1700 } });
+});
+
+it("composes multi-axis metrics and filters, folds rows, and keeps drill selection explicit", () => {
+  const source = Array.from({ length: 4 }, (_, i) => ({ ...vehicle(i), shipName: i < 2 ? "SHIP A" : null, brand: i < 2 ? "OMODA" : "JAECOO", fobEur: (i + 1) * 100 }));
+  const drill = vi.fn(), output = vi.fn();
+  render(<VehicleAnalysisPivot vehicles={source} filtered={source} selected={new Set([source[3].carCode])} busy={false} onDrill={drill} onExport={output} />);
+  fireEvent.click(screen.getByRole("button", { name: /Field settings/ }));
+  fireEvent.change(screen.getByLabelText("Add to rows"), { target: { value: "version" } });
+  fireEvent.change(screen.getByLabelText("Add to columns"), { target: { value: "shipName" } });
+  fireEvent.click(screen.getByRole("button", { name: "Move shipName up" }));
+  fireEvent.change(screen.getByLabelText("Add to measures"), { target: { value: "fob" } });
+  fireEvent.click(screen.getByRole("button", { name: "Move fob up" }));
+  fireEvent.change(screen.getByLabelText("Add to filters"), { target: { value: "brand" } });
+  fireEvent.change(screen.getByLabelText("All / 不限"), { target: { value: "OMODA" } });
+  expect(screen.getByRole("status").textContent).toContain("2 vehicles");
+  expect(drill).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /Export pivot/ }));
+  expect(output.mock.calls[0][0].map((v: PiVehicleUnit) => v.carCode)).toEqual([source[0].carCode, source[1].carCode]);
+  expect(output.mock.calls[0][1]).toEqual({ rows: ["countryCode", "modelName", "version"], columns: ["shipName", "logisticsStatus"], measures: ["fob", "units"], filters: { brand: ["OMODA"] } });
+  const fold = screen.getByRole("button", { name: "Toggle CH" }); fireEvent.click(fold);
+  expect(fold.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("button", { name: "Toggle CH / JAECOO5 HEV" })).toBeNull();
+  fireEvent.click(screen.getAllByRole("button", { name: "2" })[0]);
+  expect(drill.mock.calls[0][0]).toEqual([source[0].carCode, source[1].carCode]);
+  fireEvent.drop(screen.getByRole("group", { name: "Rows / 行" }), { dataTransfer: { getData: () => "shipName" } });
+  fireEvent.click(screen.getByRole("button", { name: /Export pivot/ }));
+  expect(output.mock.calls.at(-1)?.[1].columns).toEqual(["logisticsStatus"]);
+  expect(output.mock.calls.at(-1)?.[1].rows).toEqual(["countryCode", "modelName", "version", "shipName"]);
 });
 
 it("updates only the page geometry variable on viewport resize", async () => {
@@ -552,7 +608,7 @@ describe("PI-scoped BOM + VIN import", () => {
     fireEvent.change(screen.getByLabelText("BOM and VIN XLSX"), { target: { files: [file] } });
     fireEvent.click(await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 }));
     await screen.findByText(/VIN cleared: 1/);
-    expect(preview).toHaveBeenCalledWith(file, { piCode: PI, allowReplacing: false, removeVins: true });
+    expect(preview).toHaveBeenCalledWith(file, { piCode: PI, allowReplacing: false, includeHidden: false, removeVins: true });
     expect(apply).toHaveBeenCalledTimes(1);
   });
 
@@ -562,7 +618,7 @@ describe("PI-scoped BOM + VIN import", () => {
     await selectPi();
     const file = await uploadVinFile();
     await screen.findByText("BOM + VIN preview / 匹配预览");
-    expect(preview).toHaveBeenCalledWith(file, { piCode: PI, allowReplacing: false });
+    expect(preview).toHaveBeenCalledWith(file, { piCode: PI, allowReplacing: false, includeHidden: false });
     expect(screen.getByText("Already imported / 已录跳过")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Apply 1" }));
     await waitFor(() => expect(apply).toHaveBeenCalledWith("vin-preview"));
@@ -575,12 +631,29 @@ describe("PI-scoped BOM + VIN import", () => {
     await selectPi(); await uploadVinFile();
     fireEvent.click(await screen.findByRole("button", { name: "Choose target row 2" }, { timeout: 5000 }));
     fireEvent.change(screen.getByLabelText("Target CarCode row 2"), { target: { value: "CAR-21" } });
-    await waitFor(() => expect(repreview).toHaveBeenCalledWith(expect.objectContaining({ piCode: PI, allowReplacing: false,
+    await waitFor(() => expect(repreview).toHaveBeenCalledWith(expect.objectContaining({ piCodes: [PI], allowReplacing: false,
       rows: expect.arrayContaining([expect.objectContaining({ sourceRow: 2, car_code: "CAR-21", material_code: "BOM-ONE" })]),
     })));
     await screen.findByRole("button", { name: "Apply 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByLabelText(/Allow replacing existing VINs/));
-    await waitFor(() => expect(repreview).toHaveBeenLastCalledWith(expect.objectContaining({ piCode: PI, allowReplacing: true })));
+    await waitFor(() => expect(repreview).toHaveBeenLastCalledWith(expect.objectContaining({ piCodes: [PI], allowReplacing: true })));
+  });
+
+  it("shows visible/all file counts and retains Engine IDs when targets are adjusted", async () => {
+    const parsed = { ...vinPreview(), fileRows: 295, visibleRows: 54, totalRows: 54, includeHidden: false, engineUpdatedUnits: 1,
+      previewRows: vinPreview().previewRows.map((row) => ({ ...row, engineId: "ENGINE-A", oldEngineId: null })) };
+    vi.spyOn(api, "previewVehicleAllocationImport").mockResolvedValue(parsed);
+    const repreview = vi.spyOn(api, "previewVehicleAllocationParsedRows").mockResolvedValue(parsed);
+    await selectPi(); await uploadVinFile();
+    expect(await screen.findByText(/全表 295 · 可见 54 · 本次 54（仅可见行）/)).toBeTruthy();
+    expect(screen.getAllByText("— → ENGINE-A").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Choose target row 2" }));
+    fireEvent.change(screen.getByLabelText("Target CarCode row 2"), { target: { value: "CAR-21" } });
+    await waitFor(() => expect(repreview).toHaveBeenCalledWith(expect.objectContaining({
+      rows: expect.arrayContaining([expect.objectContaining({ sourceRow: 2, engine_id: "ENGINE-A", car_code: "CAR-21" })]),
+    })));
+    fireEvent.click(screen.getByLabelText(/Include hidden rows/));
+    expect(screen.queryByRole("button", { name: "Apply 1" })).toBeNull();
   });
 
   it("does not call a saved import failed when the subsequent PI refresh fails", async () => {

@@ -67,7 +67,20 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20261015_0058"]
+    assert sorted(revisions - parent_revisions) == ["20261017_0059"]
+
+
+def test_vehicle_engine_revision_only_adds_nullable_column() -> None:
+    spec = importlib.util.spec_from_file_location("vehicle_engine_0059", VERSIONS_DIR / "20261017_0059_vehicle_engine_id.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = StringIO()
+    module.op = Operations(MigrationContext.configure(dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output}))
+    module.upgrade()
+    sql = output.getvalue().upper()
+    assert "ALTER TABLE ORDERING.PI_VEHICLE_UNIT ADD COLUMN ENGINE_ID TEXT" in sql
+    assert all(word not in sql for word in ("UPDATE", "DELETE", "TRUNCATE", "NOT NULL", "DEFAULT", "CREATE TABLE"))
 
 
 def test_period_colour_release_revision_only_adds_nullable_scope() -> None:

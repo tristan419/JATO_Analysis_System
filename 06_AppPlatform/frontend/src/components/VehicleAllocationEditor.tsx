@@ -1,10 +1,12 @@
 import { useState, type FormEvent } from "react";
 import { CommandSelect, type CommandSelectOption } from "./CommandSelect";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type { AllocationStatus, LogisticsStatus, PiVehicleUnit, UpdateVehiclePayload } from "../types/orderGeniusVehicle";
 import { VEHICLE_COLUMNS, VEHICLE_TEXT_FIELDS } from "./vehicleAllocationFields";
 interface Props {
   vehicles: PiVehicleUnit[];
   readOnly: boolean;
+  crossPi?: boolean;
   busy: boolean;
   allocationOptions: Array<CommandSelectOption<AllocationStatus>>;
   logisticsOptions: Array<CommandSelectOption<LogisticsStatus>>;
@@ -14,9 +16,15 @@ function commonValue(vehicles: PiVehicleUnit[], key: keyof UpdateVehiclePayload)
   const values = vehicles.map((vehicle) => key === "rowVersion" ? "" : String(vehicle[key] ?? ""));
   return values.every((value) => value === values[0]) ? values[0] ?? "" : undefined;
 }
-export function VehicleAllocationEditor({ vehicles, readOnly, busy, allocationOptions, logisticsOptions, onSave }: Props) {
+export function VehicleAllocationEditor({ vehicles, readOnly, crossPi = false, busy, allocationOptions, logisticsOptions, onSave }: Props) {
   const [patch, setPatch] = useState<UpdateVehiclePayload>({});
   const [message, setMessage] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const logisticsFields = new Set(["shipName", "etd", "eta", "actualDepartureDate", "actualArrivalDate", "readyForPickupDate", "remark"]);
+  async function persist(): Promise<void> {
+    try { await onSave(patch); setConfirming(false); }
+    catch (reason: unknown) { setMessage(reason instanceof Error ? reason.message : "Not saved / 未保存，请重新读取车辆"); }
+  }
   function keep(key: keyof UpdateVehiclePayload): void {
     setPatch((current) => { const next = { ...current }; delete next[key]; return next; });
   }
@@ -31,18 +39,18 @@ export function VehicleAllocationEditor({ vehicles, readOnly, busy, allocationOp
       setMessage("Use non-negative EUR amounts with up to 2 decimals / EUR 金额须非负且最多两位小数"); return;
     }
     setMessage("");
-    await onSave(patch);
+    if (crossPi) setConfirming(true); else await persist();
   }
   return <form id="vehicle-edit-form" className="va-editor" onSubmit={(event) => void submit(event)}>
     <p>{vehicles.length === 1 ? vehicles[0].carCode : `${vehicles.length} selected vehicles / 勾选车辆`}</p>
     <p className="va-edit-help">Only changed fields are saved. Blank input keeps the original; use Clear explicitly. / 仅保存修改字段；空白保留原值，清空须明确操作。</p>
     {message ? <p role="alert">{message}</p> : null}
     <fieldset disabled={readOnly || busy}><legend>Status / 状态</legend>
-      <label>Allocation<CommandSelect<AllocationStatus> disabled={readOnly || busy} value={allocationOptions.find((option) => option.value === value("allocationStatus"))?.value ?? ""} options={allocationOptions} placeholder="Multiple values / Keep" onChange={(next) => next ? setPatch((current) => ({ ...current, allocationStatus: next })) : keep("allocationStatus")} />{"allocationStatus" in patch ? <button type="button" className="btn-secondary" onClick={() => keep("allocationStatus")}>Keep original</button> : null}</label>
+      {!crossPi && <label>Allocation<CommandSelect<AllocationStatus> disabled={readOnly || busy} value={allocationOptions.find((option) => option.value === value("allocationStatus"))?.value ?? ""} options={allocationOptions} placeholder="Multiple values / Keep" onChange={(next) => next ? setPatch((current) => ({ ...current, allocationStatus: next })) : keep("allocationStatus")} />{"allocationStatus" in patch ? <button type="button" className="btn-secondary" onClick={() => keep("allocationStatus")}>Keep original</button> : null}</label>}
       <label>Logistics<CommandSelect<LogisticsStatus> disabled={readOnly || busy} value={logisticsOptions.find((option) => option.value === value("logisticsStatus"))?.value ?? ""} options={logisticsOptions} placeholder="Multiple values / Keep" onChange={(next) => next ? setPatch((current) => ({ ...current, logisticsStatus: next })) : keep("logisticsStatus")} />{"logisticsStatus" in patch ? <button type="button" className="btn-secondary" onClick={() => keep("logisticsStatus")}>Keep original</button> : null}</label>
     </fieldset>
     <fieldset disabled={readOnly || busy}><legend>Vehicle & dates / 车辆与日期</legend>
-      {VEHICLE_TEXT_FIELDS.filter((field) => field.key !== "vin" || vehicles.length === 1).map(({ key, label, kind }) =>
+      {VEHICLE_TEXT_FIELDS.filter((field) => crossPi ? logisticsFields.has(field.key) : !["vin", "engineId"].includes(field.key) || vehicles.length === 1).map(({ key, label, kind }) =>
         <label key={key} className={key === "remark" ? "va-wide" : ""}>{label}
           {key === "remark" ? <textarea aria-label={label} readOnly={readOnly} value={value(key)} placeholder={commonValue(vehicles, key) === undefined ? "Multiple values / Keep" : "Keep / 保留"} onChange={(event) => event.target.value ? setPatch((current) => ({ ...current, [key]: event.target.value })) : keep(key)} /> :
             <input aria-label={label} type={kind === "date" ? "date" : "text"} readOnly={readOnly} value={value(key)} placeholder={commonValue(vehicles, key) === undefined ? "Multiple values / Keep" : "Keep / 保留"} onChange={(event) => event.target.value ? setPatch((current) => ({ ...current, [key]: key === "vin" ? event.target.value.toUpperCase() : event.target.value })) : keep(key)} />}
@@ -59,5 +67,12 @@ export function VehicleAllocationEditor({ vehicles, readOnly, busy, allocationOp
         <span className="va-edit-actions"><button type="button" className="btn-secondary" onClick={() => setPatch((current) => ({ ...current, [key]: null }))}>Clear</button>{key in patch ? <button type="button" className="btn-secondary" onClick={() => keep(key)}>Keep original</button> : null}</span>
       </label>)}
     </fieldset>
+    {confirming && <ConfirmDialog title="Confirm vehicle update / 确认车辆更新"
+      description={`${vehicles.length} vehicles / 台 · ${new Set(vehicles.map((v) => v.piCode)).size} PIs · ${[...new Set(vehicles.map((v) => v.countryCode))].join(" / ")}`}
+      cancelLabel="Back / 返回" confirmLabel="Confirm save / 确认保存" loadingLabel="Saving / 保存中" submitting={busy}
+      error={message ? { title: "Not saved / 未保存", message } : null} onCancel={() => setConfirming(false)} onConfirm={() => void persist()}>
+      <p>Only selected fields change; PI ownership and FOB stay unchanged. / 仅修改勾选车辆的指定字段，不改PI归属或FOB。</p>
+      <ul>{Object.entries(patch).map(([key, next]) => <li key={key}>{VEHICLE_COLUMNS.find((c) => c.key === key)?.label ?? key}：{next === null ? "Clear / 清空" : key === "logisticsStatus" ? logisticsOptions.find((o) => o.value === next)?.label ?? String(next) : String(next)}</li>)}</ul>
+    </ConfirmDialog>}
   </form>;
 }

@@ -298,7 +298,7 @@ def test_cross_pi_pivot_exports_formulas_caches_and_exact_source_without_reprici
     rows = [{"carCode": "A", "piCode": "PI-A", "countryCode": "CH", "orderMonth": "2026-08", "vin": "VIN-A", "fobEur": 12345},
             {"carCode": "B", "piCode": "PI-B", "countryCode": "SE", "orderMonth": "2026-09", "vin": None, "fobEur": None},
             {"carCode": "C", "piCode": "PI-C", "countryCode": "CH", "orderMonth": "2026-09", "vin": None, "fobEur": 100}]
-    data = generate_vehicle_pivot_excel(rows + rows[:1], {"rows": ["countryCode"], "column": "orderMonth", "measure": "fob"}).getvalue()
+    data = generate_vehicle_pivot_excel(rows + rows[:1], {"rows": ["countryCode"], "columns": ["orderMonth"], "measures": ["fob"], "filters": {}}).getvalue()
     wb = openpyxl.load_workbook(BytesIO(data), data_only=True)
     assert wb.sheetnames == ["Pivot", "Source vehicles"]
     assert wb["Pivot"]["D4"].value == 12445
@@ -1327,8 +1327,8 @@ def _fake_vehicle(car_code: str, vin: str | None = None) -> SimpleNamespace:
     )
 
 
-def _vin_fill_pi(session, materials=("BOM-A",), quantity=3):
-    header = vehicle_service.create_pi_header(session, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 9}, "tester")
+def _vin_fill_pi(session, materials=("BOM-A",), quantity=3, *, country="CH", month=9):
+    header = vehicle_service.create_pi_header(session, {"countryCode": country, "orderYear": 2026, "orderMonth": month}, "tester")
     model = vehicle_repo.get_header_by_code(session, header["piCode"])
     for number, material in enumerate(materials, start=1):
         line = vehicle_service._build_line(session, model, number, {
@@ -1506,6 +1506,86 @@ def test_search_paginates_after_matching_and_returns_complete_pi_counts(vehicle_
     assert first["matched"] == second["matched"] == 20
     assert len(first["items"]) == 8 and len(second["items"]) == 2
     assert not {item["piCode"] for item in first["items"]} & {item["piCode"] for item in second["items"]}
+
+
+def test_vin_batch_returns_all_pi_matches_in_one_query_response(vehicle_db):
+    vins, codes = [], set()
+    for index in range(10):
+        _, cars = _vin_fill_pi(vehicle_db, quantity=2)
+        cars[0].vin = f"LVTDB21B9RD{index:06d}"
+        vins.append(cars[0].vin); codes.add(cars[0].car_code)
+    vehicle_db.flush()
+    result = vehicle_service.search_vehicle_allocation(vehicle_db, "", vins=vins)
+    assert result["total"] == len(result["items"]) == 10
+    assert {code for item in result["items"] for code in item["carCodes"]} == codes
+
+
+def test_cross_pi_logistics_updates_only_selected_four_country_two_month_vehicles(vehicle_db):
+    targets, untouched, original = [], [], []
+    for index, country in enumerate(["CH", "SE", "BG", "CZ"]):
+        pi, cars = _vin_fill_pi(vehicle_db, quantity=2, country=country, month=8 if index % 2 else 9)
+        targets.append(cars[0]); untouched.append(cars[1])
+        original.extend((car.car_code, car.pi_code, vehicle_repo.get_line_by_code(vehicle_db, car.pi_line_code).fob_eur) for car in cars)
+    vehicle_db.flush()
+    result = vehicle_route.bulk_update_vehicles({"carCodes": [car.car_code for car in targets],
+        "rowVersions": {car.car_code: car.row_version for car in targets},
+        "fields": {"shipName": "SHIP ALPHA", "logisticsStatus": "on_vessel", "eta": "2026-11-01", "freightEur": 1700, "insuranceEur": 20}},
+        vehicle_db, UserContext(role="admin", name="admin"))
+    assert result["updatedUnits"] == 4 and result["piCode"] is None
+    assert all(car.ship_name == "SHIP ALPHA" and car.logistics_status == "on_vessel" for car in targets)
+    assert all(car.freight_eur == 1700 and car.insurance_eur == 20 for car in targets)
+    assert all(car.freight_eur is None and car.insurance_eur is None for car in untouched)
+    assert all(car.ship_name is None and car.row_version == 1 for car in untouched)
+    assert [(car.car_code, car.pi_code, vehicle_repo.get_line_by_code(vehicle_db, car.pi_line_code).fob_eur) for pair in zip(targets, untouched) for car in pair] == original
+
+
+@pytest.mark.parametrize("problem", ["version", "missing", "duplicate", "brand", "country", "fob", "vin"])
+def test_cross_pi_failure_saves_nothing(vehicle_db, problem):
+    _, first = _vin_fill_pi(vehicle_db, quantity=2)
+    _, second = _vin_fill_pi(vehicle_db, quantity=2)
+    targets = [first[0], second[0]]
+    payload = {"carCodes": [car.car_code for car in targets], "rowVersions": {car.car_code: car.row_version for car in targets}, "fields": {"shipName": "MUST NOT SAVE"}}
+    if problem == "version": payload["rowVersions"][second[0].car_code] += 1
+    if problem == "missing": payload["carCodes"].append("MISSING"); payload["rowVersions"]["MISSING"] = 1
+    if problem == "duplicate": payload["carCodes"].append(first[0].car_code)
+    if problem == "fob": payload["fields"]["fobEur"] = 1
+    if problem == "vin": payload["vinList"] = ["LVTDB21B9RD123456"]
+    with pytest.raises(HTTPException):
+        vehicle_service.bulk_update_vehicle_units(vehicle_db, payload, "tester",
+            allowed_countries=set() if problem == "country" else {"CH"},
+            allowed_brands=set() if problem == "brand" else None)
+    assert all(car.ship_name is None and car.row_version == 1 for car in first + second)
+
+
+def test_cross_pi_route_rechecks_complete_country_and_brand_scope(vehicle_db, mixed_market_pi):
+    _, cars = mixed_market_pi
+    _, other = _vin_fill_pi(vehicle_db, quantity=1)
+    other[0].brand = "OMODA"; vehicle_db.flush()
+    targets = [cars[0], other[0]]
+    body = {"carCodes": [car.car_code for car in targets], "rowVersions": {car.car_code: car.row_version for car in targets}, "fields": {"shipName": "SHIP"}}
+    denied = {**body, "carCodes": body["carCodes"] + [cars[-1].car_code], "rowVersions": {**body["rowVersions"], cars[-1].car_code: cars[-1].row_version}}
+    with pytest.raises(HTTPException) as error:
+        vehicle_route.bulk_update_vehicles(denied, vehicle_db, UserContext(role="order_filler", name="ch-filler"))
+    assert error.value.status_code == 403 and all(car.ship_name is None for car in targets)
+    assert vehicle_route.bulk_update_vehicles(body, vehicle_db, UserContext(role="order_filler", name="ch-filler"))["updatedUnits"] == 2
+
+
+def test_multi_axis_multi_measure_pivot_subtotals_never_double_count():
+    vehicles = [{"carCode": str(i), "countryCode": "CH" if i < 2 else "SE", "modelName": "J5" if i % 2 else "J7",
+                 "shipName": "SHIP" if i < 3 else None, "logisticsStatus": "on_vessel", "brand": "JAECOO",
+                 "vin": f"VIN-{i}", "fobEur": (i + 1) * 100} for i in range(4)]
+    config = {"rows": ["countryCode", "modelName"], "columns": ["shipName", "logisticsStatus"], "measures": ["units", "fob"], "filters": {"brand": ["JAECOO"]}}
+    data = generate_vehicle_pivot_excel(vehicles + vehicles[:1], config).getvalue()
+    wb = openpyxl.load_workbook(BytesIO(data), data_only=True)
+    sheet = wb["Pivot"]; total_row = sheet.max_row - 2
+    assert sheet.cell(total_row, sheet.max_column - 1).value == 4
+    assert sheet.cell(total_row, sheet.max_column).value == 1000
+    assert wb["Source vehicles"].max_row == 5
+    assert [sheet.cell(2, c).value for c in (1, 2)] == ["CH", None]
+    assert sheet.cell(2, sheet.max_column - 1).value == 2
+    config["filters"] = {"brand": ["OTHER"]}
+    with pytest.raises(ValueError, match="No vehicles"):
+        generate_vehicle_pivot_excel(vehicles, config)
 
 
 @pytest.mark.parametrize("role,username,expected", [
@@ -1943,6 +2023,65 @@ def test_new_pi_interior_uses_only_unambiguous_template_value(monkeypatch, names
     assert _line_payload_from_material(object(), "CH", "A", {})["interiorColorName"] == expected
 
 
+def test_ship_file_visible_scope_and_engine_aliases(vehicle_db, tmp_path, monkeypatch):
+    pi, cars = _vin_fill_pi(vehicle_db, quantity=2)
+    cars[0].vin = "LVTDB21B9RD123456"
+    vehicle_db.flush()
+    monkeypatch.setattr(vehicle_route, "IMPORT_SESSION_DIR", tmp_path / "sessions")
+    book = openpyxl.Workbook()
+    book.active.append(["VIN", "物料号", "发动机序列号", "物料组号", "出口国家"])
+    book.active.append([cars[0].vin, "BOM-A", "ENGINE-A", "GROUP-ONLY", "WRONG COUNTRY"])
+    book.active.append(["LVTDB21B9RD123457", "BOM-A", "ENGINE-HIDDEN"])
+    book.active.row_dimensions[3].hidden = True
+    def upload(include_hidden):
+        file = BytesIO(); book.save(file); file.seek(0)
+        return vehicle_route.preview_import(file=UploadFile(file=file, filename="ship.xlsx"),
+            pi_code=pi, pi_codes=None, include_hidden=include_hidden, allow_replacing=False,
+            remove_vins=False, session=vehicle_db, user=UserContext(role="admin", name="tester"))
+    preview = upload(False)
+    assert (preview["fileRows"], preview["visibleRows"], preview["totalRows"]) == (2, 1, 1)
+    assert preview["previewRows"][0]["action"] == "update"
+    assert preview["previewRows"][0]["engineId"] == "ENGINE-A"
+    assert preview["engineUpdatedUnits"] == 1 and preview["filledUnits"] == 0
+    vehicle_route.apply_import(preview["importId"], session=vehicle_db, user=UserContext(role="admin", name="tester"))
+    assert cars[0].engine_id == "ENGINE-A" and cars[0].country_code == "CH"
+    assert cars[1].vin is None and cars[1].engine_id is None
+    assert upload(False)["updatedUnits"] == 0
+    assert upload(True)["totalRows"] == 2
+    exported = openpyxl.load_workbook(vehicle_service.export_vehicle_units(vehicle_db, pi_code=pi,
+        columns=["carCode", "vin", "engineId"]), data_only=True)
+    assert exported.active.cell(2, 3).value == "ENGINE-A"
+
+
+def test_cross_pi_vin_engine_fill_requires_unambiguous_targets_and_is_atomic(vehicle_db):
+    pi1, first = _vin_fill_pi(vehicle_db, quantity=2, country="CH", month=8)
+    pi2, second = _vin_fill_pi(vehicle_db, quantity=2, country="SE", month=9)
+    first[0].vin = "LVTDB21B9RD123456"; vehicle_db.flush()
+    rows = [{"sourceRow": 2, "material_code": "BOM-A", "vin": first[0].vin, "engine_id": "ENGINE-A"},
+            {"sourceRow": 3, "material_code": "BOM-A", "vin": "LVTDB21B9RD123457", "engine_id": "ENGINE-B"}]
+    preview = vehicle_service.preview_vehicle_import(vehicle_db, rows, pi_codes=[pi1, pi2])
+    assert preview["status"] == "error" and preview["previewRows"][1]["carCode"] is None
+    assert "select target CarCode" in " ".join(preview["errors"])
+    rows[1]["car_code"] = second[0].car_code
+    preview = vehicle_service.preview_vehicle_import(vehicle_db, rows, pi_codes=[pi1, pi2])
+    assert preview["updatedUnits"] == 2 and preview["engineUpdatedUnits"] == 2
+    second[0].row_version += 1; vehicle_db.flush()
+    with pytest.raises(HTTPException) as error:
+        vehicle_service.apply_vehicle_import(vehicle_db, rows, "tester", vin_preview=preview)
+    assert error.value.status_code == 409
+    assert first[0].engine_id is None and second[0].vin is None
+    preview = vehicle_service.preview_vehicle_import(vehicle_db, rows, pi_codes=[pi1, pi2])
+    with pytest.raises(HTTPException):
+        vehicle_service.apply_vehicle_import(vehicle_db, rows, "tester", vin_preview=preview, allowed_countries={"CH"})
+    assert first[0].engine_id is None and second[0].vin is None
+    result = vehicle_service.apply_vehicle_import(vehicle_db, rows, "tester", vin_preview=preview)
+    assert result["updatedUnits"] == 2 and result["createdUnits"] == 0
+    assert first[0].engine_id == "ENGINE-A" and second[0].engine_id == "ENGINE-B"
+    assert second[0].vin == rows[1]["vin"] and second[1].vin is None
+    repeat = vehicle_service.preview_vehicle_import(vehicle_db, rows, pi_codes=[pi1, pi2])
+    assert repeat["updatedUnits"] == 0 and repeat["skippedUnits"] == 2
+
+
 def test_vin_fill_parser_accepts_bom_vin_below_title(tmp_path):
     workbook = openpyxl.Workbook()
     sheet = workbook.active
@@ -2088,7 +2227,7 @@ def test_vin_fill_file_preview_apply_keeps_only_session_json_then_cleans(vehicle
     file.seek(0)
     user = SimpleNamespace(name="tester", role="admin")
     preview = vehicle_route.preview_import(file=UploadFile(file=file, filename="production.xlsx"), pi_code=pi,
-                                           allow_replacing=False, session=vehicle_db, user=user)
+                                           pi_codes=None, include_hidden=False, allow_replacing=False, session=vehicle_db, user=user)
     assert len(list(tmp_path.iterdir())) == 1
     assert json.loads((tmp_path / f'{preview["importId"]}.json').read_text())["owner"] == "tester"
     result = vehicle_route.apply_import(preview["importId"], session=vehicle_db, user=user)

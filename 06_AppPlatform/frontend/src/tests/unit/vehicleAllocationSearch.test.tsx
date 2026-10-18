@@ -56,18 +56,18 @@ describe("allocation search", () => {
     expect(screen.queryByRole("listbox")).toBeNull(); expect(onApply).toHaveBeenLastCalledWith("", null); expect(onAdd).not.toHaveBeenCalled();
   });
 
-  it("submits one deduplicated VIN query and explicitly adds whole PIs with matched selection", async () => {
+  it("submits one deduplicated VIN query and directly selects matching vehicles without PI selection", async () => {
     const search = vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue({ ...result, missingVins: ["LVTDB21B9RD123457"] });
     const { input, onAdd } = setup();
     fireEvent.paste(input, { clipboardData: { getData: () => "LVTDB21B9RD123456\nLVTDB21B9RD123456\nLVTDB21B9RD123457\nBAD" } });
-    await screen.findByRole("option", { name: /PI-CH/ });
+    await screen.findByRole("button", { name: /Select only these 2 vehicles/ });
+    expect(screen.queryByRole("listbox")).toBeNull(); expect(onAdd).not.toHaveBeenCalled();
     expect(search).toHaveBeenCalledTimes(1); expect(search.mock.calls[0].slice(0, 3)).toEqual(["", ["LVTDB21B9RD123456", "LVTDB21B9RD123457"], 1]);
     expect((input as HTMLTextAreaElement).value).toBe("2 VINs");
     expect(screen.getByText(/1 duplicates/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("option", { name: /PI-CH/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Add 1 PIs and select 2 vehicles/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Select only these 2 vehicles/ }));
     await waitFor(() => expect(onAdd).toHaveBeenCalledWith(["PI-CH-202608-001"], ["CAR-1", "CAR-2"],
-      "LVTDB21B9RD123456\nLVTDB21B9RD123456\nLVTDB21B9RD123457\nBAD", ["LVTDB21B9RD123456", "LVTDB21B9RD123457"]));
+      "LVTDB21B9RD123456\nLVTDB21B9RD123456\nLVTDB21B9RD123457\nBAD", ["LVTDB21B9RD123456", "LVTDB21B9RD123457"], true));
   });
 
   it("distinguishes empty, failure, short input and complete pagination", async () => {
@@ -82,6 +82,18 @@ describe("allocation search", () => {
     fireEvent.click(screen.getByRole("button", { name: /Show more/ })); await screen.findByRole("option", { name: /PI-SE/ });
     expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(2); expect(search.mock.calls.at(-1)?.[2]).toBe(2);
     fireEvent.pointerDown(document.body); expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("selects all VIN hits across more than eight PIs without checking PI candidates", async () => {
+    const items = Array.from({ length: 10 }, (_, i) => ({ ...result.items[0], piCode: `PI-${i}`, matched: 1, carCodes: [`CAR-${i}`] }));
+    const search = vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue({ ...result, items, total: 10, matched: 10 });
+    const { input, onAdd } = setup();
+    fireEvent.change(input, { target: { value: "LVTDB21B9RD123456" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Select only these 10 vehicles/ }));
+    await waitFor(() => expect(onAdd).toHaveBeenCalledWith(items.map((i) => i.piCode), items.flatMap((i) => i.carCodes), "LVTDB21B9RD123456", ["LVTDB21B9RD123456"], true));
+    expect(search).toHaveBeenCalledTimes(1); expect(screen.queryByRole("listbox")).toBeNull();
+    fireEvent.focus(input); fireEvent.click(screen.getByRole("button", { name: /Append 10 matches/ }));
+    await waitFor(() => expect(onAdd.mock.calls.at(-1)?.[4]).toBe(false));
   });
 
   it("replaces a VIN summary with a pasted single VIN or CSV and clears it with Backspace", async () => {

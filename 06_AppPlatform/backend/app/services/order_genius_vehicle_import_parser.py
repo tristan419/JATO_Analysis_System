@@ -14,6 +14,10 @@ HEADER_MAP = {
     "official pi no": "official_pi_no",
     "car code": "car_code",
     "vin": "vin",
+    "engine id": "engine_id",
+    "engine number": "engine_id",
+    "发动机序号": "engine_id",
+    "发动机序列号": "engine_id",
     "old vin": "old_vin",
     "bom": "bom",
     "material code": "material_code",
@@ -59,6 +63,8 @@ def parse_vehicle_allocation_xlsx(file_path: Path, *, vin_fill: bool = False) ->
         rows: list[dict[str, Any]] = []
         for row_idx in range(header_row + 1, ws.max_row + 1):
             item: dict[str, Any] = {"sourceRow": row_idx}
+            if ws.row_dimensions[row_idx].hidden:
+                item["sourceHidden"] = True
             has_value = False
             for key, col_idx in header_map.items():
                 raw = ws.cell(row=row_idx, column=col_idx).value
@@ -81,10 +87,14 @@ def parse_vehicle_vin_list_xlsx(file_path: Path) -> list[str]:
             vin_column = _find_vin_column(ws)
             if vin_column:
                 for row_idx in range(vin_column["header_row"] + 1, ws.max_row + 1):
+                    if ws.row_dimensions[row_idx].hidden:
+                        continue
                     vins.extend(_cell_tokens(ws.cell(row=row_idx, column=vin_column["column"]).value))
                 continue
 
             for row_idx in range(1, ws.max_row + 1):
+                if ws.row_dimensions[row_idx].hidden:
+                    continue
                 for col_idx in range(1, ws.max_column + 1):
                     vins.extend(_cell_tokens(ws.cell(row=row_idx, column=col_idx).value))
         return vins

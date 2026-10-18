@@ -1,7 +1,7 @@
 import type { PiVehicleUnit } from "../types/orderGeniusVehicle";
 
 export type VehicleColumnKey = keyof PiVehicleUnit | "config" | "cocPdf";
-export type VehicleTextField = "vin" | "productionDate" | "etd" | "eta" | "actualDepartureDate" | "actualArrivalDate" | "readyForPickupDate" | "shipName" | "dealerCode" | "dealerName" | "customerRef" | "remark";
+export type VehicleTextField = "vin" | "engineId" | "productionDate" | "etd" | "eta" | "actualDepartureDate" | "actualArrivalDate" | "readyForPickupDate" | "shipName" | "dealerCode" | "dealerName" | "customerRef" | "remark";
 export interface VehicleColumn {
   key: VehicleColumnKey;
   label: string;
@@ -12,6 +12,7 @@ export interface VehicleColumn {
 // The actual allocation fields, shared by table, filters, editor and export labels.
 export const VEHICLE_COLUMNS: VehicleColumn[] = [
   { key: "carCode", label: "Car Code" }, { key: "vin", label: "VIN", editOrder: 0 },
+  { key: "engineId", label: "Engine ID / 发动机序号", optional: true, editOrder: 0.5 },
   { key: "piCode", label: "PI" }, { key: "countryCode", label: "Country", kind: "values" },
   { key: "materialCode", label: "Material" }, { key: "config", label: "Config" },
   { key: "exteriorColorName", label: "Exterior", kind: "values" },
@@ -35,7 +36,7 @@ export const VEHICLE_COLUMNS: VehicleColumn[] = [
   { key: "remark", label: "Note / 备注", optional: true, editOrder: 12 },
 ];
 export const COLUMN_GROUPS = [
-  { label: "Identity / 车辆", keys: ["carCode", "vin", "piCode", "countryCode", "materialCode", "config", "exteriorColorName", "interiorColorName"] },
+  { label: "Identity / 车辆", keys: ["carCode", "vin", "engineId", "piCode", "countryCode", "materialCode", "config", "exteriorColorName", "interiorColorName"] },
   { label: "Price & documents / 价格与文件", keys: ["fobEur", "freightEur", "insuranceEur", "cocPdf", "remark"] },
   { label: "Status & dates / 状态与日期", keys: ["allocationStatus", "logisticsStatus", "shipName", "eta", "readyForPickupDate", "productionDate", "etd", "actualDepartureDate", "actualArrivalDate", "dealerCode", "dealerName", "customerRef"] },
 ];

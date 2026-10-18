@@ -210,6 +210,7 @@ export interface PiVehicleUnit {
   piLineCode: string;
   carCode: string;
   vin: string | null;
+  engineId?: string | null;
   materialCode: string | null;
   bom: string | null;
   brand: string | null;
@@ -388,6 +389,8 @@ export interface VehicleImportPreviewRow {
   vin: string | null;
   materialCode: string | null;
   oldVin?: string | null;
+  engineId?: string | null;
+  oldEngineId?: string | null;
   rowVersion?: number | null;
   requestedCarCode?: string | null;
   inputOldVin?: string | null;
@@ -409,8 +412,13 @@ export interface VehicleImportPreview {
   mode?: "pi_vin_fill";
   removeVins?: boolean;
   removedUnits?: number;
-  piCode?: string;
+  piCode?: string | null;
   allowReplacing?: boolean;
+  piCodes?: string[];
+  fileRows?: number;
+  visibleRows?: number;
+  includeHidden?: boolean;
+  engineUpdatedUnits?: number;
   filledUnits?: number;
   replacedUnits?: number;
   skippedUnits?: number;
@@ -428,6 +436,7 @@ export interface VehicleImportParsedRowsPayload {
   rows: VehicleImportParsedRow[];
   source?: string | null;
   piCode?: string;
+  piCodes?: string[];
   allowReplacing?: boolean;
   removeVins?: boolean;
 }
@@ -448,6 +457,7 @@ export interface VehicleVinListExtract {
 }
 
 export interface UpdateVehiclePayload {
+  engineId?: string | null;
   rowVersion?: number;
   freightEur?: number | null;
   insuranceEur?: number | null;
@@ -477,7 +487,7 @@ export interface BulkVehicleUpdatePayload {
 }
 
 export interface BulkVehicleUpdateResult {
-  piCode: string;
+  piCode: string | null;
   piLineCode: string | null;
   matchedUnits: number;
   updatedUnits: number;
