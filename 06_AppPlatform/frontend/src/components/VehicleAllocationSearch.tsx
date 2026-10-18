@@ -77,6 +77,7 @@ export function VehicleAllocationSearch({ vehicles, piCodes, busy, applied, onAp
   function edit(value: string): void {
     // Invalidate synchronously, before an old promise or click can use the preceding result.
     request.current += 1; abort.current?.abort(); setResult(null); setChosen(new Set());
+    if (value === query) setRetry((current) => current + 1);
     setQuery(value); setOpen(true);
     if (!value) { setOpen(false); setRawOpen(false); onApply("", null); }
   }
