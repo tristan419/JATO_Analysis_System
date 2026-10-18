@@ -96,6 +96,21 @@ describe("allocation search", () => {
     await waitFor(() => expect(onAdd.mock.calls.at(-1)?.[4]).toBe(false));
   });
 
+  it("requeries the identical VIN batch after selection without applying or selecting implicitly", async () => {
+    const search = vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue(result);
+    const { input, onAdd, onApply } = setup();
+    const text = "LVTDB21B9RD123456,LVTDB21B9RD123457";
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.click(await screen.findByRole("button", { name: /Select only these 2 vehicles/ }));
+    await waitFor(() => expect(onAdd).toHaveBeenCalledTimes(1));
+    fireEvent.paste(input, { clipboardData: { getData: () => text } });
+    expect(screen.queryByRole("region", { name: "Search preview / 搜索预览" })).toBeNull();
+    await screen.findByRole("button", { name: /Select only these 2 vehicles/ });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls[0][3]?.aborted).toBe(true);
+    expect(onAdd).toHaveBeenCalledTimes(1); expect(onApply).not.toHaveBeenCalled();
+  });
+
   it("replaces a VIN summary with a pasted single VIN or CSV and clears it with Backspace", async () => {
     const search = vi.spyOn(api, "searchVehicleAllocation").mockResolvedValue(result);
     const { input, onApply } = setup();
