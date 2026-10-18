@@ -90,7 +90,7 @@ def generate_vehicle_allocation_excel(vehicles: list[dict], columns: list[str] |
     ws.title = "Vehicle Allocation"
 
     for col_idx, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell = ws.cell(row=1, column=col_idx, value=_excel_value(header))
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
         cell.alignment = CENTER_ALIGN

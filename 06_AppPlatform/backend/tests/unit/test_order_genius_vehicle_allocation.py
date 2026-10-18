@@ -2253,6 +2253,12 @@ def test_vin_fill_failed_write_rolls_back_earlier_updates(vehicle_db, monkeypatc
     assert all(v.vin is None for v in vehicles)
 
 
+def test_custom_header_and_values_are_exported_as_text_not_formulas():
+    book = openpyxl.load_workbook(generate_vehicle_allocation_excel([{"custom:test": "=1+1"}],
+        ["custom:test"], custom_labels={"custom:test": "=2+2"}))
+    assert book.active["A1"].data_type == book.active["A2"].data_type == "s"
+
+
 def test_shared_custom_columns_ownership_admin_and_soft_delete(vehicle_db):
     alice, bob, admin = [UserContext(role=role, name=name) for name, role in [("alice", "viewer"), ("bob", "viewer"), ("admin", "admin")]]
     column = vehicle_route.create_custom_column({"label": "船批参考"}, vehicle_db, alice)
