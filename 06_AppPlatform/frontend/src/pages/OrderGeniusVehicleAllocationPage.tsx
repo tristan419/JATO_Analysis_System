@@ -843,16 +843,17 @@ export function OrderGeniusVehicleAllocationPage() {
   }
 
   async function exportCurrentView(selectedOnly = false, pivot?: VehiclePivotConfig, source?: PiVehicleUnit[]): Promise<void> {
-    if ((!selectedPi && !joint) || scopeBusy || exporting || (joint && workspacePis.length !== workspaceCodes.length)) return;
+    if (scopeBusy || exporting || (joint && workspacePis.length !== workspaceCodes.length)) return;
     setExporting(true);
     setError(null);
     try {
       const view = gridView.current;
       const vehicles = source ?? (selectedOnly ? vinPasteScopeVehicles.filter((v) => selectedCarCodes.has(v.carCode)) : view.vehicles);
       if (!vehicles.length || !view.columns.length) { setError("Nothing visible to export / 当前无可导出内容"); return; }
-      const blob = await api.exportVehicleAllocation({ country: selectedOnly || pivot ? undefined : filters.country,
-        piCodes: joint ? workspaceCodes : undefined, piCode: selectedPi?.header.piCode,
-        piLineCode: selectedLineCode ?? undefined, columns: view.columns, carCodes: vehicles.map((vehicle) => vehicle.carCode), pivot });
+      const pis = [...new Set(vehicles.map((v) => v.piCode))];
+      const blob = await api.exportVehicleAllocation({ country: selectedOnly || pivot || searchResults !== null ? undefined : filters.country,
+        piCodes: pis.length > 1 ? pis : undefined, piCode: pis.length === 1 ? pis[0] : undefined,
+        piLineCode: searchResults === null ? selectedLineCode ?? undefined : undefined, columns: view.columns, carCodes: vehicles.map((vehicle) => vehicle.carCode), pivot });
       const country = filters.country || "ALL";
       buildDownload(blob, `Vehicle_${pivot ? "Pivot" : selectedOnly ? "Selected" : "Allocation"}_${country}_${new Date().toISOString().slice(0, 10)}.xlsx`);
     } catch (err: unknown) {
@@ -1016,7 +1017,7 @@ export function OrderGeniusVehicleAllocationPage() {
                   setFilters((current) => ({ country: current.country, piCode: current.piCode }));
                   saveVisibleColumns(new Set(DEFAULT_COLUMNS)); setGridResetKey((value) => value + 1);
                 }}>Reset columns & filters / 重置列与筛选</button>
-              <LoadingActionButton disabled={!checkedPiCodes.length || scopeBusy} loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出所见</LoadingActionButton>
+              <LoadingActionButton disabled={(!checkedPiCodes.length && !searchResults?.length) || scopeBusy} loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出所见</LoadingActionButton>
               <button type="button" className="btn-secondary" disabled={!selectedPi || scopeBusy}
                 onClick={() => setShowInvoiceExport(true)}>Export PI</button>
               <button type="button" onClick={() => { setAnalysisView("pivot"); setToolDrawerOpen(false); }}>Open pivot / 打开透视</button>

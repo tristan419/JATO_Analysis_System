@@ -116,7 +116,8 @@ async function selectPi() {
   await waitFor(() => expect(api.getVehicleAllocationPis).toHaveBeenCalled());
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${PI}`) }, { timeout: 5000 }));
   await screen.findByText("150 units / 台");
-  await waitFor(() => expect(screen.getAllByRole("row").length).toBe(6));
+  const table = within(screen.getByRole("table", { name: "Vehicle details" }));
+  await waitFor(() => expect(table.getAllByRole("row").length).toBe(6));
 }
 
 async function applySearch(query: string): Promise<void> {
@@ -201,6 +202,24 @@ it("cross-tabulates the complete source and selected subset with exact source dr
   expect(drill.mock.calls[0][0]).toHaveLength(30);
   fireEvent.click(screen.getByRole("button", { name: /Export pivot/ }));
   expect(output.mock.calls[0][0]).toHaveLength(30);
+});
+
+it("exports live cross-PI search results without selecting or opening their PIs", async () => {
+  const hits = [vehicle(1), { ...vehicle(2), piCode: "PI-SE-202608-001", carCode: "CAR-SE-2", countryCode: "SE" }];
+  vi.mocked(api.searchVehicleAllocation).mockResolvedValue({ vehicles: hits, items: [], total: 2, matched: 2, page: 1, pageSize: 8, missingVins: [] });
+  const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:export"; static revokeObjectURL = vi.fn(); });
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  render(<OrderGeniusVehicleAllocationPage />);
+  await applySearch("CH SE");
+  expect(api.getVehicleAllocationPi).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: /Export selected/ })).toBeNull();
+  openView(); fireEvent.click(screen.getByRole("button", { name: "Export current view / 导出所见" }));
+  await waitFor(() => expect(download).toHaveBeenCalled());
+  expect(download.mock.calls[0][0]?.piCodes).toEqual(hits.map((v) => v.piCode));
+  expect(download.mock.calls[0][0]?.piCode).toBeUndefined();
+  expect(download.mock.calls[0][0]?.country).toBeUndefined();
+  expect(download.mock.calls[0][0]?.carCodes).toEqual(hits.map((v) => v.carCode));
 });
 
 it("selects a VIN subset across PIs and confirms one logistics-only bulk request", async () => {
@@ -856,13 +875,15 @@ describe("unified Grid editing contract", () => {
     const download = vi.spyOn(api, "exportVehicleAllocation").mockResolvedValue(new Blob());
     vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:export"; static revokeObjectURL = vi.fn(); });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
-    await selectPi(); openView();
-    fireEvent.click(within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" })).getByRole("button", { name: "Columns / 列设置" }));
-    fireEvent.click(screen.getByText("系统列"));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Interior" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Note / 备注" }));
+    await selectPi();
+    fireEvent.click(screen.getByRole("button", { name: "Columns / 列设置" }));
+    const columns = within(screen.getByRole("group", { name: "Columns / 显示列" }));
+    fireEvent.click(columns.getByText("系统列"));
+    fireEvent.click(columns.getByRole("checkbox", { name: "Interior" }));
+    fireEvent.click(columns.getByRole("checkbox", { name: "Note / 备注" }));
     openView();
-    fireEvent.click(screen.getByRole("button", { name: "Export current view / 导出所见" }));
+    const tools = within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" }));
+    fireEvent.click(tools.getByRole("button", { name: "Export current view / 导出所见" }));
     await waitFor(() => expect(download).toHaveBeenCalled());
     expect(download.mock.calls[0][0]?.carCodes).toHaveLength(150);
     expect(download.mock.calls[0][0]?.columns).not.toContain("interiorColorName");
