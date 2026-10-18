@@ -9,6 +9,7 @@ from sqlalchemy import Integer, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import PiOrderHeader, PiOrderLine, PiOrderLineAllocation, PiVehicleUnit
+from app.infra.business_search import search_expression, facet_words
 
 
 def next_pi_sequence(session: Session, country_code: str, order_month: str) -> int:
@@ -220,25 +221,33 @@ def search_allocation_preview(session: Session, keyword: str, *, vins: list[str]
               PiOrderHeader.official_pi_no]
     fields.extend(case(status_labels, value=column, else_=column)
                   for column in (vehicle.allocation_status, vehicle.logistics_status))
-    def compact(value):
-        expression = func.upper(func.coalesce(value, ""))
-        for char in ("-", "_", "/", " "):
-            expression = func.replace(expression, char, "")
-        return expression
-    groups = [[re.sub(r"[-_/\s]", "", term.upper()) for term in group.split()]
-              for group in re.split(r"[,;，；\n\r]+", keyword) if group.strip()]
+    base = select(vehicle).join(PiOrderHeader, vehicle.pi_id == PiOrderHeader.pi_id).where(*permitted)
+    facet_columns = [vehicle.country_code, PiOrderHeader.order_month, vehicle.brand, vehicle.powertrain,
+                     vehicle.model_name, vehicle.version, vehicle.material_code, vehicle.exterior_color_code]
+    vocabulary = session.execute(base.with_only_columns(*facet_columns).distinct()).all() if vins is None else []
+    facets = [([column], facet_words(row[i] for row in vocabulary)) for i, column in enumerate(facet_columns)]
+    from app.services.country_service import COUNTRY_ALIAS_GROUPS
+    facets[0][1].update(alias.upper() for values in COUNTRY_ALIAS_GROUPS.values() for alias in values if len(alias) == 2 and alias.isascii())
+    if vins is None:
+        facets[0][1].update(session.scalars(select(PiOrderHeader.country_code).distinct()).all())
+    facets[3][1].update({"EV", "SHS"})
+    terms = [term.upper() for term in re.split(r"[\s,，;；]+", keyword) if term]
+    facets[6][1].update(term for term in terms if re.fullmatch(r"\d{2,5}", term) or re.fullmatch(r"T\d[A-Z0-9]+", term))
+    # Country/month/powertrain are exact business facets, never substring guesses.
+    expression = search_expression(keyword, fields, facets)
     if vins is not None:
         match = func.upper(vehicle.vin).in_(vins)
-    elif groups:
-        match = or_(*(and_(*(or_(*(compact(field).contains(term, autoescape=True) for field in fields))
-                            for term in terms)) for terms in groups))
+    elif expression is not None:
+        match = expression
     else:
         match = vehicle.car_code.is_(None)
-    base = select(vehicle).join(PiOrderHeader, vehicle.pi_id == PiOrderHeader.pi_id).where(*permitted)
     matched = base.where(match)
     grouped = matched.with_only_columns(vehicle.pi_code, func.count().label("matched")).group_by(vehicle.pi_code).subquery()
     total = session.scalar(select(func.count()).select_from(grouped)) or 0
     matched_total = session.scalar(select(func.count()).select_from(matched.subquery())) or 0
+    if matched_total > 10000:
+        from fastapi import HTTPException
+        raise HTTPException(400, "More than 10,000 matches; add a country, month or model / 超过10000台，请增加国家、月份或车型")
     # A VIN batch selects vehicles, not a page of PI candidates.
     if vins is not None:
         page, page_size = 1, max(1, total)
@@ -246,7 +255,7 @@ def search_allocation_preview(session: Session, keyword: str, *, vins: list[str]
         grouped, PiOrderHeader.pi_code == grouped.c.pi_code).order_by(PiOrderHeader.order_month.desc(), PiOrderHeader.pi_code)
         .offset((page - 1) * page_size).limit(page_size)).all()
     codes = [header.pi_code for header, _ in headers]
-    matches = session.scalars(matched.where(vehicle.pi_code.in_(codes))).all() if codes else []
+    matches = list(session.scalars(matched).all())
     authorized = session.execute(base.with_only_columns(vehicle.pi_code, vehicle.country_code, vehicle.powertrain)
                                  .where(vehicle.pi_code.in_(codes))).all() if codes else []
     items = []
@@ -259,7 +268,7 @@ def search_allocation_preview(session: Session, keyword: str, *, vins: list[str]
                       "carCodes": [row.car_code for row in matches if row.pi_code == header.pi_code]})
     found = set(session.scalars(matched.with_only_columns(func.upper(vehicle.vin))).all()) if vins is not None else set()
     return {"items": items, "total": total, "matched": matched_total, "page": page, "pageSize": page_size,
-            "missingVins": [vin for vin in vins or [] if vin not in found]}
+            "missingVins": [vin for vin in vins or [] if vin not in found], "vehicles": matches}
 
 
 def list_lines_by_pi(session: Session, pi_id) -> list[PiOrderLine]:

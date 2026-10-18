@@ -724,7 +724,7 @@ def test_period_only_bom_country_search_includes_materials_and_keeps_raw_default
         valid_from=date(2027, 1, 1), valid_to=None, base_fob_eur=1300, remark=None, changed_by="test")
     db.commit()
     items, countries = repo.list_bom_with_fob(db, country_code="CH")
-    assert countries == ["CH", "NL"]
+    assert countries == ["CH"]  # Explicit country search projects only the requested price columns.
     assert {item["materialCode"] for item in items} == {"S", "D"}
     assert items[0]["fobByCountry"] == {}
     assert [p["baseFobEur"] for p in items[0]["fobPeriodsByCountry"]["CH"]] == [1200, 1300]

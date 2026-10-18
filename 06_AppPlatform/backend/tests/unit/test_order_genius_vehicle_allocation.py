@@ -82,6 +82,8 @@ def vehicle_db():
         models.PiOrderLine,
         models.PiOrderLineAllocation,
         models.PiVehicleUnit,
+        models.VehicleCustomColumn,
+        models.CountryMaterialFinance,
     ):
         table = model.__table__.to_metadata(metadata)
         for column in table.columns:
@@ -2249,6 +2251,96 @@ def test_vin_fill_failed_write_rolls_back_earlier_updates(vehicle_db, monkeypatc
     with pytest.raises(HTTPException):
         vehicle_service.apply_vehicle_import(vehicle_db, rows, "tester", vin_preview=preview)
     assert all(v.vin is None for v in vehicles)
+
+
+def test_shared_custom_columns_ownership_admin_and_soft_delete(vehicle_db):
+    alice, bob, admin = [UserContext(role=role, name=name) for name, role in [("alice", "viewer"), ("bob", "viewer"), ("admin", "admin")]]
+    column = vehicle_route.create_custom_column({"label": "船批参考"}, vehicle_db, alice)
+    assert vehicle_route.list_custom_columns(vehicle_db, bob)["items"] == [{**column, "canDelete": False}]
+    with pytest.raises(HTTPException) as forbidden:
+        vehicle_route.delete_custom_column(column["id"], vehicle_db, bob)
+    assert forbidden.value.status_code == 403
+    vehicle_route.delete_custom_column(column["id"], vehicle_db, admin)
+    assert vehicle_route.list_custom_columns(vehicle_db, alice)["items"] == []
+    assert vehicle_db.get(models.VehicleCustomColumn, column["id"]).is_active is False
+    own = vehicle_route.create_custom_column({"label": "另一列"}, vehicle_db, alice)
+    vehicle_route.delete_custom_column(own["id"], vehicle_db, alice)
+    with pytest.raises(HTTPException) as system:
+        vehicle_route.delete_custom_column("engineId", vehicle_db, admin)
+    assert system.value.status_code == 404
+
+
+@pytest.mark.parametrize("label", ["", "VIN", "engineId", "FOB (EUR)", "x" * 61, None])
+def test_custom_column_rejects_invalid_or_system_names(vehicle_db, label):
+    with pytest.raises(HTTPException):
+        vehicle_route.create_custom_column({"label": label}, vehicle_db, UserContext(role="admin", name="admin"))
+
+
+def test_shared_custom_values_reuse_vehicle_scope_versions_and_exports(vehicle_db, mixed_market_pi):
+    pi, cars = mixed_market_pi
+    column = vehicle_route.create_custom_column({"label": "船批参考"}, vehicle_db, UserContext(role="admin", name="admin"))
+    key = column["id"]
+    viewer = models.User(username="shared-viewer", password_hash="test", role="viewer", is_active=True,
+                         primary_country_code="CH", secondary_country_codes=[], brands=["OMODA"])
+    vehicle_db.add(viewer); vehicle_db.commit()
+    user = UserContext(role="viewer", name=viewer.username)
+    payload = {"carCodes": [cars[0].car_code], "rowVersions": {cars[0].car_code: cars[0].row_version}, "fields": {"customValues": {key: "=not a formula"}}}
+    before = vehicle_service.get_pi_detail(vehicle_db, pi)
+    vehicle_route.update_custom_values(payload, vehicle_db, user)
+    result = vehicle_service.get_pi_detail(vehicle_db, pi)
+    assert result["header"] == before["header"] and result["lines"] == before["lines"]
+    assert cars[0].custom_values == {key: "=not a formula"} and all(v.custom_values is None for v in cars[1:])
+    with pytest.raises(HTTPException) as stale:
+        vehicle_route.update_custom_values(payload, vehicle_db, user)
+    assert stale.value.status_code == 409
+    payload["carCodes"] = [cars[2].car_code]; payload["rowVersions"] = {cars[2].car_code: cars[2].row_version}
+    with pytest.raises(HTTPException) as denied:
+        vehicle_route.update_custom_values(payload, vehicle_db, user)
+    assert denied.value.status_code == 403 and cars[2].custom_values is None
+    payload["fields"] = {"freightEur": 100}
+    with pytest.raises(HTTPException) as limited:
+        vehicle_route.update_custom_values(payload, vehicle_db, user)
+    assert limited.value.status_code == 400
+    buffer = vehicle_service.export_vehicle_units(vehicle_db, columns=["carCode", f"custom:{key}"], car_codes=[cars[0].car_code], pi_code=pi, page_size=10000)
+    sheet = openpyxl.load_workbook(buffer).active
+    assert sheet.cell(1, 2).value == "船批参考" and sheet.cell(2, 2).data_type != "f"
+    vehicle_route.delete_custom_column(key, vehicle_db, UserContext(role="admin", name="admin"))
+    assert cars[0].custom_values == {key: "=not a formula"}
+    payload = {"carCodes": [cars[0].car_code], "rowVersions": {cars[0].car_code: cars[0].row_version}, "fields": {"customValues": {key: "later"}}}
+    with pytest.raises(HTTPException) as removed:
+        vehicle_route.update_custom_values(payload, vehicle_db, user)
+    assert removed.value.status_code == 409
+
+
+def test_bom_search_material_and_country_columns_share_business_semantics(vehicle_db):
+    for code in ("T7000MY0009", "T7000MY0010"):
+        _colour_sku(vehicle_db, code)
+        for country in ("CH", "SE", "HR"):
+            vehicle_db.add(models.CountrySkuFobResolved(baseline_version_id=vehicle_db.info["baseline"], country_code=country,
+                material_code=code, payment_term_code="TT", base_fob_eur=10000, uploaded_fob_eur=10000,
+                final_fob_eur=10000, is_active=True, fob_source_mode="template_base"))
+    vehicle_db.flush()
+    for query, expected_codes, expected_countries in [("ch，se，hr", {"T7000MY0009", "T7000MY0010"}, {"CH", "SE", "HR"}),
+            ("0009,ch", {"T7000MY0009"}, {"CH"}), ("0009,ch,se", {"T7000MY0009"}, {"CH", "SE"})]:
+        rows, countries = order_repo.list_bom_with_fob(vehicle_db, search=query)
+        assert {row["materialCode"] for row in rows} == expected_codes and set(countries) == expected_countries
+
+
+def test_business_search_combines_country_union_with_material_intersection(vehicle_db):
+    all_cars = []
+    for country in ["CH", "SE", "HR"]:
+        _, cars = _vin_fill_pi(vehicle_db, materials=("T7000MY0009", "T7000MY0010"), quantity=1, country=country)
+        all_cars.extend(cars)
+    for keyword, count in [("ch，se，hr", 6), ("0009", 3), ("0009,ch", 1), ("0009,ch,se", 2), ("0009,0010,ch", 2)]:
+        result = vehicle_service.search_vehicle_allocation(vehicle_db, keyword)
+        assert result["matched"] == count and len(result["vehicles"]) == count
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, "0009,ch,se", allowed_countries={"HR"})["matched"] == 0
+    all_cars[0].powertrain, all_cars[1].powertrain = "PHEV", "HEV"; vehicle_db.flush()
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, "ch,HEV")["matched"] == 1
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, "ch,EV")["matched"] == 0
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, "ch,SHS")["matched"] == 1
+    all_cars[0].version, all_cars[1].version = "Exclusive FWD", "Exclusive AWD"; vehicle_db.flush()
+    assert vehicle_service.search_vehicle_allocation(vehicle_db, "CH Exclusive FWD")["matched"] == 1
 
 
 def test_vin_fill_cannot_use_a_vin_from_another_pi(vehicle_db):

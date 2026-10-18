@@ -653,7 +653,7 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
     vin_list = _bulk_vin_list(payload.get("vinList") or payload.get("vins"))
     if not pi_code and (vin_list or not isinstance(payload.get("fields"), dict)
             or set(payload["fields"]) - {"shipName", "logisticsStatus", "etd", "eta", "actualDepartureDate",
-                                        "actualArrivalDate", "readyForPickupDate", "remark", "freightEur", "insuranceEur"}):
+                                        "actualArrivalDate", "readyForPickupDate", "remark", "freightEur", "insuranceEur", "customValues"}):
         raise HTTPException(400, "Cross-PI edits support logistics and freight/insurance; use file preview for VIN/Engine ID / 跨PI仅物流及运保费；VIN和发动机序号请逐行预览")
     if not field_payload and not vin_list:
         raise HTTPException(status_code=400, detail="No VINs or bulk fields provided")
@@ -705,8 +705,10 @@ def search_vehicle_allocation(session: Session, keyword: str, *, vins: list[str]
     flow = get_vehicle_status_flow_config(None, None)
     labels = {step["key"]: f'{step["key"]} {step["labelEn"]} {step.get("labelZh", "")}'
               for step in [*flow["allocation"], *flow["logistics"]]}
-    return repo.search_allocation_preview(session, keyword.strip(), vins=list(dict.fromkeys(vins)) if vins is not None else None,
+    result = repo.search_allocation_preview(session, keyword.strip(), vins=list(dict.fromkeys(vins)) if vins is not None else None,
         allowed_countries=allowed_countries, allowed_brands=allowed_brands, page=page, page_size=page_size, status_labels=labels)
+    result["vehicles"] = vehicles_to_dict(session, result["vehicles"])
+    return result
 
 
 def preview_vehicle_import(
@@ -975,7 +977,13 @@ def export_vehicle_units(session: Session, *, columns: list[str] | None = None, 
             if not isinstance(pivot, dict):
                 raise ValueError("Invalid pivot / 透视配置无效")
             return generate_vehicle_pivot_excel(vehicles, pivot)
-        return generate_vehicle_allocation_excel(vehicles, columns)
+        from sqlalchemy import select
+        from app.db.models import VehicleCustomColumn
+        custom = {f"custom:{c.column_id}": c.label for c in session.scalars(
+            select(VehicleCustomColumn).where(VehicleCustomColumn.is_active.is_(True))).all()} if columns and any(key.startswith("custom:") for key in columns) else {}
+        for vehicle in vehicles:
+            vehicle.update({key: vehicle.get("customValues", {}).get(key[7:]) for key in custom})
+        return generate_vehicle_allocation_excel(vehicles, columns, custom_labels=custom)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1101,6 +1109,7 @@ def vehicle_to_dict(
         "carCode": vehicle.car_code,
         "vin": vehicle.vin,
         "engineId": vehicle.engine_id,
+        "customValues": dict(vehicle.custom_values or {}),
         "fobEur": prices[key],
         "freightEur": _float(vehicle.freight_eur),
         "insuranceEur": _float(vehicle.insurance_eur),
@@ -1636,6 +1645,19 @@ def _sync_default_line_allocation(session: Session, header: PiOrderHeader, line:
 
 
 def _apply_vehicle_updates(session: Session, vehicle: PiVehicleUnit, payload: dict[str, Any], username: str) -> None:
+    if "customValues" in payload:
+        from app.db.models import VehicleCustomColumn
+        from sqlalchemy import select
+        values = payload["customValues"]
+        if (not isinstance(values, dict) or not values or len(values) > 100
+                or any(not isinstance(key, str) or (value is not None and
+                       (not isinstance(value, str) or len(value) > 2000)) for key, value in values.items())):
+            raise HTTPException(400, "Custom values must be text up to 2000 characters / 自定义内容限2000字文本")
+        active = set(session.scalars(select(VehicleCustomColumn.column_id).where(
+            VehicleCustomColumn.column_id.in_(values), VehicleCustomColumn.is_active.is_(True)).with_for_update()).all())
+        if active != set(values):
+            raise HTTPException(409, "Column changed or removed; reload columns / 列已变化或删除，请刷新列设置")
+        vehicle.custom_values = {**(vehicle.custom_values or {}), **values}
     costs = {}
     for attr, key in (("freight_eur", "freightEur"), ("insurance_eur", "insuranceEur")):
         if key in payload:
@@ -1692,6 +1714,7 @@ def _bulk_field_payload(raw_fields: Any) -> dict[str, Any]:
     if not isinstance(raw_fields, dict):
         return {}
     allowed_fields = {
+        "customValues",
         "productionDate",
         "etd",
         "eta",

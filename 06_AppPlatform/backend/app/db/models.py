@@ -2376,6 +2376,16 @@ class PiOrderLineAllocation(TimestampMixin, Base):
     updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class VehicleCustomColumn(TimestampMixin, Base):
+    __tablename__ = "vehicle_custom_column"
+    __table_args__ = (Index("uq_vehicle_custom_column_active_label", func.lower(text("label")), unique=True,
+                           postgresql_where=text("is_active = true"), sqlite_where=text("is_active = 1")), {"schema": "ordering"})
+    column_id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid4()))
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class PiVehicleUnit(TimestampMixin, Base):
     __tablename__ = "pi_vehicle_unit"
     __table_args__ = (
@@ -2415,6 +2425,7 @@ class PiVehicleUnit(TimestampMixin, Base):
     car_code: Mapped[str] = mapped_column(Text, nullable=False)
     vin: Mapped[str | None] = mapped_column(Text, nullable=True)
     engine_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    custom_values: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     freight_eur: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     insurance_eur: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     material_code: Mapped[str | None] = mapped_column(Text, nullable=True)

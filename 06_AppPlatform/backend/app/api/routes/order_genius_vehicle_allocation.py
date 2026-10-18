@@ -51,7 +51,8 @@ from app.services.order_genius_vehicle_service import (
 from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
 from app.services.order_genius_vehicle_exporter import generate_pi_invoice_excel, pi_invoice_context
 from app.services import pi_invoice_templates as invoice_templates
-from app.db.models import User
+from app.db.models import User, VehicleCustomColumn
+from sqlalchemy import select, func
 from app.core.security import ORDERING_BRANDS
 
 router = APIRouter(
@@ -872,6 +873,62 @@ def get_status_flow_config(
     selected_country = _country(country)
     _validate_optional_country(session, user, selected_country)
     return get_vehicle_status_flow_config(selected_country, _clean(ordering_account))
+
+
+@router.get("/custom-columns")
+def list_custom_columns(session: Session = Depends(get_db_session),
+                        user: UserContext = Depends(require_min_role("viewer"))) -> dict:
+    columns = session.scalars(select(VehicleCustomColumn).where(VehicleCustomColumn.is_active.is_(True))
+                              .order_by(VehicleCustomColumn.created_at_utc, VehicleCustomColumn.column_id)).all()
+    return {"items": [{"id": c.column_id, "label": c.label, "createdBy": c.created_by,
+                       "canDelete": is_admin(user.role) or c.created_by == user.name} for c in columns]}
+
+
+@router.post("/custom-columns")
+def create_custom_column(body: dict, session: Session = Depends(get_db_session),
+                         user: UserContext = Depends(require_min_role("viewer"))) -> dict:
+    from app.services.order_genius_vehicle_exporter import COLUMN_LABELS
+    label = body.get("label")
+    reserved = {text.casefold() for text in [*COLUMN_LABELS, *COLUMN_LABELS.values()]}
+    if not isinstance(label, str) or not label.strip() or len(label.strip()) > 60 or label.strip().casefold() in reserved:
+        raise HTTPException(400, "Use 1–60 characters, not a system column / 请填1–60字且非系统列的名称")
+    if session.scalar(select(VehicleCustomColumn.column_id).where(VehicleCustomColumn.is_active.is_(True),
+            func.lower(VehicleCustomColumn.label) == label.strip().lower())):
+        raise HTTPException(409, "Column name already exists / 列名已存在")
+    column = VehicleCustomColumn(label=label.strip(), created_by=user.name)
+    session.add(column)
+    from sqlalchemy.exc import IntegrityError
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, "Column name already exists / 列名已存在") from None
+    return {"id": column.column_id, "label": column.label, "createdBy": column.created_by, "canDelete": True}
+
+
+@router.delete("/custom-columns/{column_id}")
+def delete_custom_column(column_id: str, session: Session = Depends(get_db_session),
+                         user: UserContext = Depends(require_min_role("viewer"))) -> dict:
+    column = session.scalar(select(VehicleCustomColumn).where(VehicleCustomColumn.column_id == column_id).with_for_update())
+    if column is None:
+        raise HTTPException(404, "Custom column not found; system columns cannot be deleted / 自定义列不存在，系统列不可删除")
+    if not is_admin(user.role) and column.created_by != user.name:
+        raise HTTPException(403, "Only the creator or Admin can delete / 仅创建者或Admin可删除")
+    column.is_active = False
+    session.commit()
+    return {"deleted": True}
+
+
+@router.post("/custom-values")
+def update_custom_values(body: dict, session: Session = Depends(get_db_session),
+                         user: UserContext = Depends(require_min_role("viewer"))) -> dict:
+    # Viewing access grants only shared-text editing, never logistics, VIN or prices.
+    if set(body) - {"carCodes", "rowVersions", "fields"} or not isinstance(body.get("fields"), dict) or set(body["fields"]) != {"customValues"}:
+        raise HTTPException(400, "Only shared custom values / 此入口仅可填写自定义列")
+    result = bulk_update_vehicle_units(session, body, user.name, allowed_countries=ordering_countries(session, user),
+                                      allowed_brands=ordering_brands(session, user))
+    session.commit()
+    return result
 
 
 @router.post("/search")
