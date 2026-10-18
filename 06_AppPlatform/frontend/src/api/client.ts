@@ -5500,11 +5500,19 @@ export const api = {
     );
   },
 
-  previewVehicleAllocationImport: (file: File, scope?: { piCode: string; allowReplacing: boolean; removeVins?: boolean }) => {
+  previewVehicleAllocationImport: (file: File, scope?: { piCode?: string; piCodes?: string[]; allowReplacing: boolean; removeVins?: boolean; includeHidden?: boolean }) => {
     const form = new FormData();
     form.append("file", file);
+    const params = new URLSearchParams();
+    if (scope?.piCode) params.set("pi_code", scope.piCode);
+    if (scope?.piCodes) params.set("pi_codes", scope.piCodes.join(","));
+    if (scope) {
+      params.set("allow_replacing", String(scope.allowReplacing));
+      params.set("remove_vins", String(scope.removeVins ?? false));
+      params.set("include_hidden", String(scope.includeHidden ?? false));
+    }
     return request<VehicleImportPreview>(
-      `/order-genius/vehicle-allocation/import/preview${scope ? `?${new URLSearchParams({ pi_code: scope.piCode, allow_replacing: String(scope.allowReplacing), remove_vins: String(scope.removeVins ?? false) })}` : ""}`,
+      `/order-genius/vehicle-allocation/import/preview?${params}`,
       { method: "POST", body: form },
     );
   },
@@ -5530,7 +5538,7 @@ export const api = {
       { method: "POST" },
     ),
 
-  exportVehicleAllocation: (params: VehicleAllocationFilters & { columns?: string[]; carCodes?: string[]; pivot?: { rows: string[]; column: string; measure: string } } = {}) =>
+  exportVehicleAllocation: (params: VehicleAllocationFilters & { columns?: string[]; carCodes?: string[]; pivot?: { rows: string[]; columns: string[]; measures: string[]; filters: Partial<Record<string, string[]>> } } = {}) =>
     requestBlob("/order-genius/vehicle-allocation/export", {
       method: "POST",
       body: JSON.stringify(params),

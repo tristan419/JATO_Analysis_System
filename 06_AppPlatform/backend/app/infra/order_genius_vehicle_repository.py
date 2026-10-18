@@ -212,7 +212,7 @@ def search_allocation_preview(session: Session, keyword: str, *, vins: list[str]
         permitted.append(vehicle.country_code.in_(allowed_countries))
     if allowed_brands is not None:
         permitted.append(func.upper(vehicle.brand).in_(allowed_brands))
-    fields = [vehicle.pi_code, vehicle.pi_line_code, vehicle.car_code, vehicle.vin, vehicle.material_code, vehicle.bom,
+    fields = [vehicle.pi_code, vehicle.pi_line_code, vehicle.car_code, vehicle.vin, vehicle.engine_id, vehicle.material_code, vehicle.bom,
               vehicle.brand, vehicle.model_name, vehicle.version, vehicle.powertrain, vehicle.exterior_color_name,
               vehicle.exterior_color_code, vehicle.interior_color_name, vehicle.country_code, vehicle.ship_name,
               vehicle.dealer_code, vehicle.dealer_name, vehicle.customer_ref, vehicle.remark,
@@ -239,6 +239,9 @@ def search_allocation_preview(session: Session, keyword: str, *, vins: list[str]
     grouped = matched.with_only_columns(vehicle.pi_code, func.count().label("matched")).group_by(vehicle.pi_code).subquery()
     total = session.scalar(select(func.count()).select_from(grouped)) or 0
     matched_total = session.scalar(select(func.count()).select_from(matched.subquery())) or 0
+    # A VIN batch selects vehicles, not a page of PI candidates.
+    if vins is not None:
+        page, page_size = 1, max(1, total)
     headers = session.execute(select(PiOrderHeader, grouped.c.matched).join(
         grouped, PiOrderHeader.pi_code == grouped.c.pi_code).order_by(PiOrderHeader.order_month.desc(), PiOrderHeader.pi_code)
         .offset((page - 1) * page_size).limit(page_size)).all()
@@ -369,11 +372,18 @@ def list_vehicles_by_line(session: Session, pi_line_code: str) -> list[PiVehicle
 def list_vehicles_for_bulk_update(
     session: Session,
     *,
-    pi_code: str,
+    pi_code: str | None = None,
     pi_line_code: str | None = None,
     lock: bool = False,
+    car_codes: list[str] | None = None,
 ) -> list[PiVehicleUnit]:
-    stmt = select(PiVehicleUnit).where(PiVehicleUnit.pi_code == pi_code)
+    if not pi_code and not car_codes:
+        raise ValueError("Explicit PI or vehicle targets required")
+    stmt = select(PiVehicleUnit)
+    if pi_code:
+        stmt = stmt.where(PiVehicleUnit.pi_code == pi_code)
+    if car_codes is not None:
+        stmt = stmt.where(PiVehicleUnit.car_code.in_(car_codes))
     if pi_line_code:
         stmt = stmt.where(PiVehicleUnit.pi_line_code == pi_line_code)
     if lock:
@@ -432,6 +442,7 @@ def list_vehicles(
             PiVehicleUnit.pi_line_code.ilike(pattern),
             PiVehicleUnit.car_code.ilike(pattern),
             PiVehicleUnit.vin.ilike(pattern),
+            PiVehicleUnit.engine_id.ilike(pattern),
             PiVehicleUnit.material_code.ilike(pattern),
             PiVehicleUnit.bom.ilike(pattern),
             PiVehicleUnit.model_name.ilike(pattern),

@@ -314,13 +314,21 @@ def _vin_import_countries(session: Session, user: UserContext, pi_code: str) -> 
 
 
 def _store_import_preview(session: Session, user: UserContext, rows: list[dict], import_id: str,
-                          pi_code: str | None, allow_replacing: bool, source: str | None = None, remove_vins: bool = False) -> dict:
+                          pi_code: str | None, allow_replacing: bool, source: str | None = None, remove_vins: bool = False,
+                          pi_codes: list[str] | None = None) -> dict:
     payload: dict = {"rows": rows}
     if source:
         payload["source"] = source
-    if pi_code:
-        countries = _vin_import_countries(session, user, pi_code)
-        preview = preview_vehicle_import(session, rows, pi_code=pi_code,
+    if pi_code or pi_codes is not None:
+        codes = [pi_code] if pi_code else pi_codes
+        if (not isinstance(codes, list) or not codes or len(codes) > 100
+                or any(not isinstance(code, str) or not code.strip() for code in codes)):
+            raise HTTPException(400, "Select valid PIs / 请选择有效PI")
+        codes = list(dict.fromkeys(code.strip().upper() for code in codes))
+        if remove_vins and len(codes) > 1:
+            raise HTTPException(400, "Select one PI to clear VINs / 清VIN请明确选择单张PI")
+        countries = set().union(*(_vin_import_countries(session, user, code) for code in codes))
+        preview = preview_vehicle_import(session, rows, pi_codes=codes,
                                          allow_replacing=allow_replacing, allowed_countries=countries,
                                          allowed_brands=ordering_brands(session, user), remove_vins=remove_vins)
         payload.update({"owner": user.name, "vinPreview": preview})
@@ -847,27 +855,9 @@ def bulk_update_vehicles(
     session: Session = Depends(get_db_session),
     user: UserContext = Depends(require_roles("order_filler", "editor", "admin")),
 ) -> dict:
-    pi_code = _clean(body.get("piCode") or body.get("pi_code"))
-    pi_line_code = _clean(body.get("piLineCode") or body.get("pi_line_code"))
-    if pi_line_code:
-        line = vehicle_repo.get_line_by_code(session, pi_line_code.upper())
-        if not line:
-            raise HTTPException(status_code=404, detail="PI line not found")
-        detail = get_pi_detail(session, line.pi_code)
-    elif pi_code:
-        detail = get_pi_detail(session, pi_code.upper())
-    else:
-        raise HTTPException(status_code=400, detail="piCode or piLineCode is required")
-    _validate_pi_detail_access(session, user, detail)
-    raw_codes = body.get("carCodes", body.get("car_codes"))
-    if not isinstance(raw_codes, list) or not raw_codes or any(not isinstance(code, str) or not code.strip() for code in raw_codes):
-        raise HTTPException(400, "Select vehicle rows / 请明确勾选车辆")
-    codes = {code.strip().upper() for code in raw_codes}
-    targets = [vehicle for vehicle in detail["vehicles"]
-               if (not pi_line_code or vehicle["piLineCode"] == pi_line_code.upper())
-               and vehicle["carCode"] in codes]
-    _validate_target_countries(session, user, targets)
-    result = bulk_update_vehicle_units(session, body, user.name)
+    result = bulk_update_vehicle_units(session, body, user.name,
+                                      allowed_countries=ordering_countries(session, user),
+                                      allowed_brands=ordering_brands(session, user))
     session.commit()
     return result
 
@@ -949,6 +939,8 @@ def generate_pi_from_order_matrix(
 def preview_import(
     file: UploadFile = File(...),
     pi_code: str | None = Query(default=None),
+    pi_codes: str | None = Query(default=None),
+    include_hidden: bool = Query(default=False),
     allow_replacing: bool = Query(default=False),
     remove_vins: bool = Query(default=False),
     session: Session = Depends(get_db_session),
@@ -964,12 +956,18 @@ def preview_import(
         file.file.close()
 
     try:
-        rows = parse_vehicle_allocation_xlsx(tmp_path, vin_fill=bool(pi_code))
+        rows = parse_vehicle_allocation_xlsx(tmp_path, vin_fill=bool(pi_code or pi_codes))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to parse file: {exc}") from exc
     finally:
         tmp_path.unlink(missing_ok=True)
-    return _store_import_preview(session, user, rows, import_id, _clean(pi_code.upper()) if pi_code else None, allow_replacing, remove_vins=remove_vins is True)
+    file_rows = len(rows)
+    visible_rows = sum(not row.get("sourceHidden") for row in rows)
+    if not include_hidden:
+        rows = [row for row in rows if not row.get("sourceHidden")]
+    preview = _store_import_preview(session, user, rows, import_id, _clean(pi_code.upper()) if pi_code else None,
+        allow_replacing, remove_vins=remove_vins is True, pi_codes=pi_codes.split(",") if pi_codes is not None else None)
+    return {**preview, "fileRows": file_rows, "visibleRows": visible_rows, "includeHidden": include_hidden}
 
 
 @router.post("/import/vin-list")
@@ -1012,7 +1010,8 @@ def preview_import_rows(
     allow_replacing = body.get("allowReplacing") is True if isinstance(body, dict) else False
     remove_vins = body.get("removeVins") is True if isinstance(body, dict) else False
     return _store_import_preview(session, user, rows, import_id, pi_code.upper() if pi_code else None,
-                                 allow_replacing, source="parsed_rows", remove_vins=remove_vins)
+                                 allow_replacing, source="parsed_rows", remove_vins=remove_vins,
+                                 pi_codes=body.get("piCodes") if isinstance(body, dict) else None)
 
 
 @router.post("/import/{import_id}/apply")
@@ -1038,7 +1037,9 @@ def apply_import(
     if vin_preview:
         if payload.get("owner") != user.name:
             raise HTTPException(403, "Preview belongs to another user. Upload again / 此预览属于其他账号，请重新上传")
-        countries = _vin_import_countries(session, user, vin_preview["piCode"])
+        if not vin_preview.get("piCodes"):
+            raise HTTPException(409, "Preview expired; upload again / 预览已过期，请重新上传")
+        countries = set().union(*(_vin_import_countries(session, user, code) for code in vin_preview["piCodes"]))
         result = apply_vehicle_import(session, rows, user.name, vin_preview=vin_preview,
                                       allowed_countries=countries, allowed_brands=ordering_brands(session, user))
     else:

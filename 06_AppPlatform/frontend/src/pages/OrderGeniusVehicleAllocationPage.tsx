@@ -261,6 +261,7 @@ export function OrderGeniusVehicleAllocationPage() {
   const [importBusy, setImportBusy] = useState(false);
   const [allowReplacing, setAllowReplacing] = useState(false);
   const [removeVins, setRemoveVins] = useState(false);
+  const [includeHidden, setIncludeHidden] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const [statusFlow, setStatusFlow] = useState<VehicleStatusFlowConfig | null>(null);
@@ -321,11 +322,11 @@ export function OrderGeniusVehicleAllocationPage() {
       : selectedPi.vehicles;
   }, [selectedPi, selectedLineCode, workspacePis, joint]);
   const importedMatchCodes = new Set<string>();
-  if (importPreview?.mode === "pi_vin_fill" && !importPreview.removeVins && importPreview.piCode === selectedPi?.header.piCode) {
+  if (importPreview?.mode === "pi_vin_fill" && !importPreview.removeVins) {
     const vehiclesByCode = new Map(vinPasteScopeVehicles.map((vehicle) => [vehicle.carCode, vehicle]));
     for (const row of importPreview.previewRows) {
       const vehicle = row.carCode ? vehiclesByCode.get(row.carCode) : undefined;
-      if (row.action === "skip" && row.errors.length === 0 && vehicle?.vin && (!filters.country || vehicle.countryCode === filters.country) &&
+      if (["skip", "update"].includes(row.action) && row.errors.length === 0 && vehicle?.vin && (!filters.country || vehicle.countryCode === filters.country) &&
           vehicle.vin.toUpperCase() === row.vin?.toUpperCase() && vehicle.materialCode === row.materialCode) {
         importedMatchCodes.add(vehicle.carCode);
       }
@@ -489,10 +490,10 @@ export function OrderGeniusVehicleAllocationPage() {
   }
 
   async function previewVinFile(file: File): Promise<void> {
-    if (!selectedPi || scopeBusy) return;
+    if (!checkedPiCodes.length || scopeBusy) return;
     setImportBusy(true); setImportPreview(null); setImportError(null);
     try {
-      const preview = await api.previewVehicleAllocationImport(file, { piCode: selectedPi.header.piCode, allowReplacing, ...(removeVins ? { removeVins: true } : {}) });
+      const preview = await api.previewVehicleAllocationImport(file, { ...(joint ? { piCodes: checkedPiCodes } : { piCode: checkedPiCodes[0] }), allowReplacing, includeHidden, ...(removeVins ? { removeVins: true } : {}) });
       setImportPreview(preview);
     } catch (reason) { showImportError(reason); }
     finally { setImportBusy(false); }
@@ -500,20 +501,23 @@ export function OrderGeniusVehicleAllocationPage() {
 
   async function repreviewVinTargets(replacing: boolean, sourceRow?: number, carCode?: string): Promise<void> {
     setAllowReplacing(replacing);
-    if (!selectedPi || !importPreview || scopeBusy) return;
+    if (!checkedPiCodes.length || !importPreview || scopeBusy) return;
     const rows = importPreview.previewRows.map((row) => ({
       sourceRow: row.sourceRow, material_code: row.materialCode, vin: row.vin,
+      engine_id: row.engineId,
       old_vin: row.inputOldVin, car_code: row.sourceRow === sourceRow ? carCode : row.requestedCarCode,
     }));
     setImportBusy(true); setImportError(null); setImportPreview(null);
     try {
-      setImportPreview(await api.previewVehicleAllocationParsedRows({ piCode: selectedPi.header.piCode, allowReplacing: replacing, rows, removeVins: importPreview.removeVins }));
+      const preview = await api.previewVehicleAllocationParsedRows({ piCodes: checkedPiCodes, allowReplacing: replacing, rows, removeVins: importPreview.removeVins });
+      setImportPreview({ ...preview, fileRows: importPreview.fileRows, visibleRows: importPreview.visibleRows, includeHidden: importPreview.includeHidden });
     } catch (reason) { showImportError(reason); }
     finally { setImportBusy(false); }
   }
 
   async function applyVinFile(): Promise<void> {
-    if (!importPreview || importPreview.status !== "ok" || !importPreview.updatedUnits || scopeBusy || !selectedPi) return;
+    if (!importPreview || importPreview.status !== "ok" || !importPreview.updatedUnits || scopeBusy || !checkedPiCodes.length) return;
+    if ((importPreview.engineUpdatedUnits ?? 0) > 0 && !window.confirm(`Save ${importPreview.engineUpdatedUnits} Engine IDs as previewed? / 确认按旧→新预览保存发动机序号？不改FOB。`)) return;
     if ((importPreview.replacedUnits ?? 0) > 0 && !window.confirm(`Replace ${importPreview.replacedUnits} existing VINs as previewed? / 确认按预览替换 ${importPreview.replacedUnits} 个已录 VIN？`)) return;
     if (importPreview.removeVins && !window.confirm(`Clear ${importPreview.removedUnits} VINs only? Vehicles, quantities, prices and logistics remain. / 仅清除 ${importPreview.removedUnits} 个 VIN？车辆位、数量、价格及物流保持不变。`)) return;
     setImportBusy(true); setImportError(null);
@@ -523,7 +527,8 @@ export function OrderGeniusVehicleAllocationPage() {
       setNotice(importPreview.removeVins ? `VIN cleared: ${result.removedUnits} / 已清 VIN ${result.removedUnits}，车辆位保留` : `VIN saved: ${result.updatedUnits}; already imported: ${result.skippedUnits ?? 0} / VIN 已保存 ${result.updatedUnits}，已录跳过 ${result.skippedUnits ?? 0}`);
       setRefreshKey((value) => value + 1);
       try {
-        setSelectedPi(await api.getVehicleAllocationPi(selectedPi.header.piCode));
+        if (joint) await readWorkspace(checkedPiCodes);
+        else setSelectedPi(await api.getVehicleAllocationPi(checkedPiCodes[0]));
       } catch {
         setError("VINs were saved, but the PI view could not refresh. Select this PI again; do not re-apply. / VIN 已保存，但 PI 页面刷新失败。请重新选择此 PI，无须重复应用。");
       }
@@ -634,7 +639,7 @@ export function OrderGeniusVehicleAllocationPage() {
     } finally { if (request === piRequest.current) setPiLoading(false); }
   }
 
-  async function readWorkspace(codes: string[], addCars?: string[], matches?: (vehicle: PiVehicleUnit) => boolean): Promise<void> {
+  async function readWorkspace(codes: string[], addCars?: string[], matches?: (vehicle: PiVehicleUnit) => boolean, replace = false): Promise<void> {
     if (mutationBusy) return;
     const request = ++piRequest.current;
     if (addCars === undefined) {
@@ -654,7 +659,7 @@ export function OrderGeniusVehicleAllocationPage() {
       setFilters((current) => ({ ...current, piCode: undefined, piLineCode: undefined }));
       setWorkspacePis(details);
       const authorized = new Set(details.flatMap((pi) => pi.vehicles.map((v) => v.carCode)));
-      setSelectedCarCodes((previous) => new Set([...previous, ...(addCars ?? [])].filter((code) => authorized.has(code))));
+      setSelectedCarCodes((previous) => new Set([...(replace ? [] : previous), ...(addCars ?? [])].filter((code) => authorized.has(code))));
     } catch (reason: unknown) {
       if (request === piRequest.current) {
         if (addCars !== undefined) throw reason;
@@ -738,22 +743,21 @@ export function OrderGeniusVehicleAllocationPage() {
 
   function selectVehicle(vehicle: PiVehicleUnit): void {
     if (scopeBusy) return;
-    if (joint) { setNotice("Choose a single PI before editing / 联合查看只读，请点击具体PI进入修改。"); return; }
     setEditorTargets([vehicle]);
     setActiveToolTab("status");
     setToolDrawerOpen(true);
   }
 
   async function saveEditor(fields: UpdateVehiclePayload): Promise<void> {
-    if (!canEdit || !selectedPi || !editorTargets.length || scopeBusy) return;
+    if (!canEdit || (!selectedPi && !joint) || !editorTargets.length || scopeBusy) return;
     setBulkSaving(true); setError(null);
     try {
-      if (editorTargets.length === 1) {
+      if (editorTargets.length === 1 && !joint) {
         const vehicle = editorTargets[0];
         await api.updateVehicleAllocationVehicle(vehicle.carCode, { ...fields, rowVersion: vehicle.rowVersion });
       } else {
         await api.bulkUpdateVehicleAllocationVehicles({
-          piCode: selectedPi.header.piCode,
+          piCode: selectedPi?.header.piCode,
           carCodes: editorTargets.map((vehicle) => vehicle.carCode),
           rowVersions: Object.fromEntries(editorTargets.map((vehicle) => [vehicle.carCode, vehicle.rowVersion])),
           fields,
@@ -761,10 +765,11 @@ export function OrderGeniusVehicleAllocationPage() {
       }
       setNotice(`Updated ${editorTargets.length} vehicles / 车辆已更新`);
       setEditorTargets([]); clearSelection();
-      try { setSelectedPi(await api.getVehicleAllocationPi(selectedPi.header.piCode)); }
+      try { if (joint) await readWorkspace(workspaceCodes); else if (selectedPi) setSelectedPi(await api.getVehicleAllocationPi(selectedPi.header.piCode)); }
       catch { setError("Saved, but refresh failed. Re-read this PI; do not save again / 已保存，但刷新失败，请重新读取 PI，无须重复保存。"); }
     } catch (reason) {
       setError(actionableError(reason, "Not saved. Re-read the PI before retrying / 未保存，请重新读取 PI 后再试。"));
+      throw reason;
     } finally { setBulkSaving(false); }
   }
 
@@ -825,10 +830,10 @@ export function OrderGeniusVehicleAllocationPage() {
         </div>
         <VehicleAllocationSearch vehicles={vinPasteScopeVehicles} piCodes={checkedPiCodes} busy={scopeBusy}
           statusLabels={statusLabels}
-          onSelect={(codes) => changeSelection(new Set([...selectedCarCodes, ...codes]))}
+          onSelect={(codes, replace) => changeSelection(new Set([...(replace ? [] : selectedCarCodes), ...codes]))}
           applied={filters.keyword || (batchVins.length ? vinBatchText : "")} onApply={runSearch}
-          onAdd={(pis, cars, query, vins) => readWorkspace([...new Set([...checkedPiCodes, ...pis])], cars,
-            (v) => vins !== null ? Boolean(v.vin && vins.includes(v.vin.toUpperCase())) : matchesVehicleText(v, query, statusLabels))} />
+          onAdd={(pis, cars, query, vins, replace) => readWorkspace([...new Set([...checkedPiCodes, ...pis])], cars,
+            (v) => vins !== null ? Boolean(v.vin && vins.includes(v.vin.toUpperCase())) : matchesVehicleText(v, query, statusLabels), replace)} />
       </div>
 
       {(error || notice) && (
@@ -896,11 +901,14 @@ export function OrderGeniusVehicleAllocationPage() {
               </section>
               <section className="va-tool-card">
                 <strong>BOM + VIN file import / 物料号与 VIN 文件导入</strong>
-                <p>{selectedPi ? `Whole PI: ${selectedPi.header.piCode} / 匹配整批 PI，不受所选明细或车辆页码限制。` : "Select a PI first / 请先选择 PI"}</p>
+                <p>{checkedPiCodes.length ? `${checkedPiCodes.length} PIs / 匹配所选授权PI，不受明细或页码限制；跨PI有歧义须指定CarCode。` : "Select PIs first / 请先选择目标PI范围"}</p>
                 <p>BOM / Material Code / 物料号 + VIN; use complete material codes, not groups. / 物料号列填完整颜色物料号，不用“物料号组”；纠错可加 Car Code 或 Old VIN。</p>
-                <label className="va-check"><input type="checkbox" checked={removeVins} disabled={scopeBusy}
+                <p>Optional: Engine ID / 发动机序号／发动机序列号。空值保留，非空按预览保存，不覆盖国家或FOB。</p>
+                <label className="va-check"><input type="checkbox" checked={includeHidden} disabled={scopeBusy}
+                  onChange={(event) => { setIncludeHidden(event.target.checked); setImportPreview(null); }} />Include hidden rows / 包含隐藏行（默认仅可见行；切换后重传）</label>
+                <label className="va-check"><input type="checkbox" checked={removeVins} disabled={scopeBusy || joint}
                   onChange={(event) => { setRemoveVins(event.target.checked); setImportPreview(null); }} />Remove these VINs from file / 按原文件清 VIN（先预览）</label>
-                <button type="button" disabled={scopeBusy || !selectedCarCodes.size} onClick={() => void previewSelectedVinRemoval()}>Clear selected VINs / 清勾选 VIN（先预览）</button>
+                <button type="button" disabled={scopeBusy || !selectedCarCodes.size || joint} onClick={() => void previewSelectedVinRemoval()}>Clear selected VINs / 清勾选 VIN（先预览，单PI）</button>
                 {!removeVins ? <label className="va-check"><input type="checkbox" checked={allowReplacing} disabled={scopeBusy}
                   onChange={(event) => void repreviewVinTargets(event.target.checked)} />Allow replacing existing VINs / 允许替换已录 VIN</label> : null}
                 <input ref={importInputRef} type="file" accept=".xlsx" hidden aria-label="BOM and VIN XLSX"
@@ -914,7 +922,7 @@ export function OrderGeniusVehicleAllocationPage() {
                     changeSelection(importedMatchCodes);
                     setNotice(`${importedMatchCodes.size} imported vehicles selected; VINs and filters unchanged / 已勾选已录车辆，不修改 VIN 或筛选；可用“只看勾选”查看。`);
                   }}
-                  onPickFile={() => { if (selectedPi) importInputRef.current?.click(); else setImportError("Select a PI before uploading / 请先选择目标 PI 再上传"); }}
+                  onPickFile={() => { if (checkedPiCodes.length) importInputRef.current?.click(); else setImportError("Select PIs before uploading / 请先选择目标PI范围再上传"); }}
                   onApply={applyVinFile} onClear={() => { setImportPreview(null); setImportError(null); }}
                   onTargetChange={(row, car) => void repreviewVinTargets(allowReplacing, row, car)} />
               </section>
@@ -937,7 +945,7 @@ export function OrderGeniusVehicleAllocationPage() {
               <VehicleStatusBoard scopeLabel={activeScopeLabel} vehicles={vinPasteScopeVehicles} statusFlow={statusFlow} />
             </details>
             {error ? <p role="alert">{error}<button type="button" disabled={scopeBusy} onClick={() => selectedPi && void selectPi(selectedPi.header.piCode)}>Re-read PI</button></p> : null}
-            {editorTargets.length ? <VehicleAllocationEditor key={editorTargets.map((vehicle) => vehicle.carCode).join("|")} vehicles={editorTargets} readOnly={!canEdit || joint} busy={scopeBusy} allocationOptions={allocationStatusOptions} logisticsOptions={logisticsStatusOptions} onSave={saveEditor} /> : <p>Select vehicle rows, then choose Update selected status. / 请明确勾选车辆后更新；不会自动修改整批 PI。</p>}
+            {editorTargets.length ? <VehicleAllocationEditor key={editorTargets.map((vehicle) => vehicle.carCode).join("|")} vehicles={editorTargets} crossPi={joint} readOnly={!canEdit} busy={scopeBusy} allocationOptions={allocationStatusOptions} logisticsOptions={logisticsStatusOptions} onSave={saveEditor} /> : <p>Select vehicle rows, then choose Update selected status. / 请明确勾选车辆后更新；不会自动修改整批 PI。</p>}
           </> : null}
           {activeToolTab === "view" ? (
             <>
@@ -1146,7 +1154,7 @@ export function OrderGeniusVehicleAllocationPage() {
               <button type="button" className="btn-secondary" aria-pressed={analysisView === "details"} onClick={() => setAnalysisView("details")}>Details / 明细</button>
               <button type="button" className="btn-secondary" aria-pressed={analysisView === "pivot"} onClick={() => setAnalysisView("pivot")}>Pivot / 透视</button>
             </div>
-            {joint ? <small>Joint view is read-only. Click a PI to edit/import/export its invoice / 联合查看不合并订单；修改、补录或发票请点击具体PI。</small> : null}
+            {joint ? <small>Orders remain separate; selected vehicles support logistics/cost updates and row-mapped VIN/Engine import. / 可跨PI维护勾选车辆物流及运保费，VIN/发动机序号须逐行预览；表头、删除及发票仍须单PI。</small> : null}
           </section>
           {selectedPi && (
             <section className="va-pi-detail">
@@ -1194,7 +1202,7 @@ export function OrderGeniusVehicleAllocationPage() {
           {selectedCarCodes.size > 0 ? (
             <div className="va-selected-actions">
               <span>{selectedCarCodes.size} selected / 已勾选 · {selectedCarCodes.size - currentSelectedCount} outside current filters / 筛选外已选</span>
-              <button type="button" disabled={joint} onClick={() => openPiTool("status")}>Update selected status / 更新勾选状态</button>
+              <button type="button" disabled={!canEdit || scopeBusy} onClick={() => openPiTool("status")}>Update selected status / 更新勾选状态</button>
               <button type="button" disabled={scopeBusy || exporting} onClick={() => void exportCurrentView(true)}>Export selected {selectedCarCodes.size} / 导出勾选（含筛选外）</button>
               <button type="button" className="btn-secondary" onClick={clearSelection}>Clear selection / 清除勾选</button>
             </div>
@@ -1208,6 +1216,8 @@ export function OrderGeniusVehicleAllocationPage() {
             onExport={(vehicles, pivot) => void exportCurrentView(false, pivot, vehicles)} /> : null}
           {inspection ? <section className="va-pivot-inspection" aria-label="Pivot source vehicles">
             <strong>{inspection.length} source vehicles / 透视来源明细</strong><button type="button" onClick={() => setInspection(null)}>Close source / 关闭来源</button>
+            <button type="button" disabled={scopeBusy} onClick={() => changeSelection(new Set(inspection.map((v) => v.carCode)))}>Select only this group / 仅勾选此组</button>
+            <button type="button" disabled={scopeBusy} onClick={() => changeSelection(new Set([...selectedCarCodes, ...inspection.map((v) => v.carCode)]))}>Append this group / 追加此组</button>
             <table className="data-table"><thead><tr><th>PI</th><th>Country</th><th>Car Code</th><th>VIN</th><th>Material</th><th>FOB EUR</th></tr></thead><tbody>{inspection.map((v) => <tr key={v.carCode}><td>{v.piCode}</td><td>{v.countryCode}</td><td>{v.carCode}</td><td>{v.vin || "—"}</td><td>{v.materialCode}</td><td>{v.fobEur ?? "Missing / 缺失"}</td></tr>)}</tbody></table>
           </section> : null}
           <div style={{ display: analysisView === "details" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>

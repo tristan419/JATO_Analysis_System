@@ -2414,6 +2414,7 @@ class PiVehicleUnit(TimestampMixin, Base):
     pi_line_code: Mapped[str] = mapped_column(Text, nullable=False)
     car_code: Mapped[str] = mapped_column(Text, nullable=False)
     vin: Mapped[str | None] = mapped_column(Text, nullable=True)
+    engine_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     freight_eur: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     insurance_eur: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     material_code: Mapped[str | None] = mapped_column(Text, nullable=True)

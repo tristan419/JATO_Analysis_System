@@ -1,0 +1,13 @@
+.va-pivot-fields{margin:12px 0;padding:12px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc}
+.va-pivot-field-pool{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.va-pivot-field-pool button,.va-pivot-field button{background:#fff;color:#334155;border:1px solid #cbd5e1;border-radius:5px;padding:4px 8px;font-size:12px;min-height:28px;letter-spacing:normal;text-transform:none}
+.va-pivot-zones{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.va-pivot-zones fieldset{min-width:0;min-height:100px;border:1px dashed #94a3b8;border-radius:6px;padding:8px;background:#fff}
+.va-pivot-zones legend{font-weight:600;color:#334155}
+.va-pivot-zones select{max-width:100%;width:100%;margin-top:6px}
+.va-pivot-field{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:6px;margin:4px 0;background:#eef3fa;border-radius:5px;cursor:grab}
+.va-pivot-field>span{flex:1;min-width:70px}
+.va-pivot-scroll{overflow:auto}
+.vehicle-allocation-page .va-pivot-inspection table th{background:#eef3fa;color:#334155;letter-spacing:normal;text-transform:none}
+@media(max-width:1100px){.va-pivot-zones{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.va-pivot-zones{grid-template-columns:1fr}}
