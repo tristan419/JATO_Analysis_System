@@ -288,6 +288,14 @@ it("updates only the page geometry variable on viewport resize", async () => {
   expect(api.bulkUpdateVehicleAllocationVehicles).not.toHaveBeenCalled();
 });
 
+it("stretches the details grid across its wrapper at narrow widths", async () => {
+  await selectPi();
+  const wrapper = screen.getByRole("table", { name: "Vehicle details" }).parentElement;
+  expect(wrapper?.style.display).toBe("flex");
+  expect(wrapper?.style.flexDirection).toBe("column");
+  expect(wrapper?.style.minWidth).toBe("0px");
+});
+
 async function chooseOctober() {
   fireEvent.change(screen.getByLabelText("Browse Year"), { target: { value: "2026" } });
   await screen.findByRole("button", { name: "Oct 2026" }, { timeout: 5000 });
