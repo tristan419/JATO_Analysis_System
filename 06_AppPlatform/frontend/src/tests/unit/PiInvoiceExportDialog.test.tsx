@@ -76,12 +76,41 @@ it("uses the account's top compatible template and offers upload when none exist
   expect(screen.getByLabelText("Upload PI template")).toBeTruthy();
 });
 
-it("explains the independent template entry when this country has no saved PI", async () => {
+it("separates an empty PI scope from missing templates and opens the existing creation workflow only on click", async () => {
   vi.mocked(api.getVehicleAllocationPis).mockResolvedValue({ items: [], total: 0 });
-  render(<PiInvoiceExportDialog countries={["BG"]} onClose={vi.fn()} />);
-  await screen.findByText(/Use Import \/ Export → PI Templates/);
+  const create = vi.fn();
+  render(<PiInvoiceExportDialog countries={["CH"]} month="2026-10" onCreatePi={create} onClose={vi.fn()} />);
+  await screen.findByText(/Monthly plan quantities are not yet a PI/);
+  expect(screen.getByText(/Scope.*CH.*2026-10/)).toBeTruthy();
+  expect(screen.getByText(/Existing templates can be reused across months/)).toBeTruthy();
+  expect(screen.queryByText(/upload a template first/)).toBeNull();
   expect(api.getPiInvoiceTemplates).not.toHaveBeenCalled();
   expect((screen.getByRole("button", { name: "Download XLSX" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(create).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Open PI Batch / 核对并创建PI" }));
+  expect(create).toHaveBeenCalledOnce();
+  expect(api.exportPiInvoice).not.toHaveBeenCalled();
+});
+
+it("does not show an empty PI result while querying or when the query fails", async () => {
+  let reject!: (reason: Error) => void;
+  vi.mocked(api.getVehicleAllocationPis).mockReturnValue(new Promise((_, no) => { reject = no; }));
+  render(<PiInvoiceExportDialog countries={["CH"]} month="2026-10" onCreatePi={vi.fn()} onClose={vi.fn()} />);
+  expect(screen.getByText("Loading saved PIs / 正在读取已保存PI")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Open PI Batch/ })).toBeNull();
+  expect(screen.queryByText(/Monthly plan quantities/)).toBeNull();
+  reject(new Error("PI list failed"));
+  await screen.findByText("PI list failed");
+  expect(screen.getByText("PI list unavailable / PI列表读取失败")).toBeTruthy();
+  expect(screen.queryByText(/Monthly plan quantities/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /Open PI Batch/ })).toBeNull();
+});
+
+it("does not offer a creation action when the caller has no creation permission", async () => {
+  vi.mocked(api.getVehicleAllocationPis).mockResolvedValue({ items: [], total: 0 });
+  render(<PiInvoiceExportDialog countries={["BG"]} onClose={vi.fn()} />);
+  await screen.findByText(/Monthly plan quantities are not yet a PI/);
+  expect(screen.queryByRole("button", { name: /Open PI Batch/ })).toBeNull();
 });
 
 it("a damaged top template stays selected and never silently falls back", async () => {
