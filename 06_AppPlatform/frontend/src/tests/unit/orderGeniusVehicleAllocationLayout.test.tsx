@@ -435,11 +435,14 @@ describe("PI month browsing", () => {
   it("shows retry instead of false zero counts when summary fails", async () => {
     vi.mocked(api.getVehicleAllocationPiMonths).mockRejectedValueOnce(new Error("Network unavailable"));
     render(<OrderGeniusVehicleAllocationPage />);
-    await screen.findByRole("button", { name: "Retry months" });
-    expect(screen.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).getAttribute("title")).toBe("Counts unavailable");
-    fireEvent.click(screen.getByRole("button", { name: "Retry months" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).hasAttribute("disabled")).toBe(false));
+    const monthPanel = screen.getByLabelText("Browse Year").closest("details");
+    if (!monthPanel) throw new Error("Missing month browser");
+    const months = within(monthPanel);
+    await months.findByRole("button", { name: "Retry months" });
+    expect(months.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).hasAttribute("disabled")).toBe(true);
+    expect(months.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).getAttribute("title")).toBe("Counts unavailable");
+    fireEvent.click(months.getByRole("button", { name: "Retry months" }));
+    await waitFor(() => expect(months.getByRole("button", { name: `Jan ${new Date().getFullYear()}` }).hasAttribute("disabled")).toBe(false));
   });
 
   it("ignores a stale annual response after changing the year", async () => {
