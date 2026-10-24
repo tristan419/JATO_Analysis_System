@@ -9,11 +9,13 @@ interface Props {
   piCode?: string;
   countries?: readonly string[];
   month?: string;
+  onCreatePi?: () => void;
   onClose: () => void;
 }
 
-export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, month, onClose }: Props) {
+export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, month, onCreatePi, onClose }: Props) {
   const [pis, setPis] = useState<PiOrderHeader[]>([]);
+  const [loadingPis, setLoadingPis] = useState(!piCode);
   const [selected, setSelected] = useState(piCode ?? "");
   const [context, setContext] = useState<PiInvoiceContext | null>(null);
   const [catalog, setCatalog] = useState<PiTemplateCatalog | null>(null);
@@ -32,6 +34,7 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
   useEffect(() => {
     if (piCode) return;
     let cancelled = false;
+    setLoadingPis(true); setPis([]); setSelected(""); setError(null);
     void Promise.all(countries.map((country) => api.getVehicleAllocationPis({ country, month, pageSize: 200 })))
       .then((responses) => {
         if (cancelled) return;
@@ -41,7 +44,8 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
         const rows = [...new Map(responses.flatMap((response) => response.items).map((header) => [header.piCode, header])).values()];
         setPis(rows);
         setSelected(rows[0]?.piCode ?? "");
-      }).catch((cause: unknown) => { if (!cancelled) fail(cause); });
+      }).catch((cause: unknown) => { if (!cancelled) fail(cause); })
+      .finally(() => { if (!cancelled) setLoadingPis(false); });
     return () => { cancelled = true; };
   }, [piCode, countries, month]);
 
@@ -106,11 +110,16 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
   return <ConfirmDialog title="Export PI" description="Complete saved PI · historical FOB unchanged / 导出完整已保存 PI，不更改成交价"
     cancelLabel="Close" confirmLabel="Download XLSX" loadingLabel="Exporting..." submitting={busy}
     confirmDisabled={!context || !options} error={error} onCancel={onClose} onConfirm={() => void download()}>
-    {!piCode ? <label>Saved PI / 已保存 PI<select aria-label="Saved PI" value={selected} onChange={(event) => setSelected(event.target.value)} disabled={busy}>
-      {!pis.length ? <option value="">No saved PI in this country / month</option> : null}
+    {!piCode ? <label>Saved PI / 已保存 PI<select aria-label="Saved PI" value={selected} onChange={(event) => setSelected(event.target.value)} disabled={busy || loadingPis}>
+      {!pis.length ? <option value="">{loadingPis ? "Loading saved PIs / 正在读取已保存PI" : error ? "PI list unavailable / PI列表读取失败" : "No saved PI in this country / month"}</option> : null}
       {pis.map((header) => <option key={header.piCode} value={header.piCode}>{header.piCode}</option>)}
     </select></label> : <p>{piCode}</p>}
-    {!selected ? <p>No saved PI to export. Use Import / Export → PI Templates to upload a template first / 暂无已保存PI可导出；可先从导入导出 → PI模板上传模板，无需创建PI。</p> : null}
+    {!piCode ? <p>Scope / 范围：{countries.join(" / ")} · {month ?? "All months / 全部月份"}</p> : null}
+    {!piCode && !loadingPis && !selected && !error ? <div role="status">
+      <p>No saved PI in this scope. Monthly plan quantities are not yet a PI; uploading a template does not create an order / 当前范围尚无已保存PI。月计划数量还不是PI，上传模板不会创建订单。</p>
+      <p>Open PI Batch, review the month, remaining quantities and order date, then confirm Create PI before exporting. Existing templates can be reused across months / 请进入PI Batch核对月份、剩余数量及下单日期，确认创建PI后再导出。已有模板可跨月复用。</p>
+      {onCreatePi ? <button type="button" className="btn btn-sm btn-primary" onClick={onCreatePi}>Open PI Batch / 核对并创建PI</button> : null}
+    </div> : null}
     {catalog ? <p><label>PI template / 导出模板<select aria-label="PI template" value={templateId} disabled={busy} onChange={(event) => setTemplateId(event.target.value)}>
       {!catalog.items.length ? <option value="">No matching template / 无匹配模板</option> : null}
       {catalog.items.map((item, index) => <option key={item.id} value={item.id}>{item.name} · {item.owner}{index === 0 ? " · Default" : ""}</option>)}

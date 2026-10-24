@@ -87,6 +87,23 @@ async function openOctober() {
 }
 
 describe("quantity save → PI readiness", () => {
+  it("opens the existing PI Batch from an empty export without creating an order or changing the month", async () => {
+    const create = vi.spyOn(api, "generateVehicleAllocationFromOrderMatrix");
+    await openOctober();
+    fireEvent.click(screen.getByRole("tab", { name: /Import \/ Export/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Export PI" }));
+    const openBatch = await screen.findByRole("button", { name: "Open PI Batch / 核对并创建PI" });
+    expect(screen.getByText(/Scope.*CH.*-10/)).toBeTruthy();
+    expect(create).not.toHaveBeenCalled();
+    fireEvent.click(openBatch);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("tab", { name: /PI Batch/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getAllByText("PI ready · 0 units available")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("tab", { name: /Filters/i }));
+    expect((screen.getByLabelText("Order month") as HTMLSelectElement).value).toBe("10");
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("keeps PI templates reachable with no matrix rows, quantities or saved PI", async () => {
     const reactErrors = vi.spyOn(console, "error").mockImplementation(() => {});
     const response = await api.getOrderGeniusMatrixBatch({ countries: ["CH"], year: 2026 });
