@@ -4,7 +4,6 @@ import { OrderingBrandNotice } from "../components/RoleUpgradeModal";
 import { isAdminRole } from "../utils/pageNavigation";
 import { CommandSelect, type CommandSelectOption } from "../components/CommandSelect";
 import { LoadingActionButton } from "../components/LoadingActionButton";
-import { PiInvoiceExportDialog } from "../components/PiInvoiceExportDialog";
 import {
   VehicleImportDigestPanel,
   VehicleStatusBoard,
@@ -214,7 +213,6 @@ export function OrderGeniusVehicleAllocationPage() {
   const cocStatuses = useMemo(() => new Map(cocResult?.items.map((item) => [item.carCode, item.status])), [cocResult]);
   useEffect(() => { cocRequest.current += 1; setCocLookup(null); setCocError(""); setCocDownloadConfirm(null); setCocFilter("all"); }, [selectedPi]);
   const [deleteConfirmPi, setDeleteConfirmPi] = useState<string | null>(null);
-  const [showInvoiceExport, setShowInvoiceExport] = useState(false);
   // Multi-select state
   const [selectedCarCodes, setSelectedCarCodes] = useState<Set<string>>(new Set());
   useEffect(() => { setCocDownloadConfirm(null); }, [selectedCarCodes]);
@@ -1018,16 +1016,12 @@ export function OrderGeniusVehicleAllocationPage() {
                   saveVisibleColumns(new Set(DEFAULT_COLUMNS)); setGridResetKey((value) => value + 1);
                 }}>Reset columns & filters / 重置列与筛选</button>
               <LoadingActionButton disabled={(!checkedPiCodes.length && !searchResults?.length) || scopeBusy} loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出所见</LoadingActionButton>
-              <button type="button" className="btn-secondary" disabled={!selectedPi || scopeBusy}
-                onClick={() => setShowInvoiceExport(true)}>Export PI</button>
               <button type="button" onClick={() => { setAnalysisView("pivot"); setToolDrawerOpen(false); }}>Open pivot / 打开透视</button>
             </>
           ) : null}
         </div>
       </DeckFloatingDrawer>
 
-      {showInvoiceExport && selectedPi ? <PiInvoiceExportDialog key={selectedPi.header.piCode}
-        piCode={selectedPi.header.piCode} onClose={() => setShowInvoiceExport(false)} /> : null}
 
       <div className="va-layout">
         <aside className="va-side">

@@ -896,6 +896,7 @@ describe("unified Grid editing contract", () => {
     fireEvent.click(columns.getByLabelText("Note / 备注"));
     openView();
     const tools = within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" }));
+    expect(tools.queryByRole("button", { name: "Export PI" })).toBeNull();
     fireEvent.click(tools.getByRole("button", { name: "Export current view / 导出所见" }));
     await waitFor(() => expect(download).toHaveBeenCalled());
     expect(download.mock.calls[0][0]?.carCodes).toHaveLength(150);

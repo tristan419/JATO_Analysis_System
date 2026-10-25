@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CellValueChangedEvent } from "ag-grid-community";
 import type { OrderGeniusGridProps, OrderGeniusGridRow } from "../../components/OrderGeniusGrid";
@@ -87,18 +87,19 @@ async function openOctober() {
 }
 
 describe("quantity save → PI readiness", () => {
-  it("opens the existing PI Batch from an empty export without creating an order or changing the month", async () => {
+  it("exports the monthly plan without creating a PI or changing the page month", async () => {
     const create = vi.spyOn(api, "generateVehicleAllocationFromOrderMatrix");
+    const preview = vi.spyOn(api, "getMonthlyInvoiceContext").mockRejectedValue(new Error("No positive monthly quantities"));
     await openOctober();
     fireEvent.click(screen.getByRole("tab", { name: /Import \/ Export/ }));
     fireEvent.click(screen.getByRole("button", { name: "Export PI" }));
-    const openBatch = await screen.findByRole("button", { name: "Open PI Batch / 核对并创建PI" });
-    expect(screen.getByText(/Scope.*CH.*-10/)).toBeTruthy();
+    await screen.findByText("No positive monthly quantities");
+    expect(preview).toHaveBeenCalledWith("CH", `${new Date().getFullYear()}-10`, "");
+    expect(screen.queryByRole("button", { name: /Open PI Batch/ })).toBeNull();
+    expect(screen.queryByLabelText("Saved PI")).toBeNull();
     expect(create).not.toHaveBeenCalled();
-    fireEvent.click(openBatch);
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("tab", { name: /PI Batch/ }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getAllByText("PI ready · 0 units available")).toHaveLength(2);
     fireEvent.click(screen.getByRole("tab", { name: /Filters/i }));
     expect((screen.getByLabelText("Order month") as HTMLSelectElement).value).toBe("10");
     expect(create).not.toHaveBeenCalled();

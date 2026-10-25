@@ -280,34 +280,41 @@ def generate_vehicle_pivot_excel(vehicles: list[dict], config: dict) -> io.Bytes
 
 def pi_invoice_context(detail: dict, template: dict | None = None) -> dict:
     """Offer fixed template information; opening this preview never writes orders."""
+    context = _invoice_context(detail["header"], detail["lines"], template)
+    charges = context.get("charges", ["freightEur", "insuranceEur", "handlingEur"])
+    for key, field in (("missingFreightUnits", "freightEur"), ("missingInsuranceUnits", "insuranceEur")):
+        context[key] = sum(v.get(field) is None for v in detail["vehicles"]) if field in charges else 0
+    return context
+
+
+def _invoice_context(header: dict, lines: list[dict], template: dict | None = None) -> dict:
+    """Template identity and fixed fields are independent of the source order/month."""
+    unit_count = sum(line["quantity"] for line in lines)
     if template:
         fields = template["config"]["fields"]
-        header = detail["header"]
         values = {key: field["value"] for key, field in fields.items()}
         charges = template["config"]["charges"]
         return {"piCode": header["piCode"], "templateKey": template["id"], "templateName": template["name"],
                 **{key: values.get(key, "") for key in ("buyerName", "buyerAddress", "buyerEmail", "sellerName", "sellerAddress", "bankDetails", "priceTerm", "paymentTerm")},
-                "unitCount": len(detail["vehicles"]), "lineCount": len(detail["lines"]), "charges": charges,
-                "missingFreightUnits": sum(v.get("freightEur") is None for v in detail["vehicles"]) if "freightEur" in charges else 0,
-                "missingInsuranceUnits": sum(v.get("insuranceEur") is None for v in detail["vehicles"]) if "insuranceEur" in charges else 0,
+                "unitCount": unit_count, "lineCount": len(lines), "charges": charges,
+                "missingFreightUnits": unit_count if "freightEur" in charges else 0,
+                "missingInsuranceUnits": unit_count if "insuranceEur" in charges else 0,
                 "templateRevision": template["updatedAt"],
                 "defaults": {"invoiceDate": header.get("orderDate") or date.today().isoformat(),
                              "referenceNo": header.get("officialPiNo") or header["piCode"],
                              "portOfShipment": values.get("portOfShipment", ""),
                              "portOfDischarge": header.get("portOfDischarge") or values.get("portOfDischarge", "")}}
-    header = detail["header"]
     country = str(header.get("orderingAccountCode") or header["countryCode"]).upper()
     profiles_path = PI_TEMPLATE_ROOT / "profiles.json"
     if not profiles_path.is_file():
         raise ValueError("PI templates not configured / 尚未配置 PI 模板，请联系管理员")
     profiles = json.loads(profiles_path.read_text())
-    if country not in {"CH", "SE"} or country not in profiles or not detail["lines"] or any(
+    if country not in {"CH", "SE"} or country not in profiles or not lines or any(
         str(line.get("brand") or "").upper() not in {"OMODA", "JAECOO"}
-        for line in detail["lines"]
+        for line in lines
     ):
         raise ValueError("No matching country / brand PI template / 该订购账户国家及品牌尚未配置 PI 模板")
     profile = profiles[country]
-    vehicles = detail["vehicles"]
     template_path = PI_TEMPLATE_ROOT / f"{country}_OJ.xlsx"
     if not template_path.is_file():
         raise ValueError("PI template file missing / PI 模板文件缺失，请联系管理员")
@@ -322,9 +329,9 @@ def pi_invoice_context(detail: dict, template: dict | None = None) -> dict:
         "templateName": profile["name"], "buyerName": profile["buyerName"],
         "buyerAddress": profile["buyerAddress"], "buyerEmail": profile["buyerEmail"],
         **fixed,
-        "unitCount": len(vehicles), "lineCount": len(detail["lines"]),
-        "missingFreightUnits": sum(v.get("freightEur") is None for v in vehicles),
-        "missingInsuranceUnits": sum(v.get("insuranceEur") is None for v in vehicles),
+        "unitCount": unit_count, "lineCount": len(lines),
+        "missingFreightUnits": unit_count,
+        "missingInsuranceUnits": unit_count,
         "defaults": {
             "invoiceDate": header.get("orderDate") or date.today().isoformat(),
             "referenceNo": header.get("officialPiNo") or header["piCode"],
@@ -386,14 +393,36 @@ def generate_pi_invoice_excel(detail: dict, options: dict, template: dict | None
     context = pi_invoice_context(detail, template)
     charges = template["config"]["charges"] if template else ["freightEur", "insuranceEur", "handlingEur"]
     grouped = _invoice_groups(detail, options, charges)
+    return _render_invoice(context, grouped, options, template)
+
+
+def monthly_invoice_context(plan: dict, template: dict | None = None) -> dict:
+    reference = f"PI-{plan['country']}-{plan['month'].replace('-', '')}"
+    return _invoice_context({"piCode": reference, "countryCode": plan["country"]}, plan["lines"], template)
+
+
+def generate_monthly_invoice_excel(plan: dict, options: dict, template: dict | None = None) -> io.BytesIO:
+    context = monthly_invoice_context(plan, template)
+    charges = context.get("charges", ["freightEur", "insuranceEur", "handlingEur"])
+    freight = _invoice_money(options.get("freightEur"), "Freight / 运费") if "freightEur" in charges else Decimal(0)
+    insurance = _invoice_money(options.get("insuranceEur"), "Insurance / 保费") if "insuranceEur" in charges else Decimal(0)
+    grouped: dict[tuple, int] = {}
+    for line in plan["lines"]:
+        key = tuple(line.get(field) for field in ("modelName", "version", "powertrain", "exteriorColorName",
+                    "exteriorColorCode", "interiorColorName", "materialCode")) + (
+                    _invoice_money(line["fobEur"], "FOB", positive=True), freight, insurance)
+        grouped[key] = grouped.get(key, 0) + line["quantity"]
+    return _render_invoice(context, grouped, options, template)
+
+
+def _render_invoice(context: dict, grouped: dict, options: dict, template: dict | None) -> io.BytesIO:
     invoice_date, fields = _invoice_fields(context, options)
     handling = _invoice_money(options.get("handlingEur", 0), "Handling Charges / 操作费")
     if template:
-        if "handlingEur" not in charges and handling:
+        if "handlingEur" not in template["config"]["charges"] and handling:
             raise ValueError("Template excludes handling / 模板不计操作费")
         return _render_mapped_invoice(template, context, fields, invoice_date, grouped, handling)
     country = context["templateKey"][:2]
-    vehicles = detail["vehicles"]
     if country == "SE" and handling:
         raise ValueError("SE template has no handling charge column / SE 模板不含操作费")
 
@@ -495,7 +524,7 @@ def generate_pi_invoice_excel(detail: dict, options: dict, template: dict | None
     for col in (quantity_col, amount_col, last_col):
         letter = get_column_letter(col)
         ws.cell(total_row, col, f"=SUM({letter}28:{letter}{total_row - 1})")
-        cached[f"{letter}{total_row}"] = len(vehicles) if col == quantity_col else sum(cached[f"{letter}{row}"] for row in range(28, total_row))
+        cached[f"{letter}{total_row}"] = sum(grouped.values()) if col == quantity_col else sum(cached[f"{letter}{row}"] for row in range(28, total_row))
     for offset, label in enumerate([
         f"10-Port of Shipment: {fields['portOfShipment']}",
         f"11-Port of Discharge: {fields['portOfDischarge']}",

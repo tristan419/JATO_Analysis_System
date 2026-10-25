@@ -3,127 +3,113 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api } from "../../api/client";
 import { PiInvoiceExportDialog } from "../../components/PiInvoiceExportDialog";
-import type { PiInvoiceContext } from "../../types/orderGeniusVehicle";
+import type { PiInvoiceContext, PiTemplateCatalog } from "../../types/orderGeniusVehicle";
 
-vi.mock("../../api/client", () => ({ api: { getPiInvoiceContext: vi.fn(), getPiInvoiceTemplates: vi.fn(), exportPiInvoice: vi.fn(), getVehicleAllocationPis: vi.fn() } }));
+vi.mock("../../api/client", () => ({ api: { getMonthlyInvoiceContext: vi.fn(), exportMonthlyInvoice: vi.fn(), getVehicleAllocationPis: vi.fn(), generateVehicleAllocationFromOrderMatrix: vi.fn() } }));
 const context: PiInvoiceContext = {
-  piCode: "PI-SE-202609-001", templateKey: "SE_OJ", templateName: "SE OJ", buyerName: "Example Buyer",
+  piCode: "PI-SE-202610", templateKey: "SE_OJ", templateName: "SE OJ September example", buyerName: "Example Buyer",
   buyerAddress: "Norway", buyerEmail: "", sellerName: "Example Seller", sellerAddress: "Example address",
   bankDetails: "Example bank", priceTerm: "CFR", paymentTerm: "LC 90", unitCount: 120, lineCount: 11,
   missingFreightUnits: 120, missingInsuranceUnits: 120,
-  defaults: { invoiceDate: "2026-09-01", referenceNo: "PI-SE-202609-001", portOfShipment: "China", portOfDischarge: "Check destination" },
+  defaults: { invoiceDate: "2026-10-25", referenceNo: "PI-SE-202610", portOfShipment: "China", portOfDischarge: "Check destination" },
 };
+const catalog: PiTemplateCatalog = { items: [{ id: "SE_OJ", owner: "System", name: "SE OJ September example", shared: true, system: true, country: "SE", brands: ["OMODA", "JAECOO"] }],
+  owner: "alice", owners: ["alice"], actor: "alice", admin: false, country: "SE", brands: ["OMODA", "JAECOO"] };
 beforeEach(() => {
-  vi.mocked(api.getPiInvoiceTemplates).mockResolvedValue({ items: [{ id: "SE_OJ", owner: "System", name: "SE OJ", shared: true, system: true, country: "SE", brands: ["OMODA", "JAECOO"] }], owner: "alice", owners: ["alice"], actor: "alice", admin: false, country: "SE", brands: ["OMODA", "JAECOO"] });
-  vi.mocked(api.getPiInvoiceContext).mockResolvedValue(context);
-  vi.mocked(api.exportPiInvoice).mockResolvedValue(new Blob(["xlsx"]));
+  vi.mocked(api.getMonthlyInvoiceContext).mockResolvedValue({ catalog, context });
+  vi.mocked(api.exportMonthlyInvoice).mockResolvedValue(new Blob(["xlsx"]));
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:test"), revokeObjectURL: vi.fn() });
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
 });
 afterEach(() => { cleanup(); vi.resetAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-it("blocks missing costs and accepts explicit zero without updating orders", async () => {
-  const close = vi.fn();
-  render(<PiInvoiceExportDialog piCode={context.piCode} onClose={close} />);
-  await screen.findByText("Example Buyer");
-  fireEvent.click(screen.getByRole("button", { name: "Download XLSX" }));
-  expect(api.exportPiInvoice).not.toHaveBeenCalled();
+function fillFees(): void {
   fireEvent.change(screen.getByLabelText("Freight / 运费 (EUR / unit)"), { target: { value: "0" } });
   fireEvent.change(screen.getByLabelText("Insurance / 保费 (EUR / unit)"), { target: { value: "0" } });
+}
+
+it("exports positive monthly quantities without querying/creating a saved PI; zero costs are explicit", async () => {
+  const close = vi.fn();
+  render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={close} />);
+  await screen.findByText("Example Buyer");
+  expect(api.getMonthlyInvoiceContext).toHaveBeenCalledWith("SE", "2026-10", "");
+  expect(screen.queryByLabelText("Saved PI")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Download XLSX" }));
-  await waitFor(() => expect(api.exportPiInvoice).toHaveBeenCalledWith(context.piCode, { ...context.defaults, templateId: "SE_OJ", freightEur: 0, insuranceEur: 0, handlingEur: 0 }));
-  await waitFor(() => expect(close).toHaveBeenCalled());
+  expect(api.exportMonthlyInvoice).not.toHaveBeenCalled();
+  fillFees(); fireEvent.click(screen.getByRole("button", { name: "Download XLSX" }));
+  await waitFor(() => expect(api.exportMonthlyInvoice).toHaveBeenCalledWith("SE", "2026-10", { ...context.defaults, templateId: "SE_OJ", freightEur: 0, insuranceEur: 0, handlingEur: 0 }));
+  expect(api.getVehicleAllocationPis).not.toHaveBeenCalled();
+  expect(api.generateVehicleAllocationFromOrderMatrix).not.toHaveBeenCalled();
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
 });
 
-it("blank fee inputs preserve saved per-unit costs; a failed download retains the draft", async () => {
-  vi.mocked(api.getPiInvoiceContext).mockResolvedValue({ ...context, missingFreightUnits: 0, missingInsuranceUnits: 0 });
-  vi.mocked(api.exportPiInvoice).mockRejectedValue(new Error("Download failed"));
-  render(<PiInvoiceExportDialog piCode={context.piCode} onClose={vi.fn()} />);
+it("the same September-named template can be reused for October and November", async () => {
+  render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={vi.fn()} />);
   await screen.findByText("Example Buyer");
+  fillFees();
+  vi.mocked(api.getMonthlyInvoiceContext).mockResolvedValueOnce({ catalog, context: { ...context, unitCount: 20,
+    defaults: { ...context.defaults, referenceNo: "PI-SE-202611" } } });
+  fireEvent.change(screen.getByLabelText("Plan month"), { target: { value: "2026-11" } });
+  await screen.findByDisplayValue("PI-SE-202611");
+  expect(api.getMonthlyInvoiceContext).toHaveBeenLastCalledWith("SE", "2026-11", "");
+  expect(screen.getByText(/2026-11.*20 units/)).toBeTruthy();
+  expect((screen.getByLabelText("Freight / 运费 (EUR / unit)") as HTMLInputElement).value).toBe("");
+  fillFees(); fireEvent.click(screen.getByRole("button", { name: "Download XLSX" }));
+  await waitFor(() => expect(api.exportMonthlyInvoice).toHaveBeenCalledWith("SE", "2026-11", expect.objectContaining({ templateId: "SE_OJ", referenceNo: "PI-SE-202611" })));
+});
+
+it("failed downloads retain modified fields and closing never writes", async () => {
+  vi.mocked(api.exportMonthlyInvoice).mockRejectedValue(new Error("Download failed"));
+  const close = vi.fn();
+  render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={close} />);
+  await screen.findByText("Example Buyer"); fillFees();
   fireEvent.change(screen.getByLabelText("Ref. No / PI 编号"), { target: { value: "Changed reference" } });
   fireEvent.click(screen.getByRole("button", { name: "Download XLSX" }));
   await screen.findByText("Download failed");
-  expect(api.exportPiInvoice).toHaveBeenCalledWith(context.piCode, { ...context.defaults, templateId: "SE_OJ", referenceNo: "Changed reference", handlingEur: 0 });
-  expect((screen.getByLabelText("Ref. No / PI 编号") as HTMLInputElement).value).toBe("Changed reference");
-});
-
-it("closing a preview does not export", async () => {
-  const close = vi.fn();
-  render(<PiInvoiceExportDialog piCode={context.piCode} onClose={close} />);
-  await screen.findByText("Example Buyer");
+  expect(screen.getByDisplayValue("Changed reference")).toBeTruthy();
+  expect(close).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(close).toHaveBeenCalledOnce();
-  expect(api.exportPiInvoice).not.toHaveBeenCalled();
+  expect(api.generateVehicleAllocationFromOrderMatrix).not.toHaveBeenCalled();
 });
 
-it("selection chooses saved PIs by country and month, not current matrix rows", async () => {
-  vi.mocked(api.getVehicleAllocationPis).mockResolvedValue({ items: [{ piCode: context.piCode } as import("../../types/orderGeniusVehicle").PiOrderHeader], total: 1 });
-  render(<PiInvoiceExportDialog countries={["SE"]} month="2026-09" onClose={vi.fn()} />);
-  await screen.findByText("Example Buyer");
-  expect(api.getVehicleAllocationPis).toHaveBeenCalledWith({ country: "SE", month: "2026-09", pageSize: 200 });
-  expect((screen.getByLabelText("Saved PI") as HTMLSelectElement).value).toBe(context.piCode);
-});
-
-it("uses the account's top compatible template and offers upload when none exists", async () => {
-  vi.mocked(api.getPiInvoiceTemplates).mockResolvedValueOnce({ items: [], owner: "alice", owners: ["alice"], actor: "alice", admin: false, country: "CZ", brands: ["OMODA"] });
-  render(<PiInvoiceExportDialog piCode="PI-CZ" onClose={vi.fn()} />);
+it("no template offers the existing upload manager without creating an order", async () => {
+  vi.mocked(api.getMonthlyInvoiceContext).mockResolvedValueOnce({ catalog: { ...catalog, items: [] }, context: null });
+  render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={vi.fn()} />);
   await screen.findByText(/No matching template. Upload/);
-  expect(api.getPiInvoiceContext).not.toHaveBeenCalled();
   expect((screen.getByRole("button", { name: "Download XLSX" }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.getByRole("button", { name: "Manage templates / 管理模板" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Manage templates / 管理模板" }));
   expect(screen.getByLabelText("Upload PI template")).toBeTruthy();
 });
 
-it("separates an empty PI scope from missing templates and opens the existing creation workflow only on click", async () => {
-  vi.mocked(api.getVehicleAllocationPis).mockResolvedValue({ items: [], total: 0 });
-  const create = vi.fn();
-  render(<PiInvoiceExportDialog countries={["CH"]} month="2026-10" onCreatePi={create} onClose={vi.fn()} />);
-  await screen.findByText(/Monthly plan quantities are not yet a PI/);
-  expect(screen.getByText(/Scope.*CH.*2026-10/)).toBeTruthy();
-  expect(screen.getByText(/Existing templates can be reused across months/)).toBeTruthy();
-  expect(screen.queryByText(/upload a template first/)).toBeNull();
-  expect(api.getPiInvoiceTemplates).not.toHaveBeenCalled();
+it("requires a month, and a failed/empty plan is not misreported as missing templates", async () => {
+  vi.mocked(api.getMonthlyInvoiceContext).mockRejectedValue(new Error("No positive monthly quantities"));
+  render(<PiInvoiceExportDialog countries={["SE"]} onClose={vi.fn()} />);
+  expect(api.getMonthlyInvoiceContext).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("Plan month"), { target: { value: "2026-10" } });
+  await screen.findByText("No positive monthly quantities");
+  expect(screen.queryByText(/No matching template. Upload/)).toBeNull();
   expect((screen.getByRole("button", { name: "Download XLSX" }) as HTMLButtonElement).disabled).toBe(true);
-  expect(create).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Open PI Batch / 核对并创建PI" }));
-  expect(create).toHaveBeenCalledOnce();
-  expect(api.exportPiInvoice).not.toHaveBeenCalled();
 });
 
-it("does not show an empty PI result while querying or when the query fails", async () => {
-  let reject!: (reason: Error) => void;
-  vi.mocked(api.getVehicleAllocationPis).mockReturnValue(new Promise((_, no) => { reject = no; }));
-  render(<PiInvoiceExportDialog countries={["CH"]} month="2026-10" onCreatePi={vi.fn()} onClose={vi.fn()} />);
-  expect(screen.getByText("Loading saved PIs / 正在读取已保存PI")).toBeTruthy();
-  expect(screen.queryByRole("button", { name: /Open PI Batch/ })).toBeNull();
-  expect(screen.queryByText(/Monthly plan quantities/)).toBeNull();
-  reject(new Error("PI list failed"));
-  await screen.findByText("PI list failed");
-  expect(screen.getByText("PI list unavailable / PI列表读取失败")).toBeTruthy();
-  expect(screen.queryByText(/Monthly plan quantities/)).toBeNull();
-  expect(screen.queryByRole("button", { name: /Open PI Batch/ })).toBeNull();
-});
-
-it("does not offer a creation action when the caller has no creation permission", async () => {
-  vi.mocked(api.getVehicleAllocationPis).mockResolvedValue({ items: [], total: 0 });
-  render(<PiInvoiceExportDialog countries={["BG"]} onClose={vi.fn()} />);
-  await screen.findByText(/Monthly plan quantities are not yet a PI/);
-  expect(screen.queryByRole("button", { name: /Open PI Batch/ })).toBeNull();
-});
-
-it("a damaged top template stays selected and never silently falls back", async () => {
-  vi.mocked(api.getPiInvoiceTemplates).mockResolvedValueOnce({ items: [
-    { id: "first", name: "Broken", owner: "alice", country: "CZ", brands: ["OMODA"], shared: false },
-    { id: "second", name: "Valid", owner: "alice", country: "CZ", brands: ["OMODA"], shared: false }],
-    owner: "alice", owners: ["alice"], actor: "alice", admin: false, country: "CZ", brands: ["OMODA"] });
-  vi.mocked(api.getPiInvoiceContext).mockRejectedValueOnce(new Error("Damaged template"));
-  render(<PiInvoiceExportDialog piCode="PI-CZ" onClose={vi.fn()} />);
-  await screen.findByText("Damaged template");
-  expect(api.getPiInvoiceContext).toHaveBeenCalledTimes(1);
-  expect(api.getPiInvoiceContext).toHaveBeenCalledWith("PI-CZ", "first");
-  fireEvent.change(screen.getByLabelText("PI template"), { target: { value: "second" } });
+it("a late result from the previous country/month cannot replace current scope", async () => {
+  let resolveOld!: (value: { catalog: PiTemplateCatalog; context: PiInvoiceContext }) => void;
+  vi.mocked(api.getMonthlyInvoiceContext).mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }));
+  render(<PiInvoiceExportDialog countries={["SE", "CH"]} month="2026-10" onClose={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("Invoice country"), { target: { value: "CH" } });
   await screen.findByText("Example Buyer");
-  expect(api.getPiInvoiceContext).toHaveBeenCalledWith("PI-CZ", "second");
+  resolveOld({ catalog, context: { ...context, buyerName: "Old buyer" } });
+  await waitFor(() => expect(screen.queryByText("Old buyer")).toBeNull());
+  expect(api.getMonthlyInvoiceContext).toHaveBeenLastCalledWith("CH", "2026-10", "");
+});
+
+it("a broken top template reports failure and never silently chooses a fallback", async () => {
+  vi.mocked(api.getMonthlyInvoiceContext).mockResolvedValueOnce({ catalog, context: null, error: "Damaged template" });
+  render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={vi.fn()} />);
+  await screen.findByText("Damaged template");
+  expect(api.getMonthlyInvoiceContext).toHaveBeenCalledTimes(1);
+  expect(api.exportMonthlyInvoice).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("PI template")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Manage templates / 管理模板" })).toBeTruthy();
 });

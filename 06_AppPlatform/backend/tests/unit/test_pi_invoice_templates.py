@@ -257,6 +257,43 @@ def test_country_library_can_save_before_any_pi_exists(source, monkeypatch):
     assert len(templates.records()) == 1
 
 
+def test_monthly_http_export_reuses_uploaded_top_template_and_rechecks_scope(source, monkeypatch):
+    content, payload = source
+    saved = templates.save(content, {**payload, "name": "September reusable layout"}, "alice", False)
+    session = Mock()
+    account = SimpleNamespace(primary_country_code="CZ", secondary_country_codes=[], brands=["OMODA", "JAECOO"])
+    session.query.return_value.filter.return_value.first.return_value = account
+    plan = {"country": "CZ", "month": "2026-10", "lines": [{**detail()["vehicles"][0], "brand": "OMODA", "quantity": 54}]}
+    monkeypatch.setattr(route, "build_monthly_invoice_plan", Mock(return_value=plan))
+    monkeypatch.setattr(route, "_invoice_detail", Mock(side_effect=AssertionError("Monthly export must not read/create PI")))
+    app = FastAPI(); app.include_router(route.router)
+    app.dependency_overrides[route.get_db_session] = lambda: session
+    app.dependency_overrides[get_current_user] = lambda: UserContext("order_filler", "alice")
+    path = "/order-genius/vehicle-allocation/monthly-invoice?country=CZ&month=2026-10"
+    with TestClient(app) as client:
+        preview = client.get(path)
+        assert preview.status_code == 200
+        ctx = preview.json()["context"]
+        assert ctx["templateKey"] == saved["id"] and ctx["unitCount"] == 54
+        options = {**ctx["defaults"], "templateId": saved["id"], "templateRevision": ctx["templateRevision"],
+                   "freightEur": 3.45, "insuranceEur": 0.67}
+        response = client.post(path, json=options)
+        assert response.status_code == 200
+        ws = openpyxl.load_workbook(BytesIO(response.content), data_only=True).active
+        assert ws["D12"].value == 54 and ws["I12"].value == 5628.42
+        assert ws["F2"].value == "PI-CZ-202610"
+        assert templates.load_template(saved["id"], "alice", False, "CZ", {"OMODA"})["path"].read_bytes() == content
+        plan.update(month="2026-11", lines=[{**plan["lines"][0], "quantity": 4}])
+        later = client.get(path.replace("2026-10", "2026-11")).json()["context"]
+        assert later["templateKey"] == saved["id"] and later["defaults"]["referenceNo"] == "PI-CZ-202611"
+        assert later["unitCount"] == 4
+        assert client.post(path, json={**options, "templateRevision": "stale"}).status_code == 409
+        account.brands = []
+        assert client.post(path, json=options).status_code == 403
+        assert client.get(path).status_code == 403
+    session.add.assert_not_called(); session.commit.assert_not_called()
+
+
 @pytest.mark.parametrize("country,brands,status", [("", ["OMODA"], 400), ("BGR", ["OMODA"], 400),
     ("BG", [], 400), ("BG", ["unknown"], 400), ("BG", ["OMODA", "CHERY"], 403), ("CH", ["OMODA"], 403)])
 def test_management_scope_rejects_empty_unknown_or_unassigned_targets(country, brands, status):
