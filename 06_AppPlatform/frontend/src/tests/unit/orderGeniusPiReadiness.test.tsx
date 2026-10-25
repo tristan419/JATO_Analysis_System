@@ -8,10 +8,10 @@ import type { QuantityCellResponse } from "../../types/orderGenius";
 import { api } from "../../api/client";
 import { OrderGeniusPage } from "../../pages/OrderGeniusPage";
 
-const authState = vi.hoisted(() => ({ user: { role: "admin", primaryCountry: "CH", secondaryCountries: [] as string[], brands: [] as string[] } }));
+const authState = vi.hoisted(() => ({ user: { role: "admin", primaryCountry: "CH", secondaryCountries: [] as string[], brands: [] as string[] }, refreshUser: vi.fn<() => Promise<boolean>>() }));
 vi.mock("../../contexts/AuthContext", async (original) => ({
   ...await original<typeof import("../../contexts/AuthContext")>(),
-  useAuth: () => ({ user: authState.user, refreshUser: vi.fn() }),
+  useAuth: () => ({ user: authState.user, refreshUser: authState.refreshUser }),
 }));
 vi.mock("../../components/OrderGeniusGrid", async (original) => ({
   ...await original<typeof import("../../components/OrderGeniusGrid")>(),
@@ -56,6 +56,7 @@ function plan(quantity: number): VehicleAllocationPlan {
 }
 const savedQuantity: QuantityCellResponse = { orderQuantityCellId: "q", countryCode: "CH", orderYear: 2026, orderMonth: 10, materialCode: "T6481QNCLLX0003", quantity: 15, fobEur: 29000, rowVersion: 2 };
 beforeEach(() => {
+  authState.refreshUser.mockReset().mockResolvedValue(true);
   authState.user.role = "admin";
   authState.user.brands = [];
   vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country) => ({
@@ -74,7 +75,7 @@ beforeEach(() => {
   vi.spyOn(api, "getVehicleAllocationPis").mockResolvedValue({ items: [], total: 0 });
   vi.spyOn(api, "getVehicleAllocationOrderMatrixPlan").mockResolvedValue(plan(0));
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 async function openOctober() {
   render(<OrderGeniusPage />);
@@ -87,6 +88,57 @@ async function openOctober() {
 }
 
 describe("quantity save → PI readiness", () => {
+  it.each([401, 403])("offers a new-tab re-login immediately after %s and preserves the failed quantity for manual retry", async (status) => {
+    localStorage.setItem("jato_auth_token", "failed-session");
+    await openOctober();
+    const fetch = vi.fn(async () => Response.json({ detail: status === 401 ? "Authentication required" : "Forbidden" }, { status }));
+    vi.stubGlobal("fetch", fetch);
+    const save = vi.spyOn(api, "updateQuantityCell");
+    fireEvent.click(screen.getByText("Save 15"));
+    const login = await screen.findByRole("link", { name: "Re-login / 重新登录" });
+    expect(login.getAttribute("target")).toBe("_blank");
+    expect(login.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(login.getAttribute("href")).toContain("/login?redirect=");
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(authState.refreshUser).not.toHaveBeenCalled();
+    expect(localStorage.getItem("jato_auth_token")).toBe("failed-session");
+    expect(screen.getByTestId("eligible-rows").textContent).toBe("0");
+    if (status === 403) {
+      expect(screen.getByText(/请求被拒绝（403）/).textContent).toContain("核对国家、品牌及操作权限");
+      expect(screen.queryByText(/当前账号没有执行此 BOM 操作的权限/)).toBeNull();
+      expect(screen.queryByText(/登录已失效/)).toBeNull();
+    }
+    fireEvent(window, new Event("focus"));
+    expect(authState.refreshUser).not.toHaveBeenCalled();
+    localStorage.setItem("jato_auth_token", "renewed-session");
+    fireEvent(window, new Event("focus"));
+    await screen.findByText(/登录身份已更新，请主动重试刚才的操作/);
+    expect(authState.refreshUser).toHaveBeenCalledWith({ preserveSession: true });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("eligible-rows").textContent).toBe("0");
+    save.mockResolvedValue(savedQuantity);
+    vi.mocked(api.getVehicleAllocationOrderMatrixPlan).mockResolvedValue(plan(15));
+    fireEvent.click(screen.getByText("Retry"));
+    await screen.findByText("PI ready · 13 units available");
+    expect(save.mock.calls[1][0].quantity).toBe(15);
+  });
+
+  it.each([false, "network"])("keeps re-login available when the renewed-session check returns %s", async (result) => {
+    localStorage.setItem("jato_auth_token", "failed-session");
+    await openOctober();
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ detail: "Forbidden" }, { status: 403 })));
+    fireEvent.click(screen.getByText("Save 15"));
+    await screen.findByRole("link", { name: "Re-login / 重新登录" });
+    if (result === false) authState.refreshUser.mockResolvedValue(false);
+    else authState.refreshUser.mockRejectedValue(new Error("Offline"));
+    localStorage.setItem("jato_auth_token", "renewed-session");
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(authState.refreshUser).toHaveBeenCalledTimes(1));
+    if (result === "network") await screen.findByText(/无法核验登录状态/);
+    expect(screen.getByRole("link", { name: "Re-login / 重新登录" })).toBeTruthy();
+    expect(screen.queryByText(/登录身份已更新/)).toBeNull();
+  });
+
   it("exports the monthly plan without creating a PI or changing the page month", async () => {
     const create = vi.spyOn(api, "generateVehicleAllocationFromOrderMatrix");
     const preview = vi.spyOn(api, "getMonthlyInvoiceContext").mockRejectedValue(new Error("No positive monthly quantities"));
