@@ -192,6 +192,41 @@ def test_custom_total_format_is_preserved(source):
     assert ws["I13"].number_format == '"EUR "#,##0.00'
 
 
+def test_total_label_stays_in_source_cell_with_an_unused_header_column(source):
+    content, payload = source
+    wb = openpyxl.load_workbook(BytesIO(content)); ws = wb.active
+    ws["J1"] = "Fixed header note"
+    ws["A13"] = " 合计 / Total "
+    out = BytesIO(); wb.save(out); content = out.getvalue()
+    payload["sha256"] = hashlib.sha256(content).hexdigest()
+    saved = templates.save(content, payload, "alice", False)
+    template = templates.load_template(saved["id"], "alice", False, "CZ", {"OMODA"})
+    output = exporter.generate_pi_invoice_excel(detail(), {}, template)
+    ws = openpyxl.load_workbook(output).active
+    assert ws["A13"].value == " 合计 / Total " and ws["J13"].value is None
+    assert str(next(merge for merge in ws.merged_cells.ranges if merge.min_row == 13)) == "A13:C13"
+    assert ws["J1"].value == "Fixed header note"
+    assert template["path"].read_bytes() == content
+
+
+def test_large_currency_totals_widen_without_reformatting_or_changing_values(source):
+    content, payload = source
+    wb = openpyxl.load_workbook(BytesIO(content)); ws = wb.active
+    ws["I13"].number_format = '"EUR "#,##0.00'
+    ws.column_dimensions["I"].width = 20.6
+    out = BytesIO(); wb.save(out); content = out.getvalue()
+    payload["sha256"] = hashlib.sha256(content).hexdigest()
+    saved = templates.save(content, payload, "alice", False)
+    template = templates.load_template(saved["id"], "alice", False, "CZ", {"OMODA"})
+    plan = {"country": "CZ", "month": "2026-10", "lines": [{**detail()["vehicles"][0], "brand": "OMODA", "quantity": 54000}]}
+    output = exporter.generate_monthly_invoice_excel(plan, {"freightEur": 0, "insuranceEur": 0}, template)
+    ws = openpyxl.load_workbook(output).active
+    values = openpyxl.load_workbook(BytesIO(output.getvalue()), data_only=True).active
+    assert ws["I12"].number_format == '"EUR "#,##0.00' and ws.column_dimensions["I"].width >= 22
+    assert values["I12"].value == 5405940 and values["D12"].value == 54000
+    assert ws.column_dimensions["B"].width == 28 and ws["A12"].value == "Total"
+
+
 def test_table_shrinks_footer_moves_and_zero_overrides_do_not_mutate_pi(source):
     content, payload = source
     record = templates.save(content, payload, "alice", False)

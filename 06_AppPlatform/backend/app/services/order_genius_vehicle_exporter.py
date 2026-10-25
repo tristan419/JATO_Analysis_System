@@ -592,7 +592,7 @@ def _render_mapped_invoice(template: dict, context: dict, fields: dict, invoice_
     for old in footer_cells:
         cell = ws.cell(old.row + delta, old.column)
         cell._style, cell.alignment = copy(old._style), copy(old.alignment)
-        if old.row > old_total:
+        if old.row > old_total or (isinstance(old.value, str) and old.data_type != "f"):
             cell.value = old.value
             cell.data_type = old.data_type
     for old_row, row_height in footer_heights.items():
@@ -655,9 +655,14 @@ def _render_mapped_invoice(template: dict, context: dict, fields: dict, invoice_
             if cell.number_format == "General":
                 cell.number_format = "#,##0" if field == "quantity" else "#,##0.00"
             cached[cell.coordinate] = context["unitCount"] if field == "quantity" else sum(cached[f"{letter}{row}"] for row in range(start, total_row))
-    label = next((col for col in range(1, max_col + 1) if col not in columns.values()), 1)
-    if ws.cell(total_row, label).__class__.__name__ != "MergedCell" and label not in {columns[key] for key in ("quantity", "total")}:
-        ws.cell(total_row, label, "Total")
+            if field != "quantity":
+                width = len(f"{cached[cell.coordinate]:,.2f}") + 10
+                ws.column_dimensions[letter].width = max(ws.column_dimensions[letter].width, width)
+    if not any(isinstance(cell.value, str) and cell.data_type != "f" for cell in ws[total_row]):
+        numeric = {columns[key] for key in ("quantity", "fobAmount", "total") if key in columns}
+        label = next((cell for cell in ws[total_row] if cell.column not in numeric and cell.__class__.__name__ != "MergedCell"), None)
+        if label is not None:
+            label.value = "Total"
     ws.auto_filter.ref = None
     wb.defined_names.clear()
     ws.print_area = f"A1:{get_column_letter(max_col)}{max_row + delta}"
