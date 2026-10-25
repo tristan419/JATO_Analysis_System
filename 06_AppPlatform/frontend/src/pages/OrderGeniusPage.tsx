@@ -699,11 +699,14 @@ export function OrderGeniusPage() {
     requiresLogin: boolean;
   } | null>(null);
   const authFailureProbeRef = useRef<Promise<boolean> | null>(null);
+  const authFailureTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     const handleAuthFailure = (event: Event) => {
       const detail = (event as CustomEvent<{ path?: string; status?: number }>).detail;
       const status = Number(detail?.status);
+      if (status !== 401 && status !== 403) return;
+      authFailureTokenRef.current = localStorage.getItem("jato_auth_token");
       if (status === 401) {
         setAuthFailureNotice({
           message: "登录已失效，未保存的 BOM/订单输入仍保留在当前页面；请重新登录后再重试。",
@@ -711,56 +714,35 @@ export function OrderGeniusPage() {
         });
         return;
       }
-      if (status !== 403) return;
       setAuthFailureNotice({
-        message: "正在核验当前登录身份……",
-        requiresLogin: false,
+        message: "请求被拒绝（403），请先重新登录后重试；若仍失败，请联系管理员核对国家、品牌及操作权限。当前输入未清除。",
+        requiresLogin: true,
       });
-      const probe = authFailureProbeRef.current || refreshUser({ preserveSession: true });
-      authFailureProbeRef.current = probe;
-      void probe
-        .then((isValid) => {
-          setAuthFailureNotice(isValid
-            ? {
-                message: "当前账号没有执行此 BOM 操作的权限；输入未清除。",
-                requiresLogin: false,
-              }
-            : {
-                message: "登录已失效，未保存的 BOM/订单输入仍保留在当前页面；请重新登录后再重试。",
-                requiresLogin: true,
-              });
-        })
-        .catch(() => {
-          setAuthFailureNotice({
-            message: "无法核验登录状态；输入未清除，请检查网络后重试。",
-            requiresLogin: false,
-          });
-        })
-        .finally(() => {
-          if (authFailureProbeRef.current === probe) authFailureProbeRef.current = null;
-        });
     };
     window.addEventListener(AUTH_FAILURE_EVENT, handleAuthFailure);
     return () => window.removeEventListener(AUTH_FAILURE_EVENT, handleAuthFailure);
-  }, [refreshUser]);
+  }, []);
 
   useEffect(() => {
     if (!authFailureNotice?.requiresLogin) return undefined;
     const handleWindowFocus = () => {
+      const failedToken = authFailureTokenRef.current;
+      const currentToken = localStorage.getItem("jato_auth_token");
+      if (!currentToken || currentToken === failedToken) return;
       const probe = authFailureProbeRef.current || refreshUser({ preserveSession: true });
       authFailureProbeRef.current = probe;
       void probe
         .then((isValid) => {
-          if (!isValid) return;
+          if (!isValid || authFailureTokenRef.current !== failedToken) return;
           setAuthFailureNotice({
-            message: "登录已恢复，请主动重试刚才的保存。",
+            message: "登录身份已更新，请主动重试刚才的操作；若仍提示403，请联系管理员核对权限。",
             requiresLogin: false,
           });
         })
         .catch(() => {
           setAuthFailureNotice({
             message: "无法核验登录状态；输入未清除，请检查网络后重试。",
-            requiresLogin: false,
+            requiresLogin: true,
           });
         })
         .finally(() => {
@@ -770,23 +752,6 @@ export function OrderGeniusPage() {
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
   }, [authFailureNotice?.requiresLogin, refreshUser]);
-
-  const reLoginAfterAuthFailure = useCallback(() => {
-    const redirect = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    const loginUrl = `/login?redirect=${encodeURIComponent(redirect)}`;
-    let loginWindow: Window | null = null;
-    try {
-      loginWindow = window.open(loginUrl, "_blank", "noopener,noreferrer");
-    } catch {
-      loginWindow = null;
-    }
-    if (!loginWindow) {
-      setAuthFailureNotice({
-        message: "浏览器阻止了登录新标签，请允许弹窗后再重试；当前输入仍保留。",
-        requiresLogin: true,
-      });
-    }
-  }, []);
 
   // ── Upload state ──────────────────────────────────────────────────
   const [showUpload, setShowUpload] = useState(false);
@@ -2537,7 +2502,12 @@ export function OrderGeniusPage() {
           <span>{authFailureNotice.message}</span>
           <span style={{ display: "inline-flex", gap: 8 }}>
             {authFailureNotice.requiresLogin ? (
-              <button type="button" className="btn btn-sm btn-primary" onClick={reLoginAfterAuthFailure}>重新登录</button>
+              <a
+                className="btn btn-sm btn-primary"
+                href={`/login?redirect=${encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >Re-login / 重新登录</a>
             ) : null}
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAuthFailureNotice(null)}>知道了</button>
           </span>
