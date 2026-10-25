@@ -1204,6 +1204,27 @@ def build_matrix(
     )
 
 
+def build_monthly_invoice_plan(session: Session, country_code: str, year: int, month: int,
+                               *, allowed_brands: set[str] | None) -> dict:
+    """Read the full positive monthly plan; never create PI/vehicles or reserve quantity."""
+    if not 2000 <= year <= 2100 or not 1 <= month <= 12:
+        raise ValueError("Choose a valid year/month / 请选择有效年月")
+    matrix = build_matrix(session, country_code, year, include_historical=True, allowed_brands=allowed_brands)
+    lines = []
+    for row in matrix["rows"]:
+        cell = row["months"][str(month)]
+        quantity = cell["quantity"]
+        if quantity <= 0:
+            continue
+        if not cell["isEditable"] or cell["fobEur"] is None or cell["fobEur"] <= 0:
+            raise ValueError(f"{row['materialCode']}: {cell['reason']} / 月计划存在无有效报价的非零数量，请先核对")
+        lines.append({**row, "quantity": quantity, "fobEur": cell["fobEur"],
+                      "exteriorColorName": row["colour"], "exteriorColorCode": row["colourCode"]})
+    if not lines:
+        raise ValueError("No positive monthly quantities / 当前国家及月份没有非零月计划数量")
+    return {"country": country_code, "month": f"{year:04d}-{month:02d}", "lines": lines}
+
+
 def build_matrix_batch(
     session: Session,
     country_codes: list[str],

@@ -1,22 +1,19 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { PiInvoiceContext, PiInvoiceOptions, PiOrderHeader, PiTemplateCatalog } from "../types/orderGeniusVehicle";
+import type { PiInvoiceContext, PiInvoiceOptions, PiTemplateCatalog } from "../types/orderGeniusVehicle";
 import { ConfirmDialog, type ConfirmDialogError } from "./ConfirmDialog";
 import { PiInvoiceTemplateManager } from "./PiInvoiceTemplateManager";
 
 const EMPTY_COUNTRIES: readonly string[] = [];
 interface Props {
-  piCode?: string;
   countries?: readonly string[];
   month?: string;
-  onCreatePi?: () => void;
   onClose: () => void;
 }
 
-export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, month, onCreatePi, onClose }: Props) {
-  const [pis, setPis] = useState<PiOrderHeader[]>([]);
-  const [loadingPis, setLoadingPis] = useState(!piCode);
-  const [selected, setSelected] = useState(piCode ?? "");
+export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onClose }: Props) {
+  const [country, setCountry] = useState(countries[0] ?? "");
+  const [period, setPeriod] = useState(month ?? "");
   const [context, setContext] = useState<PiInvoiceContext | null>(null);
   const [catalog, setCatalog] = useState<PiTemplateCatalog | null>(null);
   const [templateId, setTemplateId] = useState("");
@@ -32,53 +29,24 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
     message: cause instanceof Error ? cause.message : String(cause) });
 
   useEffect(() => {
-    if (piCode) return;
     let cancelled = false;
-    setLoadingPis(true); setPis([]); setSelected(""); setError(null);
-    void Promise.all(countries.map((country) => api.getVehicleAllocationPis({ country, month, pageSize: 200 })))
-      .then((responses) => {
-        if (cancelled) return;
-        if (responses.some((response) => response.total > response.items.length)) {
-          throw new Error("Choose a month to narrow the saved PI list / 请选择月份缩小已保存 PI 范围");
-        }
-        const rows = [...new Map(responses.flatMap((response) => response.items).map((header) => [header.piCode, header])).values()];
-        setPis(rows);
-        setSelected(rows[0]?.piCode ?? "");
-      }).catch((cause: unknown) => { if (!cancelled) fail(cause); })
-      .finally(() => { if (!cancelled) setLoadingPis(false); });
-    return () => { cancelled = true; };
-  }, [piCode, countries, month]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setCatalog(null); setTemplateId(""); setContext(null); setOptions(null); setError(null);
-    if (!selected) return;
-    void api.getPiInvoiceTemplates(selected).then((next) => {
-      if (cancelled) return;
-      setCatalog(next); setTemplateId(next.items[0]?.id ?? "");
-      if (!next.items.length) fail(new Error("No matching template. Upload your country's XLSX / 无匹配模板，请上传本国XLSX模板"));
-    }).catch((cause: unknown) => { if (!cancelled) fail(cause); });
-    return () => { cancelled = true; };
-  }, [selected, revision]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setContext(null); setOptions(null);
+    setCatalog(null); setContext(null); setOptions(null); setError(null);
     setFreight(""); setInsurance(""); setHandling("0");
-    if (!selected || !templateId) return;
-    setError(null);
-    void api.getPiInvoiceContext(selected, templateId).then((next) => {
-      if (!cancelled) { setContext(next); setOptions(next.defaults); }
+    if (!country || !/^\d{4}-\d{2}$/.test(period)) return;
+    void api.getMonthlyInvoiceContext(country, period, templateId).then((next) => {
+      if (cancelled) return;
+      setCatalog(next.catalog); setContext(next.context); setOptions(next.context?.defaults ?? null);
+      if (!next.context) fail(new Error(next.error ?? "No matching template. Upload your country's XLSX / 无匹配模板，请上传本国XLSX模板"));
     }).catch((cause: unknown) => { if (!cancelled) fail(cause); });
     return () => { cancelled = true; };
-  }, [selected, templateId]);
+  }, [country, period, templateId, revision]);
 
   async function download(): Promise<void> {
     if (!context || !options || busy) return;
     const amounts: Record<"freightEur" | "insuranceEur" | "handlingEur", string> = {
       freightEur: freight, insuranceEur: insurance, handlingEur: handling,
     };
-    const payload: PiInvoiceOptions = { ...options, templateId };
+    const payload: PiInvoiceOptions = { ...options, templateId: context.templateKey };
     if (context.templateRevision) payload.templateRevision = context.templateRevision;
     for (const key of ["freightEur", "insuranceEur", "handlingEur"] as const) {
       if (context.charges && !context.charges.includes(key)) continue;
@@ -92,40 +60,38 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
     }
     if ((context.missingFreightUnits > 0 && payload.freightEur === undefined)
       || (context.missingInsuranceUnits > 0 && payload.insuranceEur === undefined)) {
-      fail(new Error("Some vehicles have no saved costs. Fill costs here or update vehicles first / 部分车辆运保费为空，请在此填写或先维护车辆费用")); return;
+      fail(new Error("Enter unit freight and insurance; zero is allowed / 月计划没有每车费用，请填写运保费，可明确填0")); return;
     }
     setError(null); setBusy(true);
     try {
-      const blob = await api.exportPiInvoice(selected, payload);
+      const blob = await api.exportMonthlyInvoice(country, period, payload);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = url; link.download = `Proforma_${selected}.xlsx`;
+      link.href = url; link.download = `Proforma_${country}_${period}.xlsx`;
       link.click(); URL.revokeObjectURL(url);
       onClose();
     } catch (cause: unknown) { fail(cause); }
     finally { setBusy(false); }
   }
 
-  if (manage && catalog) return <PiInvoiceTemplateManager key={selected} initial={catalog} onClose={() => { setManage(false); setRevision((value) => value + 1); }} />;
-  return <ConfirmDialog title="Export PI" description="Complete saved PI · historical FOB unchanged / 导出完整已保存 PI，不更改成交价"
+  if (manage && catalog) return <PiInvoiceTemplateManager key={`${country}-${period}`} initial={catalog} onClose={() => { setManage(false); setTemplateId(""); setRevision((value) => value + 1); }} />;
+  return <ConfirmDialog title="Export PI" description="Monthly plan → template file only / 月计划直接套版，仅生成文件，不创建PI或车辆"
     cancelLabel="Close" confirmLabel="Download XLSX" loadingLabel="Exporting..." submitting={busy}
     confirmDisabled={!context || !options} error={error} onCancel={onClose} onConfirm={() => void download()}>
-    {!piCode ? <label>Saved PI / 已保存 PI<select aria-label="Saved PI" value={selected} onChange={(event) => setSelected(event.target.value)} disabled={busy || loadingPis}>
-      {!pis.length ? <option value="">{loadingPis ? "Loading saved PIs / 正在读取已保存PI" : error ? "PI list unavailable / PI列表读取失败" : "No saved PI in this country / month"}</option> : null}
-      {pis.map((header) => <option key={header.piCode} value={header.piCode}>{header.piCode}</option>)}
-    </select></label> : <p>{piCode}</p>}
-    {!piCode ? <p>Scope / 范围：{countries.join(" / ")} · {month ?? "All months / 全部月份"}</p> : null}
-    {!piCode && !loadingPis && !selected && !error ? <div role="status">
-      <p>No saved PI in this scope. Monthly plan quantities are not yet a PI; uploading a template does not create an order / 当前范围尚无已保存PI。月计划数量还不是PI，上传模板不会创建订单。</p>
-      <p>Open PI Batch, review the month, remaining quantities and order date, then confirm Create PI before exporting. Existing templates can be reused across months / 请进入PI Batch核对月份、剩余数量及下单日期，确认创建PI后再导出。已有模板可跨月复用。</p>
-      {onCreatePi ? <button type="button" className="btn btn-sm btn-primary" onClick={onCreatePi}>Open PI Batch / 核对并创建PI</button> : null}
-    </div> : null}
-    {catalog ? <p><label>PI template / 导出模板<select aria-label="PI template" value={templateId} disabled={busy} onChange={(event) => setTemplateId(event.target.value)}>
+    <div className="pi-invoice-export-fields">
+      <label>Country / 国家<select aria-label="Invoice country" value={country} disabled={busy} onChange={(event) => { setContext(null); setCountry(event.target.value); setTemplateId(""); }}>
+        {!countries.length ? <option value="">Choose a country / 请先选择国家</option> : null}
+        {countries.map((code) => <option key={code} value={code}>{code}</option>)}
+      </select></label>
+      <label>Plan month / 计划月份<input aria-label="Plan month" type="month" value={period} disabled={busy} onChange={(event) => { setContext(null); setPeriod(event.target.value); setTemplateId(""); }} /></label>
+    </div>
+    <p>All positive quantities for this country/month; templates are reusable across months / 读取该国家当月全部非零月计划，模板跨月复用，不扣分车余量。</p>
+    {catalog ? <p><label>PI template / 导出模板<select aria-label="PI template" value={templateId || catalog.items[0]?.id || ""} disabled={busy} onChange={(event) => { setContext(null); setTemplateId(event.target.value); }}>
       {!catalog.items.length ? <option value="">No matching template / 无匹配模板</option> : null}
       {catalog.items.map((item, index) => <option key={item.id} value={item.id}>{item.name} · {item.owner}{index === 0 ? " · Default" : ""}</option>)}
     </select></label> <button type="button" disabled={busy} onClick={() => setManage(true)}>Manage templates / 管理模板</button></p> : null}
     {context && options ? <>
-      <p>{context.templateName} · {context.unitCount} vehicles · {context.lineCount} PI lines</p>
+      <p>{country} · {period} · {context.templateName} · {context.unitCount} units / 台 · {context.lineCount} material lines / 物料行</p>
       <p><strong>{context.buyerName}</strong><br />{context.buyerAddress}{context.buyerEmail ? <><br />{context.buyerEmail}</> : null}</p>
       <details><summary>Template details / 模板固定资料</summary>
         <p>{context.sellerName}<br />{context.sellerAddress}<br />{context.priceTerm} · {context.paymentTerm}</p>
@@ -138,17 +104,17 @@ export function PiInvoiceExportDialog({ piCode, countries = EMPTY_COUNTRIES, mon
           <input type={key === "invoiceDate" ? "date" : "text"} value={options[key]} disabled={busy}
             onChange={(event) => setOptions({ ...options, [key]: event.target.value })} />
         </label>)}
-        {!context.charges || context.charges.includes("freightEur") ? <label>Freight / 运费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Blank: saved vehicle costs" value={freight} disabled={busy} onChange={(event) => setFreight(event.target.value)} /></label> : null}
-        {!context.charges || context.charges.includes("insuranceEur") ? <label>Insurance / 保费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Blank: saved vehicle costs" value={insurance} disabled={busy} onChange={(event) => setInsurance(event.target.value)} /></label> : null}
+        {!context.charges || context.charges.includes("freightEur") ? <label>Freight / 运费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Required / 必填，可填0" value={freight} disabled={busy} onChange={(event) => setFreight(event.target.value)} /></label> : null}
+        {!context.charges || context.charges.includes("insuranceEur") ? <label>Insurance / 保费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Required / 必填，可填0" value={insurance} disabled={busy} onChange={(event) => setInsurance(event.target.value)} /></label> : null}
         {context.templateKey === "CH_OJ" || context.charges?.includes("handlingEur") ? <label>Handling Charges / 操作费 (EUR / unit)<input type="number" min="0" step="0.01" value={handling} disabled={busy} onChange={(event) => setHandling(event.target.value)} /></label> : null}
       </div>
-      <p>Missing saved costs / 未填费用：Freight {context.missingFreightUnits} · Insurance {context.missingInsuranceUnits}. Entered costs override every unit for this file only; blank preserves each unit / 本次填写的费用统一用于本文件，留空保留每车费用。不写回订单。</p>
+      <p>Unit charges apply to every unit in this file only. No order, vehicle, quantity or quote is changed / 每台费用仅用于本文件；不创建订单/车辆，不修改数量或报价。</p>
       <p>Check ports before each export, especially when the LC destination differs / 每次导出请核对港口，尤其 LC 目的港不同的情况。</p>
-    </> : selected && !error ? <p>Loading template and PI / 正在读取模板与 PI...</p> : null}
+    </> : country && period && !error ? <p>Loading monthly plan and template / 正在读取月计划与模板...</p> : !error ? <p>Choose a country and plan month / 请选择国家和计划月份。</p> : null}
     <style>{`
       .pi-invoice-export-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
       .pi-invoice-export-fields label{display:grid;gap:6px;font-size:13px;min-width:0}
-      .pi-invoice-export-fields input{width:100%;min-width:0;padding:8px;border:1px solid #cbd5e1;border-radius:6px}
+      .pi-invoice-export-fields input,.pi-invoice-export-fields select{width:100%;min-width:0;padding:8px;border:1px solid #cbd5e1;border-radius:6px}
       .pi-invoice-bank-details{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:12px}
       @media(max-width:640px){.pi-invoice-export-fields{grid-template-columns:1fr}}
     `}</style>

@@ -49,7 +49,9 @@ from app.services.order_genius_vehicle_service import (
     update_vehicle_unit,
 )
 from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
-from app.services.order_genius_vehicle_exporter import generate_pi_invoice_excel, pi_invoice_context
+from app.services.order_genius_vehicle_exporter import (generate_pi_invoice_excel, pi_invoice_context,
+    generate_monthly_invoice_excel, monthly_invoice_context)
+from app.services.order_genius_service import build_monthly_invoice_plan
 from app.services import pi_invoice_templates as invoice_templates
 from app.db.models import User, VehicleCustomColumn
 from sqlalchemy import select, func
@@ -494,6 +496,10 @@ def _template_scope(session: Session, user: UserContext, pi_code: str) -> tuple:
 
 def _selected_template(session: Session, user: UserContext, pi_code: str, template_id: str = "") -> dict | None:
     _, country, brands = _template_scope(session, user, pi_code)
+    return _scoped_template(user, country, brands, template_id)
+
+
+def _scoped_template(user: UserContext, country: str, brands: set[str], template_id: str = "") -> dict | None:
     if not template_id:
         items = invoice_templates.catalog(user.name, is_admin(user.role), country, brands)["items"]
         template_id = items[0]["id"] if items else ""
@@ -544,6 +550,54 @@ def list_scoped_invoice_templates(country: str, brands: str, owner: str = "", se
                                   user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
     country, selected = _management_scope(session, user, country, brands.split(","))
     return _template_catalog(user, country, selected, owner)
+
+
+def _monthly_invoice_plan(session: Session, user: UserContext, country: str, month: str) -> tuple:
+    country = country.strip().upper()
+    if len(country) != 2 or not country.isascii() or not country.isalpha():
+        raise HTTPException(400, "Choose one country / 请选择一个国家")
+    try:
+        period = date.fromisoformat(f"{month}-01")
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Choose YYYY-MM / 请选择有效年月") from None
+    _validate_country(session, user, country)
+    plan = build_monthly_invoice_plan(session, country, period.year, period.month,
+                                      allowed_brands=ordering_brands(session, user))
+    brands = {line["brand"] for line in plan["lines"]}
+    _management_scope(session, user, country, list(brands))
+    return plan, brands
+
+
+@router.get("/monthly-invoice")
+def preview_monthly_invoice(country: str, month: str, template_id: str = "", session: Session = Depends(get_db_session),
+                            user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
+    try:
+        plan, brands = _monthly_invoice_plan(session, user, country, month)
+        catalog = _template_catalog(user, plan["country"], brands, "")
+        try:
+            template = _scoped_template(user, plan["country"], brands, template_id) if catalog["items"] or template_id else None
+            context = monthly_invoice_context(plan, template) if catalog["items"] or template_id else None
+        except (ValueError, FileNotFoundError) as exc:
+            return {"catalog": catalog, "context": None, "error": str(_template_error(exc).detail)}
+        return {"catalog": catalog, "context": context}
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise _template_error(exc) from exc
+
+
+@router.post("/monthly-invoice")
+def export_monthly_invoice(country: str, month: str, body: dict, session: Session = Depends(get_db_session),
+                           user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> StreamingResponse:
+    try:
+        plan, brands = _monthly_invoice_plan(session, user, country, month)
+        template = _scoped_template(user, plan["country"], brands, body.get("templateId", ""))
+        if template and body.get("templateRevision") != template["updatedAt"]:
+            raise ValueError("Template changed since preview; reload before exporting / 模板自预览后有变化，请重读再导出")
+        buf = generate_monthly_invoice_excel(plan, body, template)
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        raise _template_error(exc) from exc
+    filename = f"Proforma_{plan['country']}_{plan['month']}.xlsx"
+    return StreamingResponse(buf, media_type=XLSX_MEDIA_TYPE,
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.post("/invoice-templates/preview")

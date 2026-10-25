@@ -201,3 +201,54 @@ def test_unconfigured_template_returns_actionable_error(tmp_path, monkeypatch):
     monkeypatch.setattr(exporter, "PI_TEMPLATE_ROOT", tmp_path)
     with pytest.raises(ValueError, match="contact|管理员"):
         exporter.pi_invoice_context(pi())
+
+
+@pytest.mark.parametrize("country,qty_col,total_col,date_cell,ref_cell", [
+    ("CH", "F", "L", "J9", "J10"), ("SE", "H", "M", "K8", "K9"),
+])
+def test_one_template_is_reusable_for_monthly_plans_without_fake_vehicle_units(
+    templates, country, qty_col, total_col, date_cell, ref_cell,
+):
+    line = {**pi(country)["vehicles"][0], "quantity": 54}
+    line.pop("freightEur"); line.pop("insuranceEur")
+    plan = {"country": country, "month": "2026-10", "lines": [line]}
+    before = deepcopy(plan)
+    original = (templates / f"{country}_OJ.xlsx").read_bytes()
+    options = {"invoiceDate": "2026-10-25", "freightEur": 1700, "insuranceEur": 20}
+    output = exporter.generate_monthly_invoice_excel(plan, options)
+    values = openpyxl.load_workbook(BytesIO(output.getvalue()), data_only=True).active
+    assert values[f"{qty_col}29"].value == 54
+    assert values[f"{total_col}29"].value == 632885.94
+    assert str(values[date_cell].value).startswith("2026-10-25")
+    assert values[ref_cell].value == f"PI-{country}-202610"
+    assert plan == before
+    plan.update(month="2026-11", lines=[{**line, "quantity": 4, "materialCode": "NEW-MATERIAL", "fobEur": 12000}])
+    later = openpyxl.load_workbook(exporter.generate_monthly_invoice_excel(plan, {**options, "invoiceDate": "2026-11-02"}), data_only=True).active
+    assert later[f"{qty_col}29"].value == 4 and later[f"{total_col}29"].value == 54880
+    assert later[ref_cell].value == f"PI-{country}-202611"
+    assert str(later[date_cell].value).startswith("2026-11-02")
+    assert (templates / f"{country}_OJ.xlsx").read_bytes() == original
+
+
+def test_monthly_plan_requires_explicit_costs(templates):
+    plan = {"country": "CH", "month": "2026-10", "lines": [{**pi("CH")["vehicles"][0], "quantity": 2}]}
+    with pytest.raises(ValueError, match="Freight"):
+        exporter.generate_monthly_invoice_excel(plan, {})
+    out = exporter.generate_monthly_invoice_excel(plan, {"freightEur": 0, "insuranceEur": 0})
+    assert openpyxl.load_workbook(out, data_only=True).active["L29"].value == 20000.22
+
+
+def test_monthly_export_denies_country_before_reading_plan_or_template(monkeypatch):
+    monkeypatch.setattr(route, "_validate_country", Mock(side_effect=HTTPException(403, "Unauthorized country")))
+    read = Mock(); monkeypatch.setattr(route, "build_monthly_invoice_plan", read)
+    with pytest.raises(HTTPException) as error:
+        route.preview_monthly_invoice("CH", "2026-10", "", Mock(), Mock())
+    assert error.value.status_code == 403
+    read.assert_not_called()
+
+
+@pytest.mark.parametrize("month", ["", "2026-13", "202610", "2026-10-01"])
+def test_monthly_export_rejects_missing_or_invalid_month(month):
+    with pytest.raises(HTTPException) as error:
+        route.preview_monthly_invoice("CH", month, "", Mock(), Mock())
+    assert error.value.status_code == 400

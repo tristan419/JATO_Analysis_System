@@ -70,6 +70,59 @@ def sku(db, code, tier, brand="JAECOO", template="T**001", model="JAECOO7 SHS", 
     return value
 
 
+def test_monthly_invoice_reads_plan_and_effective_month_price_without_any_db_writes(db):
+    from sqlalchemy import event
+    from app.api.routes import order_genius_vehicle_allocation as invoice_route
+    sku(db, "S", "single"); fob(db, "S", 1500, base=1500)
+    service.update_quantity_cell(db, "CH", 2026, 10, "S", 54, "test", 1)
+    db.commit()  # Finish fixture writes before observing the read-only export.
+    statements = []
+    def capture(_conn, _cursor, statement, _params, _context, _many):
+        statements.append(statement.lstrip().upper())
+    event.listen(db.bind, "before_cursor_execute", capture)
+    try:
+        plan, brands = invoice_route._monthly_invoice_plan(db, SimpleNamespace(name="admin", role="admin"), "CH", "2026-10")
+        assert brands == {"JAECOO"}
+        assert [(line["materialCode"], line["quantity"], line["fobEur"]) for line in plan["lines"]] == [("S", 54, 1500)]
+    finally:
+        event.remove(db.bind, "before_cursor_execute", capture)
+    assert statements and all(statement.startswith("SELECT") for statement in statements)
+    assert all("PI_ORDER" not in statement and "PI_VEHICLE" not in statement for statement in statements)
+    cell = db.scalars(select(models.OrderQuantityCell)).one()
+    assert cell.quantity == 54 and cell.row_version == 1
+    assert float(db.scalars(select(models.CountrySkuFobResolved)).one().final_fob_eur) == 1500
+
+
+def test_monthly_invoice_has_no_remaining_quantity_or_current_date_dependency(db):
+    sku(db, "S", "single"); fob(db, "S", 1500, base=1500)
+    release_period(db, ["S"], start=date(2026, 10, 15), end=date(2026, 10, 25))
+    service.update_quantity_cell(db, "CH", 2026, 10, "S", 7, "test", 1)
+    plan = service.build_monthly_invoice_plan(db, "CH", 2026, 10, allowed_brands={"JAECOO"})
+    assert plan["lines"][0]["quantity"] == 7 and plan["lines"][0]["fobEur"] == 1000
+    assert plan["lines"][0]["months"]["10"]["requiresOrderDate"] is True
+    with pytest.raises(ValueError, match="No positive"):
+        service.build_monthly_invoice_plan(db, "CH", 2026, 9, allowed_brands={"JAECOO"})
+    with pytest.raises(ValueError, match="No positive"):
+        service.build_monthly_invoice_plan(db, "CH", 2026, 10, allowed_brands={"OMODA"})
+
+
+@pytest.mark.parametrize("failure", ["no_price", "unreleased", "paused", "conflict"])
+def test_monthly_invoice_never_omits_unquotable_positive_plan_rows(db, failure):
+    sku(db, "S", "single"); price = fob(db, "S", 1500, base=1500)
+    service.update_quantity_cell(db, "CH", 2026, 10, "S", 7, "test", 1)
+    if failure == "no_price":
+        db.delete(price)
+    elif failure == "unreleased":
+        repo.save_default_colour_scope(db, "CH", "T**001", [], "test")
+    else:
+        for start, end, base in [(1, 15, 0 if failure == "paused" else 1000), (16, 31, 0 if failure == "paused" else 1200)]:
+            db.add(models.CountryTemplateFobPeriod(country_code="CH", bom_template="T**001", valid_from=date(2026, 10, start),
+                valid_to=date(2026, 10, end), base_fob_eur=base, status="active"))
+    db.commit()
+    with pytest.raises(ValueError, match="S:"):
+        service.build_monthly_invoice_plan(db, "CH", 2026, 10, allowed_brands=None)
+
+
 def fob(db, code, value, base=None, surcharge=None, term="TT", country="CH", source="template_base"):
     row = models.CountrySkuFobResolved(
         baseline_version_id=db.info["baseline"], material_code=code, country_code=country,

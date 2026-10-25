@@ -3417,9 +3417,6 @@ export function OrderGeniusPage() {
 
       {showInvoiceExport ? <PiInvoiceExportDialog countries={selectedCountries}
         month={selectedMonth == null ? undefined : `${selectedYear}-${String(selectedMonth).padStart(2, "0")}`}
-        onCreatePi={canFillOrders ? () => {
-          setShowInvoiceExport(false); setControlTab("pi"); setShowDeck(true);
-        } : undefined}
         onClose={() => setShowInvoiceExport(false)} /> : null}
       {showPiTemplates && canFillOrders ? <PiInvoiceTemplateManager key={`pi-templates:${authorizationKey}`}
         countries={isAdmin ? countries.map((item) => item.countryCode) : userCountries}

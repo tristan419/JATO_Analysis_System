@@ -5350,6 +5350,14 @@ export const api = {
   getPiInvoiceContext: (piCode: string, templateId?: string) =>
     request<PiInvoiceContext>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/${templateId ? `invoice-context/${encodeURIComponent(templateId)}` : "invoice"}`),
 
+  getMonthlyInvoiceContext: (country: string, month: string, templateId = "") =>
+    request<{ catalog: PiTemplateCatalog; context: PiInvoiceContext | null; error?: string }>(`/order-genius/vehicle-allocation/monthly-invoice?${new URLSearchParams({ country, month, template_id: templateId })}`),
+
+  exportMonthlyInvoice: (country: string, month: string, options: PiInvoiceOptions) =>
+    requestBlob(`/order-genius/vehicle-allocation/monthly-invoice?${new URLSearchParams({ country, month })}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options),
+    }),
+
   getPiInvoiceTemplates: (piCode: string, owner = "") =>
     request<PiTemplateCatalog>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/invoice-templates${owner ? `?owner=${encodeURIComponent(owner)}` : ""}`),
 
