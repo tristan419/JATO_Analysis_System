@@ -238,6 +238,63 @@ def test_monthly_plan_requires_explicit_costs(templates):
     assert openpyxl.load_workbook(out, data_only=True).active["L29"].value == 20000.22
 
 
+@pytest.fixture
+def model_plan():
+    base = pi("CH")["vehicles"][0]
+    return {"country": "CH", "month": "2026-10", "lines": [
+        {**base, "brand": brand, "modelName": model, "version": trim, "quantity": qty, "materialCode": f"M-{i}"}
+        for i, (brand, model, trim, qty) in enumerate([
+            ("JAECOO", "MODEL A", "Select", 2), ("JAECOO", "MODEL A", "Exclusive", 3),
+            ("JAECOO", "MODEL B", "Select", 5), ("OMODA", "MODEL A", "Select", 1),
+        ])]}
+
+
+def test_monthly_model_groups_use_brand_and_model_not_trim_and_do_not_mutate(templates, model_plan):
+    before = deepcopy(model_plan)
+    context = exporter.monthly_invoice_context(model_plan)
+    assert context["freightModels"] == [
+        {"brand": "JAECOO", "modelName": "MODEL A", "unitCount": 5},
+        {"brand": "JAECOO", "modelName": "MODEL B", "unitCount": 5},
+        {"brand": "OMODA", "modelName": "MODEL A", "unitCount": 1},
+    ]
+    costs = [{**model, "freightEur": rate} for model, rate in zip(context["freightModels"], (1700, 1750, 0))]
+    out = exporter.generate_monthly_invoice_excel(model_plan, {"modelFreightEur": costs, "insuranceEur": 20})
+    ws = openpyxl.load_workbook(BytesIO(out.getvalue()), data_only=True).active
+    assert [ws[f"I{row}"].value for row in range(28, 32)] == [1700, 1700, 1750, 0]
+    assert ws["F32"].value == 11 and ws["L32"].value == 127471.21
+    formulas = openpyxl.load_workbook(out).active
+    assert formulas["L32"].value == "=SUM(L28:L31)"
+    uniform = openpyxl.load_workbook(exporter.generate_monthly_invoice_excel(model_plan,
+        {"freightEur": 1700, "insuranceEur": 20}), data_only=True).active
+    assert [uniform[f"I{row}"].value for row in range(28, 32)] == [1700] * 4
+    assert uniform["L32"].value == 128921.21
+    assert model_plan == before
+
+
+@pytest.mark.parametrize("groups", [None, {}, "1700", [],
+    [{"brand": "JAECOO", "modelName": "MODEL A", "freightEur": 1700}],
+    [{"brand": "OTHER", "modelName": "MODEL A", "freightEur": 1700}],
+    [{"brand": [], "modelName": "MODEL A", "freightEur": 1700}],
+    [None],
+    [{"brand": "JAECOO", "modelName": "MODEL A", "freightEur": 1}] * 3,
+])
+def test_monthly_model_freight_never_guesses_missing_extra_duplicate_or_malformed_groups(templates, model_plan, groups):
+    with pytest.raises(ValueError, match="freight|Freight|运费"):
+        exporter.generate_monthly_invoice_excel(model_plan, {"modelFreightEur": groups, "insuranceEur": 20})
+
+
+@pytest.mark.parametrize("value", [None, "", -1, float("nan"), float("inf"), 1e12, True])
+def test_monthly_model_amounts_reuse_money_validation(templates, model_plan, value):
+    groups = [{**model, "freightEur": value} for model in exporter.monthly_invoice_context(model_plan)["freightModels"]]
+    with pytest.raises(ValueError, match="Freight|运费"):
+        exporter.generate_monthly_invoice_excel(model_plan, {"modelFreightEur": groups, "insuranceEur": 20})
+
+
+def test_monthly_freight_rejects_both_modes_even_with_a_uniform_fallback(templates, model_plan):
+    with pytest.raises(ValueError, match="Choose uniform or model"):
+        exporter.generate_monthly_invoice_excel(model_plan, {"modelFreightEur": [], "freightEur": 1700, "insuranceEur": 20})
+
+
 def test_monthly_export_denies_country_before_reading_plan_or_template(monkeypatch):
     monkeypatch.setattr(route, "_validate_country", Mock(side_effect=HTTPException(403, "Unauthorized country")))
     read = Mock(); monkeypatch.setattr(route, "build_monthly_invoice_plan", read)

@@ -16,11 +16,13 @@ export interface PiInvoiceOptions {
   portOfShipment: string;
   portOfDischarge: string;
   freightEur?: number;
+  modelFreightEur?: { brand: string; modelName: string; freightEur: number }[];
   insuranceEur?: number;
   handlingEur?: number;
 }
 
 export interface PiInvoiceContext {
+  freightModels?: { brand: string; modelName: string; unitCount: number }[];
   templateRevision?: string;
   charges?: PiTemplateCharge[];
   piCode: string;

@@ -21,6 +21,8 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
   const [revision, setRevision] = useState(0);
   const [options, setOptions] = useState<PiInvoiceOptions | null>(null);
   const [freight, setFreight] = useState("");
+  const [freightByModel, setFreightByModel] = useState(false);
+  const [modelFreight, setModelFreight] = useState<Record<string, string>>({});
   const [insurance, setInsurance] = useState("");
   const [handling, setHandling] = useState("0");
   const [busy, setBusy] = useState(false);
@@ -32,6 +34,7 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
     let cancelled = false;
     setCatalog(null); setContext(null); setOptions(null); setError(null);
     setFreight(""); setInsurance(""); setHandling("0");
+    setFreightByModel(false); setModelFreight({});
     if (!country || !/^\d{4}-\d{2}$/.test(period)) return;
     void api.getMonthlyInvoiceContext(country, period, templateId).then((next) => {
       if (cancelled) return;
@@ -48,7 +51,24 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
     };
     const payload: PiInvoiceOptions = { ...options, templateId: context.templateKey };
     if (context.templateRevision) payload.templateRevision = context.templateRevision;
+    if (freightByModel) {
+      const models = context.freightModels ?? [];
+      if (!models.length) { fail(new Error("Reload the monthly plan / 请重读月计划车型")); return; }
+      const missing = models.filter((model) => !modelFreight[JSON.stringify([model.brand, model.modelName])]?.trim());
+      if (missing.length) {
+        fail(new Error(`Enter freight for / 请填写车型运费：${missing.map((model) => `${model.brand} · ${model.modelName}`).join(", ")}`)); return;
+      }
+      payload.modelFreightEur = [];
+      for (const model of models) {
+        const value = Number(modelFreight[JSON.stringify([model.brand, model.modelName])]);
+        if (!Number.isFinite(value) || value < 0 || value >= 1e12) {
+          fail(new Error(`Invalid freight / 车型运费无效：${model.brand} · ${model.modelName}`)); return;
+        }
+        payload.modelFreightEur.push({ brand: model.brand, modelName: model.modelName, freightEur: value });
+      }
+    }
     for (const key of ["freightEur", "insuranceEur", "handlingEur"] as const) {
+      if (key === "freightEur" && freightByModel) continue;
       if (context.charges && !context.charges.includes(key)) continue;
       const text = amounts[key].trim();
       if (!text) continue;
@@ -58,7 +78,7 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
       }
       payload[key] = value;
     }
-    if ((context.missingFreightUnits > 0 && payload.freightEur === undefined)
+    if ((context.missingFreightUnits > 0 && !freightByModel && payload.freightEur === undefined)
       || (context.missingInsuranceUnits > 0 && payload.insuranceEur === undefined)) {
       fail(new Error("Enter unit freight and insurance; zero is allowed / 月计划没有每车费用，请填写运保费，可明确填0")); return;
     }
@@ -104,11 +124,28 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
           <input type={key === "invoiceDate" ? "date" : "text"} value={options[key]} disabled={busy}
             onChange={(event) => setOptions({ ...options, [key]: event.target.value })} />
         </label>)}
-        {!context.charges || context.charges.includes("freightEur") ? <label>Freight / 运费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Required / 必填，可填0" value={freight} disabled={busy} onChange={(event) => setFreight(event.target.value)} /></label> : null}
+        {!context.charges || context.charges.includes("freightEur") ? <fieldset className="pi-invoice-freight">
+          <legend>Freight settings / 运费设置</legend>
+          <label className="pi-invoice-freight-toggle"><input type="checkbox" checked={freightByModel} disabled={busy || !context.freightModels?.length}
+            onChange={(event) => {
+              setFreightByModel(event.target.checked);
+              if (event.target.checked) setModelFreight((current) => Object.fromEntries((context.freightModels ?? []).map((model) => {
+                const key = JSON.stringify([model.brand, model.modelName]);
+                return [key, current[key] ?? freight];
+              })));
+            }} />By model / 按车型设置运费</label>
+          {freightByModel ? (context.freightModels ?? []).map((model) => {
+            const key = JSON.stringify([model.brand, model.modelName]);
+            return <label key={key} className="pi-invoice-model-freight"><span>{model.brand} · {model.modelName} · {model.unitCount} units / 台</span>
+              <input aria-label={`${model.brand} · ${model.modelName} freight / 运费`} type="number" min="0" step="0.01" placeholder="EUR / unit" value={modelFreight[key] ?? ""} disabled={busy}
+                onChange={(event) => setModelFreight({ ...modelFreight, [key]: event.target.value })} />
+            </label>;
+          }) : <label>Freight / 运费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Required / 必填，可填0" value={freight} disabled={busy} onChange={(event) => setFreight(event.target.value)} /></label>}
+        </fieldset> : null}
         {!context.charges || context.charges.includes("insuranceEur") ? <label>Insurance / 保费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Required / 必填，可填0" value={insurance} disabled={busy} onChange={(event) => setInsurance(event.target.value)} /></label> : null}
         {context.templateKey === "CH_OJ" || context.charges?.includes("handlingEur") ? <label>Handling Charges / 操作费 (EUR / unit)<input type="number" min="0" step="0.01" value={handling} disabled={busy} onChange={(event) => setHandling(event.target.value)} /></label> : null}
       </div>
-      <p>Unit charges apply to every unit in this file only. No order, vehicle, quantity or quote is changed / 每台费用仅用于本文件；不创建订单/车辆，不修改数量或报价。</p>
+      <p>Freight is uniform unless grouped by model; insurance and handling stay uniform. File only; no order, vehicle, quantity or quote changes / 默认统一运费，勾选才按车型；保费及操作费仍统一。仅用于本文件，不创建订单/车辆，不修改数量或报价。</p>
       <p>Check ports before each export, especially when the LC destination differs / 每次导出请核对港口，尤其 LC 目的港不同的情况。</p>
     </> : country && period && !error ? <p>Loading monthly plan and template / 正在读取月计划与模板...</p> : !error ? <p>Choose a country and plan month / 请选择国家和计划月份。</p> : null}
     <style>{`
@@ -116,6 +153,10 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
       .pi-invoice-export-fields label{display:grid;gap:6px;font-size:13px;min-width:0}
       .pi-invoice-export-fields input,.pi-invoice-export-fields select{width:100%;min-width:0;padding:8px;border:1px solid #cbd5e1;border-radius:6px}
       .pi-invoice-bank-details{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:12px}
+      .pi-invoice-freight{grid-column:1/-1;min-width:0;margin:0;padding:12px;border:1px solid #cbd5e1;border-radius:6px;display:grid;gap:10px}
+      .pi-invoice-export-fields .pi-invoice-freight-toggle{display:flex;align-items:center;gap:8px}
+      .pi-invoice-freight-toggle input[type=checkbox]{width:auto;flex:none}
+      .pi-invoice-export-fields .pi-invoice-model-freight{display:grid;grid-template-columns:minmax(0,1fr) 130px;align-items:center}
       @media(max-width:640px){.pi-invoice-export-fields{grid-template-columns:1fr}}
     `}</style>
   </ConfirmDialog>;

@@ -317,6 +317,18 @@ def test_monthly_http_export_reuses_uploaded_top_template_and_rechecks_scope(sou
         ws = openpyxl.load_workbook(BytesIO(response.content), data_only=True).active
         assert ws["D12"].value == 54 and ws["I12"].value == 5628.42
         assert ws["F2"].value == "PI-CZ-202610"
+        assert ctx["freightModels"] == [{"brand": "OMODA", "modelName": "MODEL", "unitCount": 54}]
+        grouped = {key: value for key, value in options.items() if key != "freightEur"}
+        grouped["modelFreightEur"] = [{"brand": "OMODA", "modelName": "MODEL", "freightEur": 20}]
+        model_response = client.post(path, json=grouped)
+        assert model_response.status_code == 200
+        model_ws = openpyxl.load_workbook(BytesIO(model_response.content), data_only=True).active
+        assert model_ws["F11"].value == 20 and model_ws["I12"].value == 6522.12
+        assert plan["lines"][0]["freightEur"] == 3.45
+        plan["lines"].append({**plan["lines"][0], "modelName": "NEW MODEL", "quantity": 1})
+        rejected = client.post(path, json=grouped)
+        assert rejected.status_code == 409 and "NEW MODEL" in rejected.json()["detail"]
+        plan["lines"].pop()
         assert templates.load_template(saved["id"], "alice", False, "CZ", {"OMODA"})["path"].read_bytes() == content
         plan.update(month="2026-11", lines=[{**plan["lines"][0], "quantity": 4}])
         later = client.get(path.replace("2026-10", "2026-11")).json()["context"]

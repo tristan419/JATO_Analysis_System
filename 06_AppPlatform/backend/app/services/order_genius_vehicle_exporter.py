@@ -398,19 +398,46 @@ def generate_pi_invoice_excel(detail: dict, options: dict, template: dict | None
 
 def monthly_invoice_context(plan: dict, template: dict | None = None) -> dict:
     reference = f"PI-{plan['country']}-{plan['month'].replace('-', '')}"
-    return _invoice_context({"piCode": reference, "countryCode": plan["country"]}, plan["lines"], template)
+    context = _invoice_context({"piCode": reference, "countryCode": plan["country"]}, plan["lines"], template)
+    models: dict[tuple, dict] = {}
+    for line in plan["lines"]:
+        identity = (line.get("brand") or "", line.get("modelName") or "")
+        group = models.setdefault(identity, {"brand": identity[0], "modelName": identity[1], "unitCount": 0})
+        group["unitCount"] += line["quantity"]
+    return {**context, "freightModels": list(models.values())}
 
 
 def generate_monthly_invoice_excel(plan: dict, options: dict, template: dict | None = None) -> io.BytesIO:
     context = monthly_invoice_context(plan, template)
     charges = context.get("charges", ["freightEur", "insuranceEur", "handlingEur"])
-    freight = _invoice_money(options.get("freightEur"), "Freight / 运费") if "freightEur" in charges else Decimal(0)
+    freight = Decimal(0)
+    model_freight: dict[tuple, Decimal] = {}
+    if "modelFreightEur" in options:
+        if "freightEur" not in charges or "freightEur" in options:
+            raise ValueError("Choose uniform or model freight, with a freight-enabled template / 请选择统一或车型运费，模板须计入运费")
+        groups = options["modelFreightEur"]
+        if not isinstance(groups, list):
+            raise ValueError("Invalid model freight list / 车型运费列表无效")
+        expected = {(item["brand"], item["modelName"]) for item in context["freightModels"]}
+        for group in groups:
+            if not isinstance(group, dict) or not all(isinstance(group.get(field), str) for field in ("brand", "modelName")):
+                raise ValueError("Invalid freight model / 运费车型无效")
+            identity = (group["brand"], group["modelName"])
+            if identity not in expected or identity in model_freight:
+                raise ValueError(f"Unexpected or repeated freight model: {' / '.join(identity)} / 运费车型超范围或重复，请重读月计划")
+            model_freight[identity] = _invoice_money(group.get("freightEur"), f"Freight / 运费 ({' / '.join(identity)})")
+        missing = expected - model_freight.keys()
+        if missing:
+            raise ValueError(f"Missing model freight: {', '.join(' / '.join(key) for key in sorted(missing))} / 请填写所有车型运费，或重读月计划")
+    elif "freightEur" in charges:
+        freight = _invoice_money(options.get("freightEur"), "Freight / 运费")
     insurance = _invoice_money(options.get("insuranceEur"), "Insurance / 保费") if "insuranceEur" in charges else Decimal(0)
     grouped: dict[tuple, int] = {}
     for line in plan["lines"]:
+        line_freight = model_freight[(line.get("brand") or "", line.get("modelName") or "")] if model_freight else freight
         key = tuple(line.get(field) for field in ("modelName", "version", "powertrain", "exteriorColorName",
                     "exteriorColorCode", "interiorColorName", "materialCode")) + (
-                    _invoice_money(line["fobEur"], "FOB", positive=True), freight, insurance)
+                    _invoice_money(line["fobEur"], "FOB", positive=True), line_freight, insurance)
         grouped[key] = grouped.get(key, 0) + line["quantity"]
     return _render_invoice(context, grouped, options, template)
 
