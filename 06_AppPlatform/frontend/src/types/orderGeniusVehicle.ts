@@ -9,6 +9,9 @@ export type PiStatus =
   | "cancelled";
 
 export interface PiInvoiceOptions {
+  scope?: "single" | "monthly";
+  piCode?: string;
+  sourceRevision?: string;
   templateId?: string;
   templateRevision?: string;
   invoiceDate: string;
@@ -22,6 +25,8 @@ export interface PiInvoiceOptions {
 }
 
 export interface PiInvoiceContext {
+  sourceRevision?: string;
+  sourcePiCodes?: string[];
   freightModels?: { brand: string; modelName: string; unitCount: number }[];
   templateRevision?: string;
   charges?: PiTemplateCharge[];

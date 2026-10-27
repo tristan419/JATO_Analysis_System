@@ -840,9 +840,13 @@ def patch_quantity_cell(
             updated_by=user.name,
             expected_version=body.get("rowVersion", body.get("row_version", 1)),
             include_historical=bool(body.get("includeHistorical", False)),
+            expected_allocated_quantity=body.get("expectedAllocatedQuantity"),
         )
         session.commit()
         return result
+    except HTTPException:
+        session.rollback()
+        raise
     except repo.CountryFobConflict as e:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(e)) from e
@@ -853,7 +857,9 @@ def patch_quantity_cell(
             raise HTTPException(status_code=400, detail=msg)
         if "Concurrent" in msg:
             raise HTTPException(status_code=409, detail=msg)
-        raise HTTPException(status_code=400, detail=msg)
+        raise HTTPException(status_code=400, detail={"code": "material_unavailable", "country": body.get("countryCode", ""),
+            "materialCode": body.get("materialCode", ""), "month": f"{body.get('orderYear', 0)}-{body.get('orderMonth', 0):02d}",
+            "message": msg, "suggestion": "Review this country's price periods, released colours and BOM dates before retrying. / 请定位核对该国家价格阶段、释放颜色及BOM日期后再保存，输入已保留。"})
 
 
 @router.patch("/material-skus/{material_code}/colour-hex")

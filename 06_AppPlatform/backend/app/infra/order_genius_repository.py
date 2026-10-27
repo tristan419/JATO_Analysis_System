@@ -4997,6 +4997,7 @@ def get_quantity_cell(
     order_year: int,
     order_month: int,
     material_code: str,
+    *, for_update: bool = False,
 ) -> OrderQuantityCell | None:
     stmt = select(OrderQuantityCell).where(
         OrderQuantityCell.country_code == country_code,
@@ -5004,6 +5005,8 @@ def get_quantity_cell(
         OrderQuantityCell.order_month == order_month,
         OrderQuantityCell.material_code == material_code,
     )
+    if for_update:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     return session.execute(stmt).scalars().first()
 
 

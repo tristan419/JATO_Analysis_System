@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -49,9 +50,7 @@ from app.services.order_genius_vehicle_service import (
     update_vehicle_unit,
 )
 from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
-from app.services.order_genius_vehicle_exporter import (generate_pi_invoice_excel, pi_invoice_context,
-    generate_monthly_invoice_excel, monthly_invoice_context)
-from app.services.order_genius_service import build_monthly_invoice_plan
+from app.services.order_genius_vehicle_exporter import generate_pi_invoice_excel, pi_invoice_context
 from app.services import pi_invoice_templates as invoice_templates
 from app.db.models import User, VehicleCustomColumn
 from sqlalchemy import select, func
@@ -552,34 +551,69 @@ def list_scoped_invoice_templates(country: str, brands: str, owner: str = "", se
     return _template_catalog(user, country, selected, owner)
 
 
-def _monthly_invoice_plan(session: Session, user: UserContext, country: str, month: str) -> tuple:
+def _monthly_invoice_source(session: Session, user: UserContext, country: str, month: str,
+                            scope: str = "single", pi_code: str = "") -> tuple:
     country = country.strip().upper()
     if len(country) != 2 or not country.isascii() or not country.isalpha():
         raise HTTPException(400, "Choose one country / 请选择一个国家")
     try:
-        period = date.fromisoformat(f"{month}-01")
+        date.fromisoformat(f"{month}-01")
     except (ValueError, TypeError):
         raise HTTPException(400, "Choose YYYY-MM / 请选择有效年月") from None
     _validate_country(session, user, country)
-    plan = build_monthly_invoice_plan(session, country, period.year, period.month,
-                                      allowed_brands=ordering_brands(session, user))
-    brands = {line["brand"] for line in plan["lines"]}
-    _management_scope(session, user, country, list(brands))
-    return plan, brands
+    if scope not in {"single", "monthly"}:
+        raise HTTPException(400, "Choose single or monthly / 请选择单批或当月汇总")
+    batches = []
+    page = 1
+    while True:
+        result = list_pi_headers(session, country=country, month=month, page=page, page_size=200,
+                                 allowed_countries=ordering_countries(session, user), allowed_brands=ordering_brands(session, user))
+        batches.extend(row for row in result["items"] if row["status"] != "cancelled"
+                       and (row.get("orderingAccountCode") or row["countryCode"]) == country)
+        if page * 200 >= result["total"]:
+            break
+        page += 1
+    if not batches:
+        allowed = ordering_brands(session, user)
+        if allowed == set():
+            raise HTTPException(403, "No authorized brands / 尚无授权品牌")
+        return None, country, set(ORDERING_BRANDS if allowed is None else allowed), []
+    selected = batches if scope == "monthly" else [next((row for row in batches if row["piCode"] == pi_code), batches[0])]
+    if scope == "single" and pi_code and selected[0]["piCode"] != pi_code:
+        raise HTTPException(409, {"code": "source_changed", "message": "Selected PI is no longer available / 所选PI已不可用",
+                                  "suggestion": "Reload and choose a saved batch. / 请重读并选择已保存批次。"})
+    details = [_template_scope(session, user, row["piCode"])[0] for row in selected]
+    header = details[0]["header"] if scope == "single" else {
+        "piCode": f"Monthly-Summary-{country}-{month.replace('-', '')}", "countryCode": country}
+    detail = {"header": header, "lines": [line for item in details for line in item["lines"]],
+              "vehicles": [vehicle for item in details for vehicle in item["vehicles"]],
+              "sourcePiCodes": [row["piCode"] for row in selected], "summaryExport": scope == "monthly"}
+    brands = {line["brand"].upper() for line in detail["lines"]}
+    # Detect changed batch membership or invoice snapshots, not unrelated logistics edits.
+    snapshot = [detail["sourcePiCodes"], {key: detail["header"].get(key) for key in ("piCode", "officialPiNo", "orderDate", "portOfDischarge")},
+                [(line["piLineCode"], line["quantity"]) for line in detail["lines"]],
+                [{key: vehicle.get(key) for key in ("carCode", "piLineCode", "brand", "modelName", "version", "powertrain", "materialCode", "exteriorColorName", "exteriorColorCode", "interiorColorName", "fobEur", "freightEur", "insuranceEur")} for vehicle in detail["vehicles"]]]
+    detail["sourceRevision"] = hashlib.sha256(json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest()
+    return detail, country, brands, batches
 
 
 @router.get("/monthly-invoice")
-def preview_monthly_invoice(country: str, month: str, template_id: str = "", session: Session = Depends(get_db_session),
+def preview_monthly_invoice(country: str, month: str, template_id: str = "", scope: str = "single", pi_code: str = "", session: Session = Depends(get_db_session),
                             user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
     try:
-        plan, brands = _monthly_invoice_plan(session, user, country, month)
-        catalog = _template_catalog(user, plan["country"], brands, "")
+        detail, country, brands, batches = _monthly_invoice_source(session, user, country, month, scope, pi_code)
+        catalog = _template_catalog(user, country, brands, "")
+        if detail is None:
+            return {"catalog": catalog, "batches": [], "context": None, "issue": {"code": "no_saved_pi", "country": country, "month": month,
+                "message": "No saved PI for this country/month. A template is not an order. / 该国家当月尚无已保存PI，模板不等于订单。",
+                "suggestion": "Select pending quantities and create a PI in PI Batch, then export one batch or the monthly summary. / 请到PI Batch勾选待入批数量并创建PI，再导出单批或当月汇总。"}}
         try:
-            template = _scoped_template(user, plan["country"], brands, template_id) if catalog["items"] or template_id else None
-            context = monthly_invoice_context(plan, template) if catalog["items"] or template_id else None
+            template = _scoped_template(user, country, brands, template_id) if catalog["items"] or template_id else None
+            context = {**pi_invoice_context(detail, template), "sourceRevision": detail["sourceRevision"],
+                       "sourcePiCodes": detail["sourcePiCodes"]} if catalog["items"] or template_id else None
         except (ValueError, FileNotFoundError) as exc:
-            return {"catalog": catalog, "context": None, "error": str(_template_error(exc).detail)}
-        return {"catalog": catalog, "context": context}
+            return {"catalog": catalog, "batches": batches, "context": None, "error": str(_template_error(exc).detail)}
+        return {"catalog": catalog, "batches": batches, "context": context}
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         raise _template_error(exc) from exc
 
@@ -588,14 +622,21 @@ def preview_monthly_invoice(country: str, month: str, template_id: str = "", ses
 def export_monthly_invoice(country: str, month: str, body: dict, session: Session = Depends(get_db_session),
                            user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> StreamingResponse:
     try:
-        plan, brands = _monthly_invoice_plan(session, user, country, month)
-        template = _scoped_template(user, plan["country"], brands, body.get("templateId", ""))
+        detail, country, brands, _ = _monthly_invoice_source(session, user, country, month, body.get("scope", "single"), body.get("piCode", ""))
+        if detail is None:
+            raise HTTPException(409, {"code": "no_saved_pi", "country": country, "month": month,
+                "message": "No saved PI / 尚无已保存PI", "suggestion": "Create a batch in PI Batch first. / 请先到PI Batch创建批次。"})
+        if body.get("sourceRevision") != detail["sourceRevision"]:
+            raise HTTPException(409, {"code": "source_changed", "message": "Saved PI source changed / 已保存PI来源已变化",
+                "suggestion": "Reload the source and review quantities/prices; your fields are retained. / 请重读来源并核对数量/成交价，当前输入已保留。"})
+        template = _scoped_template(user, country, brands, body.get("templateId", ""))
         if template and body.get("templateRevision") != template["updatedAt"]:
-            raise ValueError("Template changed since preview; reload before exporting / 模板自预览后有变化，请重读再导出")
-        buf = generate_monthly_invoice_excel(plan, body, template)
+            raise HTTPException(409, {"code": "template_changed", "message": "Template changed since preview / 模板自预览后有变化",
+                "suggestion": "Reload the template, review fixed details, then export. Entered costs are retained. / 请重读模板并核对固定资料后导出，已填费用保留。"})
+        buf = generate_pi_invoice_excel(detail, body, template)
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         raise _template_error(exc) from exc
-    filename = f"Proforma_{plan['country']}_{plan['month']}.xlsx"
+    filename = f"Proforma_{detail['header']['piCode']}.xlsx"
     return StreamingResponse(buf, media_type=XLSX_MEDIA_TYPE,
                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 

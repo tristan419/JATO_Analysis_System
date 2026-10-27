@@ -72,7 +72,6 @@ def sku(db, code, tier, brand="JAECOO", template="T**001", model="JAECOO7 SHS", 
 
 def test_monthly_invoice_reads_plan_and_effective_month_price_without_any_db_writes(db):
     from sqlalchemy import event
-    from app.api.routes import order_genius_vehicle_allocation as invoice_route
     sku(db, "S", "single"); fob(db, "S", 1500, base=1500)
     service.update_quantity_cell(db, "CH", 2026, 10, "S", 54, "test", 1)
     db.commit()  # Finish fixture writes before observing the read-only export.
@@ -81,8 +80,8 @@ def test_monthly_invoice_reads_plan_and_effective_month_price_without_any_db_wri
         statements.append(statement.lstrip().upper())
     event.listen(db.bind, "before_cursor_execute", capture)
     try:
-        plan, brands = invoice_route._monthly_invoice_plan(db, SimpleNamespace(name="admin", role="admin"), "CH", "2026-10")
-        assert brands == {"JAECOO"}
+        # Internal planning read remains available; formal invoice routes require saved PIs.
+        plan = service.build_monthly_invoice_plan(db, "CH", 2026, 10, allowed_brands=None)
         assert [(line["materialCode"], line["quantity"], line["fobEur"]) for line in plan["lines"]] == [("S", 54, 1500)]
     finally:
         event.remove(db.bind, "before_cursor_execute", capture)

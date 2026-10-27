@@ -24,6 +24,10 @@ vi.mock("../../components/OrderGeniusGrid", async (original) => ({
         // Fixture supplies exactly the fields read by the AG Grid event adapter.
         props.onCellValueChanged?.({ data: row, colDef: { field: "month_10" }, newValue: 15, oldValue: row.month_10 });
       }}>Save 15</button>
+      <button disabled={!row || !props.canEditQuantities} onClick={() => {
+        if (row) props.onCellValueChanged?.({ data: row, colDef: { field: "month_10" }, newValue: 80, oldValue: row.month_10 });
+      }}>Save 80</button>
+      <output data-testid="display-quantity">{row?.month_10}</output>
       <button onClick={() => {
         const nextRow = props.rows.filter((item) => item.__type !== "groupHeader")[1];
         if (nextRow) props.onCellValueChanged?.({ data: nextRow, colDef: { field: "month_10" }, newValue: 5, oldValue: nextRow.month_10 });
@@ -139,22 +143,65 @@ describe("quantity save → PI readiness", () => {
     expect(screen.queryByText(/登录身份已更新/)).toBeNull();
   });
 
-  it("exports the monthly plan without creating a PI or changing the page month", async () => {
+  it("no saved PI guides directly to PI Batch without changing the month or creating automatically", async () => {
     const create = vi.spyOn(api, "generateVehicleAllocationFromOrderMatrix");
-    const preview = vi.spyOn(api, "getMonthlyInvoiceContext").mockRejectedValue(new Error("No positive monthly quantities"));
+    const preview = vi.spyOn(api, "getMonthlyInvoiceContext").mockRejectedValue(new Error(JSON.stringify({ code: "no_saved_pi",
+      message: "No saved PI / 尚无已保存PI", suggestion: "Create a batch / 请先创建批次" })));
     await openOctober();
     fireEvent.click(screen.getByRole("tab", { name: /Import \/ Export/ }));
     fireEvent.click(screen.getByRole("button", { name: "Export PI" }));
-    await screen.findByText("No positive monthly quantities");
-    expect(preview).toHaveBeenCalledWith("CH", `${new Date().getFullYear()}-10`, "");
-    expect(screen.queryByRole("button", { name: /Open PI Batch/ })).toBeNull();
-    expect(screen.queryByLabelText("Saved PI")).toBeNull();
+    await screen.findByText(/No saved PI.*尚无已保存PI.*Create a batch/);
+    expect(preview).toHaveBeenCalledWith("CH", `${new Date().getFullYear()}-10`, "", "single", "");
+    expect(screen.getByLabelText("Saved PI")).toBeTruthy();
     expect(create).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Go to PI Batch / 前往创建批次" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: /Filters/i }));
     expect((screen.getByLabelText("Order month") as HTMLSelectElement).value).toBe("10");
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("new batch view edits remaining units, keeps the monthly total and shows zero after allocation", async () => {
+    const response = await api.getOrderGeniusMatrixBatch({ countries: ["CH"], year: 2026 });
+    response.matrices.CH.rows[0].months["10"].quantity = 120;
+    vi.mocked(api.getOrderGeniusMatrixBatch).mockResolvedValue(response);
+    const allocatedPlan = (total: number, allocated: number): VehicleAllocationPlan => ({ ...plan(total),
+      lineItems: [{ ...plan(total).lineItems[0], generatedQuantity: allocated, remainingQuantity: total - allocated }],
+      totals: { ...plan(total).totals, generatedQuantity: allocated, remainingQuantity: total - allocated } });
+    vi.mocked(api.getVehicleAllocationOrderMatrixPlan).mockResolvedValue(allocatedPlan(120, 120));
+    const save = vi.spyOn(api, "updateQuantityCell").mockResolvedValue({ ...savedQuantity, quantity: 200 });
+    await openOctober();
+    expect(screen.getByTestId("display-quantity").textContent).toBe("120");
+    fireEvent.click(screen.getByLabelText("Enter new batch"));
+    expect(screen.getByTestId("display-quantity").textContent).toBe("0");
+    expect(save).not.toHaveBeenCalled();
+    vi.mocked(api.getVehicleAllocationOrderMatrixPlan).mockResolvedValue(allocatedPlan(200, 120));
+    fireEvent.click(screen.getByText("Save 80"));
+    await screen.findByText("PI ready · 80 units available");
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ quantity: 80, expectedAllocatedQuantity: 120 }));
+    expect(screen.getByTestId("display-quantity").textContent).toBe("80");
+    vi.mocked(api.getVehicleAllocationOrderMatrixPlan).mockResolvedValue(allocatedPlan(200, 200));
+    const create = vi.spyOn(api, "generateVehicleAllocationFromOrderMatrix").mockResolvedValue({ piCode: "PI-CH-202610-002", lineCount: 1, vehicleCount: 80 });
+    fireEvent.click(screen.getByText("Select candidates"));
+    fireEvent.click(screen.getByRole("tab", { name: /PI Batch/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Create PI" }));
+    await waitFor(() => expect(screen.getAllByText("PI ready · 0 units available").length).toBeGreaterThan(0));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ lineItems: [expect.objectContaining({ quantity: 80 })] }));
+    expect(screen.getByTestId("display-quantity").textContent).toBe("0");
+    fireEvent.click(screen.getByLabelText("Enter new batch"));
+    expect(screen.getByTestId("display-quantity").textContent).toBe("200");
+  });
+
+  it("a changed allocation never auto-retries a pending entry and retains the entered remainder", async () => {
+    const save = vi.spyOn(api, "updateQuantityCell").mockRejectedValue(Object.assign(new Error(JSON.stringify({ code: "quantity_conflict",
+      country: "CH", month: "2026-10", materialCode: "T6481QNCLLX0003", message: "Allocation changed / 占用变化",
+      suggestion: "Review before saving / 请核对后重存" })), { status: 409 }));
+    await openOctober();
+    fireEvent.click(screen.getByLabelText("Enter new batch"));
+    fireEvent.click(screen.getByText("Save 80"));
+    await screen.findByRole("button", { name: "Locate quantity / 定位数量格" });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("display-quantity").textContent).toBe("80");
   });
 
   it("keeps PI templates reachable with no matrix rows, quantities or saved PI", async () => {

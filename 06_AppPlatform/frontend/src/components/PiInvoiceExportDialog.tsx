@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { PiInvoiceContext, PiInvoiceOptions, PiTemplateCatalog } from "../types/orderGeniusVehicle";
+import type { PiInvoiceContext, PiInvoiceOptions, PiOrderHeader, PiTemplateCatalog } from "../types/orderGeniusVehicle";
+import { orderGeniusIssue } from "../utils/orderGeniusIssue";
 import { ConfirmDialog, type ConfirmDialogError } from "./ConfirmDialog";
 import { PiInvoiceTemplateManager } from "./PiInvoiceTemplateManager";
 
@@ -9,11 +10,18 @@ interface Props {
   countries?: readonly string[];
   month?: string;
   onClose: () => void;
+  onCreateBatch?: (country: string, month: string) => void;
 }
 
-export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onClose }: Props) {
+export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onClose, onCreateBatch }: Props) {
   const [country, setCountry] = useState(countries[0] ?? "");
   const [period, setPeriod] = useState(month ?? "");
+  const [scope, setScope] = useState<"single" | "monthly">("single");
+  const [piCode, setPiCode] = useState("");
+  const [batches, setBatches] = useState<PiOrderHeader[]>([]);
+  const fieldsRef = useRef<HTMLDivElement>(null);
+  const previousScope = useRef("");
+  const previewPiCode = useRef("");
   const [context, setContext] = useState<PiInvoiceContext | null>(null);
   const [catalog, setCatalog] = useState<PiTemplateCatalog | null>(null);
   const [templateId, setTemplateId] = useState("");
@@ -27,42 +35,62 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
   const [handling, setHandling] = useState("0");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ConfirmDialogError | null>(null);
-  const fail = (cause: unknown) => setError({ title: "PI export unavailable / 无法导出 PI",
-    message: cause instanceof Error ? cause.message : String(cause) });
+  const fail = (cause: unknown, field?: string) => {
+    const issue = orderGeniusIssue(cause);
+    setError({ title: "PI export unavailable / 无法导出 PI",
+      message: issue ? `${issue.message} ${issue.suggestion}` : cause instanceof Error ? cause.message : String(cause),
+      actions: field ? [{ label: "Go to field / 定位填写项", onClick: () => fieldsRef.current?.querySelector<HTMLElement>(`[name="${field}"]`)?.focus() }]
+        : issue?.code === "no_saved_pi" && onCreateBatch ? [{ label: "Go to PI Batch / 前往创建批次", onClick: () => onCreateBatch(country, period) }]
+        : [{ label: "Reload source / 重读来源（保留输入）", onClick: () => setRevision((value) => value + 1) }] });
+  };
 
   useEffect(() => {
     let cancelled = false;
-    setCatalog(null); setContext(null); setOptions(null); setError(null);
-    setFreight(""); setInsurance(""); setHandling("0");
-    setFreightByModel(false); setModelFreight({});
+    const key = JSON.stringify([country, period, scope, piCode, templateId]);
+    const reset = previousScope.current !== key;
+    previousScope.current = key;
+    setContext(null); setError(null);
+    if (reset) {
+      previewPiCode.current = "";
+      setCatalog(null); setBatches([]);
+      setOptions(null); setFreight(""); setInsurance(""); setHandling("0");
+      setFreightByModel(false); setModelFreight({});
+    }
     if (!country || !/^\d{4}-\d{2}$/.test(period)) return;
-    void api.getMonthlyInvoiceContext(country, period, templateId).then((next) => {
+    void api.getMonthlyInvoiceContext(country, period, templateId, scope, piCode || (scope === "single" ? previewPiCode.current : "")).then((next) => {
       if (cancelled) return;
-      setCatalog(next.catalog); setContext(next.context); setOptions(next.context?.defaults ?? null);
-      if (!next.context) fail(new Error(next.error ?? "No matching template. Upload your country's XLSX / 无匹配模板，请上传本国XLSX模板"));
+      setCatalog(next.catalog); setBatches(next.batches); setContext(next.context);
+      if (scope === "single" && next.context) previewPiCode.current = next.context.piCode;
+      setOptions((current) => reset || !current ? next.context?.defaults ?? null : current);
+      if (!next.context) {
+        if (next.issue) fail(next.issue);
+        else setError({ title: "Template unavailable / 模板不可用", message: `${next.error ?? "No matching template / 无匹配模板"}. Upload or review a compatible country/brand template / 请上传或核对匹配国家品牌的模板。`,
+          actions: [{ label: "Manage templates / 定位模板", onClick: () => setManage(true) }] });
+      }
     }).catch((cause: unknown) => { if (!cancelled) fail(cause); });
     return () => { cancelled = true; };
-  }, [country, period, templateId, revision]);
+  }, [country, period, templateId, revision, scope, piCode]);
 
   async function download(): Promise<void> {
     if (!context || !options || busy) return;
     const amounts: Record<"freightEur" | "insuranceEur" | "handlingEur", string> = {
       freightEur: freight, insuranceEur: insurance, handlingEur: handling,
     };
-    const payload: PiInvoiceOptions = { ...options, templateId: context.templateKey };
+    const payload: PiInvoiceOptions = { ...options, templateId: context.templateKey, scope,
+      piCode: scope === "single" ? context.piCode : undefined, sourceRevision: context.sourceRevision };
     if (context.templateRevision) payload.templateRevision = context.templateRevision;
     if (freightByModel) {
       const models = context.freightModels ?? [];
-      if (!models.length) { fail(new Error("Reload the monthly plan / 请重读月计划车型")); return; }
+      if (!models.length) { fail(new Error("Reload the saved PI source / 请重读已保存PI来源")); return; }
       const missing = models.filter((model) => !modelFreight[JSON.stringify([model.brand, model.modelName])]?.trim());
       if (missing.length) {
-        fail(new Error(`Enter freight for / 请填写车型运费：${missing.map((model) => `${model.brand} · ${model.modelName}`).join(", ")}`)); return;
+        fail(new Error(`Enter freight for / 请填写车型运费：${missing.map((model) => `${model.brand} · ${model.modelName}`).join(", ")}`), `freight-${models.indexOf(missing[0])}`); return;
       }
       payload.modelFreightEur = [];
       for (const model of models) {
         const value = Number(modelFreight[JSON.stringify([model.brand, model.modelName])]);
         if (!Number.isFinite(value) || value < 0 || value >= 1e12) {
-          fail(new Error(`Invalid freight / 车型运费无效：${model.brand} · ${model.modelName}`)); return;
+          fail(new Error(`Invalid freight / 车型运费无效：${model.brand} · ${model.modelName}`), `freight-${models.indexOf(model)}`); return;
         }
         payload.modelFreightEur.push({ brand: model.brand, modelName: model.modelName, freightEur: value });
       }
@@ -74,20 +102,23 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
       if (!text) continue;
       const value = Number(text);
       if (!Number.isFinite(value) || value < 0 || value >= 1e12) {
-        fail(new Error("Enter non-negative costs; zero is allowed / 费用必须为非负数字，可明确填写 0")); return;
+        fail(new Error("Enter non-negative costs; zero is allowed / 费用必须为非负数字，可明确填写 0"), key); return;
       }
       payload[key] = value;
     }
     if ((context.missingFreightUnits > 0 && !freightByModel && payload.freightEur === undefined)
       || (context.missingInsuranceUnits > 0 && payload.insuranceEur === undefined)) {
-      fail(new Error("Enter unit freight and insurance; zero is allowed / 月计划没有每车费用，请填写运保费，可明确填0")); return;
+      fail(new Error("Saved costs are missing. Enter unit costs; zero is allowed / 原订单费用未填，请填写本次运保费，可明确填0"), context.missingFreightUnits > 0 && !freightByModel && payload.freightEur === undefined ? "freightEur" : "insuranceEur"); return;
+    }
+    for (const key of ["invoiceDate", "referenceNo", "portOfShipment", "portOfDischarge"] as const) {
+      if (!options[key].trim()) { fail(new Error("Complete invoice date, reference and ports / 请补全发票日期、编号及港口"), key); return; }
     }
     setError(null); setBusy(true);
     try {
       const blob = await api.exportMonthlyInvoice(country, period, payload);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = url; link.download = `Proforma_${country}_${period}.xlsx`;
+      link.href = url; link.download = `Proforma_${context.piCode}.xlsx`;
       link.click(); URL.revokeObjectURL(url);
       onClose();
     } catch (cause: unknown) { fail(cause); }
@@ -95,17 +126,24 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
   }
 
   if (manage && catalog) return <PiInvoiceTemplateManager key={`${country}-${period}`} initial={catalog} onClose={() => { setManage(false); setTemplateId(""); setRevision((value) => value + 1); }} />;
-  return <ConfirmDialog title="Export PI" description="Monthly plan → template file only / 月计划直接套版，仅生成文件，不创建PI或车辆"
+  return <ConfirmDialog title="Export PI" description="Saved PI snapshots → reusable template / 已保存PI快照套版，不重价、不创建新PI或车辆"
     cancelLabel="Close" confirmLabel="Download XLSX" loadingLabel="Exporting..." submitting={busy}
     confirmDisabled={!context || !options} error={error} onCancel={onClose} onConfirm={() => void download()}>
+    <div ref={fieldsRef}>
     <div className="pi-invoice-export-fields">
-      <label>Country / 国家<select aria-label="Invoice country" value={country} disabled={busy} onChange={(event) => { setContext(null); setCountry(event.target.value); setTemplateId(""); }}>
+      <label>Country / 国家<select aria-label="Invoice country" value={country} disabled={busy} onChange={(event) => { setContext(null); setCountry(event.target.value); setTemplateId(""); setPiCode(""); }}>
         {!countries.length ? <option value="">Choose a country / 请先选择国家</option> : null}
         {countries.map((code) => <option key={code} value={code}>{code}</option>)}
       </select></label>
-      <label>Plan month / 计划月份<input aria-label="Plan month" type="month" value={period} disabled={busy} onChange={(event) => { setContext(null); setPeriod(event.target.value); setTemplateId(""); }} /></label>
+      <label>Order month / 订单月份<input aria-label="Plan month" type="month" value={period} disabled={busy} onChange={(event) => { setContext(null); setPeriod(event.target.value); setTemplateId(""); setPiCode(""); }} /></label>
+      <label>Export scope / 导出范围<select aria-label="Export scope" value={scope} disabled={busy} onChange={(event) => { setScope(event.target.value === "monthly" ? "monthly" : "single"); setPiCode(""); setTemplateId(""); }}>
+        <option value="single">Single PI / 单次PI</option><option value="monthly">Monthly PI summary / 当月PI汇总</option>
+      </select></label>
+      {scope === "single" ? <label>Saved PI / 已保存批次<select aria-label="Saved PI" disabled={busy || !batches.length} value={piCode || context?.piCode || batches[0]?.piCode || ""} onChange={(event) => { setPiCode(event.target.value); setTemplateId(""); }}>
+        {!batches.length ? <option value="">No saved PI / 尚无已保存PI</option> : batches.map((batch) => <option key={batch.piCode} value={batch.piCode}>{batch.piCode}</option>)}
+      </select></label> : null}
     </div>
-    <p>All positive quantities for this country/month; templates are reusable across months / 读取该国家当月全部非零月计划，模板跨月复用，不扣分车余量。</p>
+    <p>{scope === "monthly" ? "Saved effective PIs only; pending plan excluded. Source PI sheet included / 仅汇总当月已保存有效PI，不含待入批计划，附来源PI表。" : "One saved batch, original transaction prices / 单次已保存批次，使用原成交价。"} Templates are reusable across months / 模板跨月复用。</p>
     {catalog ? <p><label>PI template / 导出模板<select aria-label="PI template" value={templateId || catalog.items[0]?.id || ""} disabled={busy} onChange={(event) => { setContext(null); setTemplateId(event.target.value); }}>
       {!catalog.items.length ? <option value="">No matching template / 无匹配模板</option> : null}
       {catalog.items.map((item, index) => <option key={item.id} value={item.id}>{item.name} · {item.owner}{index === 0 ? " · Default" : ""}</option>)}
@@ -121,7 +159,7 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
       <div className="pi-invoice-export-fields">
         {(["invoiceDate", "referenceNo", "portOfShipment", "portOfDischarge"] as const).map((key) => <label key={key}>
           {{ invoiceDate: "Invoice date / 发票日期", referenceNo: "Ref. No / PI 编号", portOfShipment: "Port of shipment / 装运港", portOfDischarge: "Port of discharge / 卸货港" }[key]}
-          <input type={key === "invoiceDate" ? "date" : "text"} value={options[key]} disabled={busy}
+          <input name={key} type={key === "invoiceDate" ? "date" : "text"} value={options[key]} disabled={busy}
             onChange={(event) => setOptions({ ...options, [key]: event.target.value })} />
         </label>)}
         {!context.charges || context.charges.includes("freightEur") ? <fieldset className="pi-invoice-freight">
@@ -134,20 +172,21 @@ export function PiInvoiceExportDialog({ countries = EMPTY_COUNTRIES, month, onCl
                 return [key, current[key] ?? freight];
               })));
             }} />By model / 按车型设置运费</label>
-          {freightByModel ? (context.freightModels ?? []).map((model) => {
+          {freightByModel ? (context.freightModels ?? []).map((model, index) => {
             const key = JSON.stringify([model.brand, model.modelName]);
             return <label key={key} className="pi-invoice-model-freight"><span>{model.brand} · {model.modelName} · {model.unitCount} units / 台</span>
-              <input aria-label={`${model.brand} · ${model.modelName} freight / 运费`} type="number" min="0" step="0.01" placeholder="EUR / unit" value={modelFreight[key] ?? ""} disabled={busy}
+              <input name={`freight-${index}`} aria-label={`${model.brand} · ${model.modelName} freight / 运费`} type="number" min="0" step="0.01" placeholder="EUR / unit" value={modelFreight[key] ?? ""} disabled={busy}
                 onChange={(event) => setModelFreight({ ...modelFreight, [key]: event.target.value })} />
             </label>;
-          }) : <label>Freight / 运费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Required / 必填，可填0" value={freight} disabled={busy} onChange={(event) => setFreight(event.target.value)} /></label>}
+          }) : <label>Freight / 运费 (EUR / unit)<input name="freightEur" type="number" min="0" step="0.01" placeholder="Blank = saved / 留空沿用已存费用" value={freight} disabled={busy} onChange={(event) => setFreight(event.target.value)} /></label>}
         </fieldset> : null}
-        {!context.charges || context.charges.includes("insuranceEur") ? <label>Insurance / 保费 (EUR / unit)<input type="number" min="0" step="0.01" placeholder="Required / 必填，可填0" value={insurance} disabled={busy} onChange={(event) => setInsurance(event.target.value)} /></label> : null}
-        {context.templateKey === "CH_OJ" || context.charges?.includes("handlingEur") ? <label>Handling Charges / 操作费 (EUR / unit)<input type="number" min="0" step="0.01" value={handling} disabled={busy} onChange={(event) => setHandling(event.target.value)} /></label> : null}
+        {!context.charges || context.charges.includes("insuranceEur") ? <label>Insurance / 保费 (EUR / unit)<input name="insuranceEur" type="number" min="0" step="0.01" placeholder="Blank = saved / 留空沿用已存费用" value={insurance} disabled={busy} onChange={(event) => setInsurance(event.target.value)} /></label> : null}
+        {context.templateKey === "CH_OJ" || context.charges?.includes("handlingEur") ? <label>Handling Charges / 操作费 (EUR / unit)<input name="handlingEur" type="number" min="0" step="0.01" value={handling} disabled={busy} onChange={(event) => setHandling(event.target.value)} /></label> : null}
       </div>
       <p>Freight is uniform unless grouped by model; insurance and handling stay uniform. File only; no order, vehicle, quantity or quote changes / 默认统一运费，勾选才按车型；保费及操作费仍统一。仅用于本文件，不创建订单/车辆，不修改数量或报价。</p>
       <p>Check ports before each export, especially when the LC destination differs / 每次导出请核对港口，尤其 LC 目的港不同的情况。</p>
-    </> : country && period && !error ? <p>Loading monthly plan and template / 正在读取月计划与模板...</p> : !error ? <p>Choose a country and plan month / 请选择国家和计划月份。</p> : null}
+    </> : country && period && !error ? <p>Loading saved PIs and template / 正在读取已保存PI与模板...</p> : !error ? <p>Choose a country and order month / 请选择国家和订单月份。</p> : null}
+    </div>
     <style>{`
       .pi-invoice-export-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
       .pi-invoice-export-fields label{display:grid;gap:6px;font-size:13px;min-width:0}

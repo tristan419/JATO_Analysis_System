@@ -268,7 +268,6 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
     if not country or year < 2000 or month < 1 or month > 12:
         raise HTTPException(status_code=400, detail="countryCode, orderYear, orderMonth are required")
     line_items = payload.get("lineItems")
-    explicit_line_items = line_items is not None
     if line_items is None:
         plan = get_order_matrix_allocation_plan(session, country, year, month, allowed_brands=allowed_brands)
         line_items = plan["selectedLineItems"] if _truthy(payload.get("allowDuplicate")) else plan["remainingLineItems"]
@@ -279,7 +278,7 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
             sku = og_repo.get_sku_by_material_code_any_status(session, str(item.get("materialCode") or "")) if isinstance(item, dict) else None
             if not sku or str(sku.brand or "").strip().upper() not in allowed_brands:
                 raise HTTPException(403, "PI contains unassigned brands; nothing created / PI 包含未授权品牌，未创建")
-    if explicit_line_items and not _truthy(payload.get("allowDuplicate")):
+    if not _truthy(payload.get("allowDuplicate")):
         _validate_line_items_against_remaining(session, country, year, month, line_items)
     if not line_items:
         raise HTTPException(status_code=400, detail="No remaining positive order quantities found for this country/month")
@@ -344,29 +343,20 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
         resolved_allocations: list[dict[str, Any]] = []
         for allocation in allocations:
             allocation_country = str(allocation["countryCode"]).upper()
-            pricing_date = _resolve_pi_pricing_date(
-                session,
-                allocation_country,
-                material_code,
-                year,
-                month,
-                requested_order_date,
-                historical_backfill=historical_backfill,
-            )
-            pricing_item = {
-                **item,
-                "historicalFobOverrideEur": allocation.get("historicalFobOverrideEur"),
-                "historicalPriceReason": allocation.get("historicalPriceReason"),
-            }
-            resolved_payload = _line_payload_from_material(
-                session,
-                allocation_country,
-                material_code,
-                pricing_item,
-                pricing_date=pricing_date,
-                historical_backfill=historical_backfill,
-                confirm_undated_default=confirm_undated_default,
-            )
+            try:
+                pricing_date = _resolve_pi_pricing_date(session, allocation_country, material_code, year, month,
+                    requested_order_date, historical_backfill=historical_backfill)
+                pricing_item = {**item, "historicalFobOverrideEur": allocation.get("historicalFobOverrideEur"),
+                                "historicalPriceReason": allocation.get("historicalPriceReason")}
+                resolved_payload = _line_payload_from_material(session, allocation_country, material_code, pricing_item,
+                    pricing_date=pricing_date, historical_backfill=historical_backfill,
+                    confirm_undated_default=confirm_undated_default)
+            except HTTPException as exc:
+                if exc.status_code != 409 or not isinstance(exc.detail, str):
+                    raise
+                raise HTTPException(409, {"code": "material_unavailable", "country": allocation_country,
+                    "materialCode": material_code, "month": f"{year}-{month:02d}", "message": exc.detail,
+                    "suggestion": "Review this material's country price/colour/date and choose an eligible order date. / 请定位核对该物料国家价格/颜色/日期，并选择有效下单日；已保留表单。"}) from exc
             resolved_allocations.append({
                 **allocation,
                 "fobEur": resolved_payload.get("fobEur"),
@@ -1512,6 +1502,9 @@ def _validate_line_items_against_remaining(
             requested_by_country_material[key] = requested_by_country_material.get(key, 0) + quantity
 
     remaining_cache: dict[str, dict[str, int]] = {}
+    # Serialize against quantity edits and another batch using the existing cells.
+    for allocation_country, material_code in sorted(requested_by_country_material):
+        og_repo.get_quantity_cell(session, allocation_country, year, month, material_code, for_update=True)
     for allocation_country, material_code in requested_by_country_material:
         if allocation_country not in remaining_cache:
             plan = get_order_matrix_allocation_plan(session, allocation_country, year, month)
@@ -1526,10 +1519,10 @@ def _validate_line_items_against_remaining(
         if requested_quantity > remaining_quantity:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    f"Requested quantity exceeds remaining order quantity for {allocation_country} {material_code}: "
-                    f"requested {requested_quantity}, remaining {remaining_quantity}"
-                ),
+                detail={"code": "quantity_conflict", "country": allocation_country,
+                    "materialCode": material_code, "month": f"{year}-{month:02d}",
+                    "message": f"{allocation_country} {material_code}: requested {requested_quantity}, remaining {remaining_quantity}. / 请求{requested_quantity}台，待入批仅{remaining_quantity}台。",
+                    "suggestion": "Review the monthly total and saved PI batches; reduce this batch or save a new remainder. / 请定位核对月总量及已有PI，再减少本批数量或保存新的待入批余量。"},
             )
 
 

@@ -247,6 +247,8 @@ export interface BomLifecycleReviewResponse {
 }
 
 export interface QuantityCellUpdate {
+  /** When present, quantity is the pending remainder, not the monthly total. */
+  expectedAllocatedQuantity?: number;
   countryCode: string;
   orderYear: number;
   orderMonth: number;
