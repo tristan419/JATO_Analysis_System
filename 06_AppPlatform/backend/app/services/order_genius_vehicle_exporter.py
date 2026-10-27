@@ -278,9 +278,9 @@ def generate_vehicle_pivot_excel(vehicles: list[dict], config: dict) -> io.Bytes
     return _normalise_font_xml_order(_save_invoice(wb, cached))
 
 
-def pi_invoice_context(detail: dict, template: dict | None = None) -> dict:
+def pi_invoice_context(detail: dict, template: dict | None = None, *, output_format: str = "template") -> dict:
     """Offer fixed template information; opening this preview never writes orders."""
-    context = _invoice_context(detail["header"], detail["lines"], template)
+    context = _invoice_context(detail["header"], detail["lines"], template, output_format=output_format)
     charges = context.get("charges", ["freightEur", "insuranceEur", "handlingEur"])
     for key, field in (("missingFreightUnits", "freightEur"), ("missingInsuranceUnits", "insuranceEur")):
         context[key] = sum(v.get(field) is None for v in detail["vehicles"]) if field in charges else 0
@@ -288,9 +288,18 @@ def pi_invoice_context(detail: dict, template: dict | None = None) -> dict:
     return context
 
 
-def _invoice_context(header: dict, lines: list[dict], template: dict | None = None) -> dict:
+def _invoice_context(header: dict, lines: list[dict], template: dict | None = None, *, output_format: str = "template") -> dict:
     """Template identity and fixed fields are independent of the source order/month."""
     unit_count = sum(line["quantity"] for line in lines)
+    if not isinstance(output_format, str) or output_format not in {"template", "details", "data"}:
+        raise ValueError("Choose template, details or data / 请选择模板PI、通用明细或PI数据表")
+    if output_format != "template":
+        return {"piCode": header["piCode"], "templateKey": "", "templateName": "General order details / 通用订单明细" if output_format == "details" else "PI data / PI数据表",
+                **{key: "" for key in ("buyerName", "buyerAddress", "buyerEmail", "sellerName", "sellerAddress", "bankDetails", "priceTerm", "paymentTerm")},
+                "unitCount": unit_count, "lineCount": len(lines), "charges": ["freightEur", "insuranceEur", "handlingEur"],
+                "defaults": {"invoiceDate": header.get("orderDate") or date.today().isoformat(),
+                             "referenceNo": header.get("officialPiNo") or header["piCode"],
+                             "portOfShipment": "", "portOfDischarge": header.get("portOfDischarge") or ""}}
     if template:
         fields = template["config"]["fields"]
         values = {key: field["value"] for key, field in fields.items()}
@@ -393,13 +402,102 @@ def _invoice_fields(context: dict, options: dict) -> tuple:
 
 def generate_pi_invoice_excel(detail: dict, options: dict, template: dict | None = None) -> io.BytesIO:
     """Fill a clean country template exclusively from saved PI snapshots."""
-    context = pi_invoice_context(detail, template)
-    charges = template["config"]["charges"] if template else ["freightEur", "insuranceEur", "handlingEur"]
+    output_format = options.get("outputFormat", "template")
+    context = pi_invoice_context(detail, template, output_format=output_format)
+    charges = context.get("charges", ["freightEur", "insuranceEur", "handlingEur"])
     grouped = _invoice_groups(detail, options, charges)
-    if detail.get("summaryExport"):
+    if detail.get("summaryExport") or output_format == "data":
         context["sourceVehicles"] = detail["vehicles"]
         context["summary"] = detail.get("summaryExport", False)
+    if output_format != "template":
+        context["countryCode"] = detail["header"]["countryCode"]
+        context["sourcePiCodes"] = detail.get("sourcePiCodes") or [detail["header"]["piCode"]]
+        return _render_pi_table(context, grouped, options, output_format)
     return _render_invoice(context, grouped, options, template)
+
+
+def _merge_invoice_labels(ws, keys: list[tuple], first: int, columns: tuple[tuple[int, int], ...]) -> None:
+    """Merge consecutive model/trim labels without crossing model boundaries."""
+    for column, size in columns:
+        start = 0
+        for end in range(1, len(keys) + 1):
+            if end < len(keys) and keys[end][:size] == keys[start][:size]:
+                continue
+            if str(keys[start][size - 1] or "").strip() and end - start > 1:
+                ws.merge_cells(start_row=first + start, end_row=first + end - 1, start_column=column, end_column=column)
+            start = end
+
+
+def _render_pi_table(context: dict, grouped: dict, options: dict, output_format: str) -> io.BytesIO:
+    """Two template-free layouts over the exact same validated invoice groups."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Order details" if output_format == "details" else "PI data"
+    headers = ["NO", "Model", "Powertrain", "Version", "Colour", "Interior colour", "Material Code", "QTY",
+               "FOB per unit\n(EUR)", "Total FOB\n(EUR)", "Freight per unit\n(EUR)", "Insurance per unit\n(EUR)",
+               "Handling per unit\n(EUR)", "FOB + selected costs\n(EUR)"]
+    first = 5 if output_format == "details" else 2
+    if output_format == "details":
+        ws.append(["9-Description and Quantity: Brand New SUV Motor Vehicles"])
+        ws.merge_cells("A1:N1")
+        ws.append([f"{context['countryCode']} · {'Monthly PI summary / 当月PI汇总' if context.get('summary') else context['piCode']} · Saved PI snapshots / 已保存PI快照"])
+        ws.merge_cells("A2:N2")
+        ws.cell(3, 2, "Description of Goods")
+        ws.merge_cells("B3:G3")
+        for column, label in enumerate(headers, 1):
+            if 2 <= column <= 7:
+                ws.cell(4, column, label)
+            else:
+                ws.cell(3, column, label)
+                ws.merge_cells(start_row=3, end_row=4, start_column=column, end_column=column)
+    else:
+        ws.append(headers)
+    handling = _invoice_money(options.get("handlingEur", 0), "Handling Charges / 操作费")
+    cached: dict[str, Decimal | int] = {}
+    for row, (key, quantity) in enumerate(grouped.items(), first):
+        model, version, powertrain, colour, colour_code, interior, material, fob, freight, insurance = key
+        colour_label = str(colour or colour_code or "—")
+        if colour and colour_code and colour_code not in colour_label:
+            colour_label += f" ({colour_code})"
+        values = [row - first + 1, model, powertrain, version, colour_label, interior, material,
+                  quantity, fob, None, freight, insurance, handling, None]
+        for column, value in enumerate(values, 1):
+            ws.cell(row, column, _excel_value(value))
+        ws.cell(row, 10, f"=ROUND(H{row}*I{row},2)")
+        ws.cell(row, 14, f"=ROUND(H{row}*(I{row}+K{row}+L{row}+M{row}),2)")
+        cached[f"J{row}"] = (fob * quantity).quantize(Decimal("0.01"))
+        cached[f"N{row}"] = ((fob + freight + insurance + handling) * quantity).quantize(Decimal("0.01"))
+    total = first + len(grouped)
+    ws.cell(total, 1, "Total / 合计")
+    for column in (8, 10, 14):
+        letter = get_column_letter(column)
+        ws.cell(total, column, f"=SUM({letter}{first}:{letter}{total - 1})")
+        cached[f"{letter}{total}"] = sum(grouped.values()) if column == 8 else sum(cached[f"{letter}{row}"] for row in range(first, total))
+    if output_format == "details":
+        _merge_invoice_labels(ws, list(grouped), first, ((2, 1), (4, 2)))
+    for row in ws:
+        for cell in row:
+            cell.font = Font(name="Arial", size=10, bold=cell.row < first or cell.row == total)
+            cell.alignment = Alignment(horizontal="right" if cell.column >= 8 and cell.row >= first else "center", vertical="center", wrap_text=True)
+            cell.border = THIN_BORDER
+            if cell.row < first or cell.row == total:
+                cell.fill = STRIPED_FILL
+            if cell.column >= 9 and cell.row >= first:
+                cell.number_format = "#,##0.00"
+        ws.row_dimensions[row[0].row].height = 38 if row[0].row < first else 34
+    for column, width in enumerate((14, 25, 16, 25, 34, 22, 26, 10, 19, 22, 20, 20, 20, 26), 1):
+        ws.column_dimensions[get_column_letter(column)].width = width
+    ws.freeze_panes = f"H{first}"
+    if output_format == "data":
+        ws.auto_filter.ref = f"A1:N{total - 1}"
+    ws.print_title_rows = f"1:{first - 1}"
+    ws.print_area = f"A1:N{total}"
+    ws.sheet_view.showGridLines = False
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A3
+    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    return _normalise_font_xml_order(_save_invoice(wb, cached, context))
 
 
 def _freight_models(detail: dict) -> list[dict]:
@@ -547,17 +645,7 @@ def _render_invoice(context: dict, grouped: dict, options: dict, template: dict 
         cached[f"{get_column_letter(amount_col)}{row}"] = (fob * quantity).quantize(Decimal("0.01"))
         cached[f"{get_column_letter(last_col)}{row}"] = ((fob + freight + insurance + (handling if country == "CH" else 0)) * quantity).quantize(Decimal("0.01"))
     total_row = 28 + len(grouped)
-    keys = list(grouped)
-    # Version runs stop at model boundaries; never reorder invoice details.
-    for column, key_size in ((2, 1), (3 if country == "CH" else 4, 2)):
-        start = 0
-        for end in range(1, len(keys) + 1):
-            if end < len(keys) and keys[end][:key_size] == keys[start][:key_size]:
-                continue
-            if str(keys[start][key_size - 1] or "").strip() and end - start > 1:
-                ws.merge_cells(start_row=28 + start, start_column=column,
-                               end_row=27 + end, end_column=column)
-            start = end
+    _merge_invoice_labels(ws, list(grouped), 28, ((2, 1), (3 if country == "CH" else 4, 2)))
     ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=quantity_col - 1)
     text_at(total_row, 1, "Total")
     for col in range(1, last_col + 1):
@@ -595,7 +683,7 @@ def _save_invoice(wb, cached: dict, context: dict | None = None) -> io.BytesIO:
     if context and context.get("sourceVehicles"):
         source = wb.create_sheet("PI sources")
         fields = ("piCode", "piLineCode", "carCode", "countryCode", "materialCode", "fobEur", "freightEur", "insuranceEur")
-        source.append([("Monthly PI summary / 当月PI汇总。" if context.get("summary") else "") + "Saved snapshot sources / 已保存PI快照来源（费用覆盖仅影响发票页 / overrides apply to invoice sheet only）"])
+        source.append([("Monthly PI summary / 当月PI汇总。" if context.get("summary") else "") + "Saved snapshot sources / 已保存PI快照来源（费用覆盖仅影响导出页 / overrides apply to export sheet only）"])
         source.append([COLUMN_LABELS.get(field, "PI line / PI明细") for field in fields])
         for vehicle in context["sourceVehicles"]:
             source.append([_excel_value(vehicle.get(field)) for field in fields])
@@ -708,18 +796,7 @@ def _render_mapped_invoice(template: dict, context: dict, fields: dict, invoice_
                 cell.number_format = "#,##0.00"
                 cached[cell.coordinate] = amount.quantize(Decimal("0.01"))
         ws.row_dimensions[row].height = height
-    keys = list(grouped)
-    for field, size in (("modelName", 1), ("version", 2)):
-        if field not in columns:
-            continue
-        run = 0
-        for end in range(1, len(keys) + 1):
-            if end < len(keys) and keys[end][:size] == keys[run][:size]:
-                continue
-            if str(keys[run][size - 1] or "").strip() and end - run > 1:
-                ws.merge_cells(start_row=start + run, end_row=start + end - 1,
-                               start_column=columns[field], end_column=columns[field])
-            run = end
+    _merge_invoice_labels(ws, list(grouped), start, tuple((columns[field], size) for field, size in (("modelName", 1), ("version", 2)) if field in columns))
     for field in ("quantity", "fobAmount", "total"):
         if field in columns:
             letter = config["columns"][field]

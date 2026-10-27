@@ -598,19 +598,20 @@ def _monthly_invoice_source(session: Session, user: UserContext, country: str, m
 
 
 @router.get("/monthly-invoice")
-def preview_monthly_invoice(country: str, month: str, template_id: str = "", scope: str = "single", pi_code: str = "", session: Session = Depends(get_db_session),
+def preview_monthly_invoice(country: str, month: str, template_id: str = "", scope: str = "single", pi_code: str = "", output_format: str = "template", session: Session = Depends(get_db_session),
                             user: UserContext = Depends(require_roles("order_filler", "editor", "admin"))) -> dict:
     try:
         detail, country, brands, batches = _monthly_invoice_source(session, user, country, month, scope, pi_code)
-        catalog = _template_catalog(user, country, brands, "")
+        catalog = _template_catalog(user, country, brands, "") if output_format == "template" else None
         if detail is None:
             return {"catalog": catalog, "batches": [], "context": None, "issue": {"code": "no_saved_pi", "country": country, "month": month,
                 "message": "No saved PI for this country/month. A template is not an order. / 该国家当月尚无已保存PI，模板不等于订单。",
                 "suggestion": "Select pending quantities and create a PI in PI Batch, then export one batch or the monthly summary. / 请到PI Batch勾选待入批数量并创建PI，再导出单批或当月汇总。"}}
         try:
-            template = _scoped_template(user, country, brands, template_id) if catalog["items"] or template_id else None
-            context = {**pi_invoice_context(detail, template), "sourceRevision": detail["sourceRevision"],
-                       "sourcePiCodes": detail["sourcePiCodes"]} if catalog["items"] or template_id else None
+            has_template = catalog is not None and (catalog["items"] or template_id)
+            template = _scoped_template(user, country, brands, template_id) if has_template else None
+            context = {**pi_invoice_context(detail, template, output_format=output_format), "sourceRevision": detail["sourceRevision"],
+                       "sourcePiCodes": detail["sourcePiCodes"]} if has_template or output_format != "template" else None
         except (ValueError, FileNotFoundError) as exc:
             return {"catalog": catalog, "batches": batches, "context": None, "error": str(_template_error(exc).detail)}
         return {"catalog": catalog, "batches": batches, "context": context}
@@ -629,14 +630,15 @@ def export_monthly_invoice(country: str, month: str, body: dict, session: Sessio
         if body.get("sourceRevision") != detail["sourceRevision"]:
             raise HTTPException(409, {"code": "source_changed", "message": "Saved PI source changed / 已保存PI来源已变化",
                 "suggestion": "Reload the source and review quantities/prices; your fields are retained. / 请重读来源并核对数量/成交价，当前输入已保留。"})
-        template = _scoped_template(user, country, brands, body.get("templateId", ""))
+        template = _scoped_template(user, country, brands, body.get("templateId", "")) if body.get("outputFormat", "template") == "template" else None
         if template and body.get("templateRevision") != template["updatedAt"]:
             raise HTTPException(409, {"code": "template_changed", "message": "Template changed since preview / 模板自预览后有变化",
                 "suggestion": "Reload the template, review fixed details, then export. Entered costs are retained. / 请重读模板并核对固定资料后导出，已填费用保留。"})
         buf = generate_pi_invoice_excel(detail, body, template)
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         raise _template_error(exc) from exc
-    filename = f"Proforma_{detail['header']['piCode']}.xlsx"
+    prefix = {"template": "Proforma", "details": "Order-details", "data": "PI-data"}[body.get("outputFormat", "template")]
+    filename = f"{prefix}_{detail['header']['piCode']}.xlsx"
     return StreamingResponse(buf, media_type=XLSX_MEDIA_TYPE,
                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 

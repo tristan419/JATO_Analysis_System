@@ -2291,116 +2291,8 @@ export function OrderGeniusPage() {
 
   // ── Export ─────────────────────────────────────────────────────────
 
-  const [mergeExport, setMergeExport] = useState(false);
-  const [showPiExportOptions, setShowPiExportOptions] = useState(false);
   const [showInvoiceExport, setShowInvoiceExport] = useState(false);
   const [showPiTemplates, setShowPiTemplates] = useState(false);
-  const [piExportFreightEur, setPiExportFreightEur] = useState("");
-  const [piExportInsuranceEur, setPiExportInsuranceEur] = useState("");
-  const [piExportDomesticFreightEur, setPiExportDomesticFreightEur] = useState("");
-  const [piExportDomesticInsuranceEur, setPiExportDomesticInsuranceEur] = useState("");
-
-  const buildExportOptions = () => ({
-    brand: brandFilter || undefined,
-    model: modelFilter || undefined,
-    powertrain: powertrainFilter || undefined,
-    version: versionFilter || undefined,
-    colour: colourFilter || undefined,
-    materialCodeSearch: materialSearch || undefined,
-    selectedMonth: selectedMonth ?? undefined,
-    selectionDate: selectionDate || undefined,
-    hideEmptyRows,
-  });
-
-  const exportMonthSuffix = () => selectedMonth ? `_M${String(selectedMonth).padStart(2, "0")}` : "";
-
-  const optionalExportNumber = (value: string): number | undefined => {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-  };
-
-  const handleExport = async () => {
-    const exportOptions = {
-      ...buildExportOptions(),
-      quantitiesOnly: hideEmptyRows,
-    };
-    const monthSuffix = exportMonthSuffix();
-    try {
-      if (selectedCountries.length > 1 && mergeExport) {
-        // Merged export: download one file per country with multi-country columns
-        for (const country of selectedCountries) {
-          const blob = await api.exportOrderGenius(country, selectedYear, exportOptions);
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `Order_Genius_${country}-${selectedYear}${monthSuffix}_filtered.xlsx`;
-          a.click();
-          URL.revokeObjectURL(url);
-          if (selectedCountries.length > 1) await new Promise((r) => setTimeout(r, 300));
-        }
-      } else {
-        for (const country of selectedCountries) {
-          const blob = await api.exportOrderGenius(country, selectedYear, exportOptions);
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `Order_Genius_${country}-${selectedYear}${monthSuffix}_filtered.xlsx`;
-          a.click();
-          URL.revokeObjectURL(url);
-          if (selectedCountries.length > 1) await new Promise((r) => setTimeout(r, 300));
-        }
-      }
-    } catch (err) {
-      setError(`Export failed: ${getErrorMessage(err)}`);
-    }
-  };
-
-  const handlePiExport = async () => {
-    const freightEur = optionalExportNumber(piExportFreightEur);
-    const insuranceEur = optionalExportNumber(piExportInsuranceEur);
-    const domesticFreightEur = optionalExportNumber(piExportDomesticFreightEur);
-    const domesticInsuranceEur = optionalExportNumber(piExportDomesticInsuranceEur);
-    if (piExportFreightEur.trim() && freightEur === undefined) {
-      setError("PI 单车运费必须是非负数字");
-      return;
-    }
-    if (piExportInsuranceEur.trim() && insuranceEur === undefined) {
-      setError("PI 单车保费必须是非负数字");
-      return;
-    }
-    if (piExportDomesticFreightEur.trim() && domesticFreightEur === undefined) {
-      setError("PI 一次内销单车运费必须是非负数字");
-      return;
-    }
-    if (piExportDomesticInsuranceEur.trim() && domesticInsuranceEur === undefined) {
-      setError("PI 一次内销单车保费必须是非负数字");
-      return;
-    }
-    const exportOptions = {
-      ...buildExportOptions(),
-      freightEur,
-      insuranceEur,
-      domesticFreightEur,
-      domesticInsuranceEur,
-    };
-    const monthSuffix = exportMonthSuffix();
-    try {
-      for (const country of selectedCountries) {
-        const blob = await api.exportOrderGeniusPi(country, selectedYear, exportOptions);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `PI_${country}-${selectedYear}${monthSuffix}_filtered.xlsx`;
-        a.click();
-        URL.revokeObjectURL(url);
-        if (selectedCountries.length > 1) await new Promise((r) => setTimeout(r, 300));
-      }
-    } catch (err) {
-      setError(`PI export failed: ${getErrorMessage(err)}`);
-    }
-  };
 
   // ── Derived ────────────────────────────────────────────────────────
 
@@ -2796,10 +2688,6 @@ export function OrderGeniusPage() {
       {controlTab === "exports" ? (
       <div className="order-genius-control-section">
       <div className="order-genius-action-grid">
-        <button type="button" className="btn btn-sm btn-ghost" onClick={handleExport}
-                disabled={combinedMatrix.totalRows === 0}>
-          Export XLSX
-        </button>
         <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowInvoiceExport(true)}
                 disabled={selectedCountries.length === 0}>
           Export PI
@@ -2807,10 +2695,6 @@ export function OrderGeniusPage() {
         {canFillOrders ? <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowPiTemplates(true)}>
           PI Templates / PI模板
         </button> : null}
-        <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowPiExportOptions((open) => !open)}
-                disabled={combinedMatrix.totalRows === 0}>
-          Export PI data
-        </button>
         {canFillOrders && (
           <button type="button" className="btn btn-sm btn-ghost"
                   onClick={() => { setShowQtyImport(true); setQtyImportFile(null); setQtyImportPreview(null); setQtyImportResult(null); }}>
@@ -2824,61 +2708,6 @@ export function OrderGeniusPage() {
           </button>
         )}
       </div>
-      {showPiExportOptions ? (
-        <div className="og-pi-export-options">
-          <div className="og-pi-export-options-copy">
-            <strong>Internal PI data export</strong>
-            <span>四个费用字段选填；一次内销单价自动使用 NL 价格，没有则为空。</span>
-          </div>
-          <label>
-            单车运费
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={piExportFreightEur}
-              onChange={(event) => setPiExportFreightEur(event.target.value)}
-              placeholder="blank"
-            />
-          </label>
-          <label>
-            单车保费
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={piExportInsuranceEur}
-              onChange={(event) => setPiExportInsuranceEur(event.target.value)}
-              placeholder="blank"
-            />
-          </label>
-          <label>
-            一次内销单车运费
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={piExportDomesticFreightEur}
-              onChange={(event) => setPiExportDomesticFreightEur(event.target.value)}
-              placeholder="blank"
-            />
-          </label>
-          <label>
-            一次内销单车保费
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={piExportDomesticInsuranceEur}
-              onChange={(event) => setPiExportDomesticInsuranceEur(event.target.value)}
-              placeholder="blank"
-            />
-          </label>
-          <button type="button" className="btn btn-sm btn-primary" onClick={handlePiExport}>
-            Download PI data
-          </button>
-        </div>
-      ) : null}
       </div>
       ) : null}
 

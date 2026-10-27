@@ -6,7 +6,9 @@ from unittest.mock import Mock
 
 import openpyxl
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from app.core.security import get_current_user, UserContext
 
 from app.api.routes import order_genius_vehicle_allocation as route
 from app.services import order_genius_vehicle_exporter as exporter
@@ -295,11 +297,12 @@ def test_monthly_freight_rejects_both_modes_even_with_a_uniform_fallback(templat
         exporter.generate_monthly_invoice_excel(model_plan, {"modelFreightEur": [], "freightEur": 1700, "insuranceEur": 20})
 
 
-def test_monthly_export_denies_country_before_reading_plan_or_template(monkeypatch):
+@pytest.mark.parametrize("output_format", ["template", "details", "data"])
+def test_monthly_export_denies_country_before_reading_plan_or_template(monkeypatch, output_format):
     monkeypatch.setattr(route, "_validate_country", Mock(side_effect=HTTPException(403, "Unauthorized country")))
     read = Mock(); monkeypatch.setattr(route, "list_pi_headers", read)
     with pytest.raises(HTTPException) as error:
-        route.preview_monthly_invoice("CH", "2026-10", session=Mock(), user=Mock())
+        route.preview_monthly_invoice("CH", "2026-10", output_format=output_format, session=Mock(), user=Mock())
     assert error.value.status_code == 403
     read.assert_not_called()
 
@@ -348,3 +351,96 @@ def test_formal_monthly_export_requires_saved_source_and_current_preview(monkeyp
         route.export_monthly_invoice("CH", "2026-10", {"sourceRevision": "old"}, session=Mock(), user=Mock())
     assert error.value.detail["code"] == "source_changed"
     generate.assert_not_called()
+
+
+@pytest.mark.parametrize("output_format,first", [("details", 5), ("data", 2)])
+def test_template_free_formats_use_same_saved_snapshots_and_live_formulas(tmp_path, monkeypatch, output_format, first):
+    monkeypatch.setattr(exporter, "PI_TEMPLATE_ROOT", tmp_path / "no-templates")
+    detail = pi("BG")
+    detail["vehicles"][0].update(piCode=detail["header"]["piCode"], carCode="C1", modelName="=1+1")
+    detail["vehicles"][1].update(piCode=detail["header"]["piCode"], carCode="C2", fobEur=20000, freightEur=200)
+    before = deepcopy(detail)
+    context = exporter.pi_invoice_context(detail, output_format=output_format)
+    assert context["unitCount"] == 2 and context["buyerName"] == "" and context["bankDetails"] == ""
+    output = exporter.generate_pi_invoice_excel(detail, {"outputFormat": output_format})
+    wb = openpyxl.load_workbook(output)
+    values = openpyxl.load_workbook(BytesIO(output.getvalue()), data_only=True).active
+    ws = wb.active
+    assert values[f"H{first + 2}"].value == 2
+    assert values[f"J{first + 2}"].value == 30000.11
+    assert values[f"N{first + 2}"].value == 30337.12
+    assert ws[f"J{first}"].value == f"=ROUND(H{first}*I{first},2)"
+    assert values[f"I{first}"].value == 10000.11 and values[f"I{first + 1}"].value == 20000
+    assert ws[f"B{first}"].value == "'=1+1" and ws[f"B{first}"].data_type == "s"
+    assert ws.freeze_panes == f"H{first}" and ws.page_setup.fitToHeight == 0
+    assert ws.print_area == f"'{ws.title}'!$A$1:$N${first + 2}"
+    if output_format == "data":
+        assert not ws.merged_cells.ranges and ws.auto_filter.ref == "A1:N3"
+        assert {wb["PI sources"].cell(row, 1).value for row in (3, 4)} == {detail["header"]["piCode"]}
+    else:
+        assert ws["A1"].value == "9-Description and Quantity: Brand New SUV Motor Vehicles"
+        assert "Description of Goods" == ws["B3"].value
+    assert detail == before
+
+
+@pytest.mark.parametrize("output_format", ["template", "details", "data"])
+def test_all_three_formats_share_amounts_and_explicit_model_costs(templates, output_format):
+    detail = pi("CH")
+    output = exporter.generate_pi_invoice_excel(detail, {"outputFormat": output_format,
+        "modelFreightEur": [{"brand": "OMODA", "modelName": "MODEL BEV", "freightEur": 0}],
+        "insuranceEur": 0, "handlingEur": 5})
+    ws = openpyxl.load_workbook(output, data_only=True).active
+    total, quantity, amount = (29, "F", "L") if output_format == "template" else (6 if output_format == "details" else 3, "H", "N")
+    assert ws[f"{quantity}{total}"].value == 2 and ws[f"{amount}{total}"].value == 20010.22
+    detail["vehicles"][0]["fobEur"] = None
+    with pytest.raises(ValueError, match="FOB"):
+        exporter.generate_pi_invoice_excel(detail, {"outputFormat": output_format})
+    with pytest.raises(ValueError):
+        exporter.generate_pi_invoice_excel(pi("CH"), {"outputFormat": output_format, "insuranceEur": -1})
+
+
+@pytest.mark.parametrize("output_format", ["details", "data"])
+def test_template_free_routes_do_not_read_template_files_or_bypass_saved_pi(monkeypatch, output_format):
+    detail = {**pi("BG"), "sourceRevision": "r1", "sourcePiCodes": ["PI-BG-202609-001"]}
+    monkeypatch.setattr(route, "_monthly_invoice_source", Mock(return_value=(detail, "BG", {"OMODA"}, [])))
+    template_read = Mock(side_effect=AssertionError("No template dependency allowed"))
+    monkeypatch.setattr(route, "_template_catalog", template_read)
+    monkeypatch.setattr(route, "_scoped_template", template_read)
+    preview = route.preview_monthly_invoice("BG", "2026-09", output_format=output_format, session=Mock(), user=Mock())
+    assert preview["context"]["sourceRevision"] == "r1" and preview["catalog"] is None
+    response = route.export_monthly_invoice("BG", "2026-09", {"outputFormat": output_format, "sourceRevision": "r1"}, session=Mock(), user=Mock())
+    assert response.media_type == route.XLSX_MEDIA_TYPE and "PI-BG-202609-001" in response.headers["content-disposition"]
+    monkeypatch.setattr(route, "_monthly_invoice_source", Mock(return_value=(None, "BG", {"OMODA"}, [])))
+    assert route.preview_monthly_invoice("BG", "2026-09", output_format=output_format, session=Mock(), user=Mock())["issue"]["code"] == "no_saved_pi"
+    with pytest.raises(HTTPException) as error:
+        route.export_monthly_invoice("BG", "2026-09", {"outputFormat": output_format}, session=Mock(), user=Mock())
+    assert error.value.status_code == 409 and error.value.detail["code"] == "no_saved_pi"
+    template_read.assert_not_called()
+
+
+@pytest.mark.parametrize("output_format,first", [("details", 5), ("data", 2)])
+def test_template_free_http_download_and_role_gate(monkeypatch, output_format, first):
+    detail = {**pi("BG"), "sourceRevision": "r1", "sourcePiCodes": ["PI-BG-202609-001"]}
+    monkeypatch.setattr(route, "_monthly_invoice_source", Mock(return_value=(detail, "BG", {"OMODA"}, [])))
+    monkeypatch.setattr(route, "_scoped_template", Mock(side_effect=AssertionError("Must not load a template")))
+    app = FastAPI(); app.include_router(route.router)
+    user = UserContext("order_filler", "alice")
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[route.get_db_session] = lambda: Mock()
+    path = f"/order-genius/vehicle-allocation/monthly-invoice?country=BG&month=2026-09&output_format={output_format}"
+    with TestClient(app) as client:
+        preview = client.get(path)
+        assert preview.status_code == 200 and preview.json()["context"]["unitCount"] == 2
+        response = client.post(path, json={"outputFormat": output_format, "sourceRevision": "r1"})
+        assert response.status_code == 200 and response.headers["content-type"] == route.XLSX_MEDIA_TYPE
+        ws = openpyxl.load_workbook(BytesIO(response.content), data_only=True).active
+        assert ws[f"N{first + 1}"].value == 20260.68
+        assert client.post(path, json={"outputFormat": output_format, "sourceRevision": "old"}).status_code == 409
+        user = UserContext("viewer", "alice")
+        assert client.get(path).status_code == 403 and client.post(path, json={}).status_code == 403
+
+
+@pytest.mark.parametrize("output_format", [None, [], {}, "unknown"])
+def test_invalid_export_formats_are_rejected_without_reading_templates(output_format):
+    with pytest.raises(ValueError, match="Choose template"):
+        exporter.generate_pi_invoice_excel(pi("BG"), {"outputFormat": output_format})

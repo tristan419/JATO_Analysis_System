@@ -21,7 +21,7 @@ const batches: PiOrderHeader[] = [{ piId: "saved", piCode: context.piCode, offic
   portOfDischarge: null, orderDate: null, orderMonth: "2026-10", piSequenceNo: 1, shippingScheduleUrl: null,
   feishuTrackingUrl: null, shipName: null, etd: null, eta: null, actualDepartureDate: null, actualArrivalDate: null,
   readyForPickupDate: null, status: "draft", remark: null, rowVersion: 1, createdAtUtc: null, updatedAtUtc: null }];
-const source = { scope: "single", piCode: context.piCode, sourceRevision: "saved-v1" };
+const source = { outputFormat: "template", scope: "single", piCode: context.piCode, sourceRevision: "saved-v1" };
 const catalog: PiTemplateCatalog = { items: [{ id: "SE_OJ", owner: "System", name: "SE OJ September example", shared: true, system: true, country: "SE", brands: ["OMODA", "JAECOO"] }],
   owner: "alice", owners: ["alice"], actor: "alice", admin: false, country: "SE", brands: ["OMODA", "JAECOO"] };
 beforeEach(() => {
@@ -42,7 +42,7 @@ it("exports a selected saved PI snapshot without creating another PI; zero costs
   const close = vi.fn();
   render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={close} />);
   await screen.findByText("Example Buyer");
-  expect(api.getMonthlyInvoiceContext).toHaveBeenCalledWith("SE", "2026-10", "", "single", "");
+  expect(api.getMonthlyInvoiceContext).toHaveBeenCalledWith("SE", "2026-10", "", "single", "", "template");
   expect(screen.getByLabelText("Saved PI")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Download XLSX" }));
   expect(api.exportMonthlyInvoice).not.toHaveBeenCalled();
@@ -53,6 +53,44 @@ it("exports a selected saved PI snapshot without creating another PI; zero costs
   await waitFor(() => expect(close).toHaveBeenCalledOnce());
 });
 
+it.each(["details", "data"] as const)("exports %s for a country with no template, without requiring invoice fields", async (format) => {
+  const generic: PiInvoiceContext = { ...context, piCode: "PI-BG-202610-001", templateKey: "", templateName: "General order details",
+    sourcePiCodes: ["PI-BG-202610-001"], charges: ["freightEur", "insuranceEur", "handlingEur"],
+    defaults: { invoiceDate: "", referenceNo: "", portOfShipment: "", portOfDischarge: "" } };
+  vi.mocked(api.getMonthlyInvoiceContext).mockImplementation(async (_country, _month, _template, _scope, _pi, output) =>
+    output === "template" ? { catalog: { ...catalog, country: "BG", items: [] }, batches: [], context: null }
+      : { catalog: null, batches: [], context: generic });
+  render(<PiInvoiceExportDialog countries={["BG"]} month="2026-10" onClose={vi.fn()} />);
+  await screen.findByText(/可选无需模板的通用明细/);
+  fireEvent.change(screen.getByLabelText("Export format"), { target: { value: format } });
+  await screen.findByText(/No template required/);
+  expect(screen.queryByText("Example Buyer")).toBeNull();
+  expect(screen.queryByLabelText("PI template")).toBeNull();
+  expect(screen.queryByLabelText("Port of shipment / 装运港")).toBeNull();
+  fillFees(); fireEvent.click(screen.getByRole("button", { name: "Download XLSX" }));
+  await waitFor(() => expect(api.exportMonthlyInvoice).toHaveBeenCalledWith("BG", "2026-10", {
+    ...generic.defaults, outputFormat: format, scope: "single", piCode: generic.piCode, sourceRevision: "saved-v1",
+    freightEur: 0, insuranceEur: 0, handlingEur: 0,
+  }));
+  expect(api.generateVehicleAllocationFromOrderMatrix).not.toHaveBeenCalled();
+});
+
+it("switching output formats preserves fee drafts and keeps unbatched quantities explicitly excluded", async () => {
+  const create = vi.fn();
+  render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={vi.fn()} onCreateBatch={create} />);
+  await screen.findByText("Example Buyer");
+  fireEvent.change(screen.getByLabelText("Freight / 运费 (EUR / unit)"), { target: { value: "1700" } });
+  vi.mocked(api.getMonthlyInvoiceContext).mockResolvedValue({ catalog: null, batches, context: { ...context, templateKey: "",
+    charges: ["freightEur", "insuranceEur", "handlingEur"], defaults: { ...context.defaults, portOfShipment: "", portOfDischarge: "" } } });
+  fireEvent.change(screen.getByLabelText("Export format"), { target: { value: "details" } });
+  await screen.findByText(/No template required/);
+  expect(screen.getByDisplayValue("1700")).toBeTruthy();
+  expect(screen.getByText(/尚未创建PI的数量不包含/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Create next PI / 前往创建下一批" }));
+  expect(create).toHaveBeenCalledWith("SE", "2026-10");
+  expect(api.generateVehicleAllocationFromOrderMatrix).not.toHaveBeenCalled();
+});
+
 it("the same September-named template can be reused for October and November", async () => {
   render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={vi.fn()} />);
   await screen.findByText("Example Buyer");
@@ -61,7 +99,7 @@ it("the same September-named template can be reused for October and November", a
     defaults: { ...context.defaults, referenceNo: "PI-SE-202611" } } });
   fireEvent.change(screen.getByLabelText("Plan month"), { target: { value: "2026-11" } });
   await screen.findByDisplayValue("PI-SE-202611");
-  expect(api.getMonthlyInvoiceContext).toHaveBeenLastCalledWith("SE", "2026-11", "", "single", "");
+  expect(api.getMonthlyInvoiceContext).toHaveBeenLastCalledWith("SE", "2026-11", "", "single", "", "template");
   expect(screen.getByText(/2026-11.*20 units/)).toBeTruthy();
   expect((screen.getByLabelText("Freight / 运费 (EUR / unit)") as HTMLInputElement).value).toBe("");
   fillFees(); fireEvent.click(screen.getByRole("button", { name: "Download XLSX" }));
@@ -86,7 +124,7 @@ it("failed downloads retain modified fields and closing never writes", async () 
 it("no template offers the existing upload manager without creating an order", async () => {
   vi.mocked(api.getMonthlyInvoiceContext).mockResolvedValueOnce({ catalog: { ...catalog, items: [] }, context: null, batches });
   render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={vi.fn()} />);
-  await screen.findByText(/Upload or review a compatible/);
+  await screen.findByText(/Choose general details or PI data without a template/);
   expect((screen.getByRole("button", { name: "Download XLSX" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Manage templates / 管理模板" }));
   expect(screen.getByLabelText("Upload PI template")).toBeTruthy();
@@ -110,7 +148,7 @@ it("a late result from the previous country/month cannot replace current scope",
   await screen.findByText("Example Buyer");
   resolveOld({ catalog, batches, context: { ...context, buyerName: "Old buyer" } });
   await waitFor(() => expect(screen.queryByText("Old buyer")).toBeNull());
-  expect(api.getMonthlyInvoiceContext).toHaveBeenLastCalledWith("CH", "2026-10", "", "single", "");
+  expect(api.getMonthlyInvoiceContext).toHaveBeenLastCalledWith("CH", "2026-10", "", "single", "", "template");
 });
 
 it("a broken top template reports failure and never silently chooses a fallback", async () => {
@@ -234,7 +272,7 @@ it("monthly summary is explicit; a changed source reload preserves edited fields
   render(<PiInvoiceExportDialog countries={["SE"]} month="2026-10" onClose={vi.fn()} />);
   await screen.findByText("Example Buyer");
   fireEvent.change(screen.getByLabelText("Export scope"), { target: { value: "monthly" } });
-  await waitFor(() => expect(api.getMonthlyInvoiceContext).toHaveBeenLastCalledWith("SE", "2026-10", "", "monthly", ""));
+  await waitFor(() => expect(api.getMonthlyInvoiceContext).toHaveBeenLastCalledWith("SE", "2026-10", "", "monthly", "", "template"));
   await screen.findByText("Example Buyer"); fillFees();
   fireEvent.change(screen.getByLabelText("Ref. No / PI 编号"), { target: { value: "My summary" } });
   fireEvent.click(screen.getByRole("button", { name: "Download XLSX" }));

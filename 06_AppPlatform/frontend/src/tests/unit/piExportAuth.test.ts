@@ -10,7 +10,7 @@ it("JSON and blob exports retain the current auth token when callers set Content
   vi.stubGlobal("fetch", fetch);
   localStorage.setItem("jato_auth_token", "fresh-session");
   await request("/test-pi-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-  await api.exportOrderGeniusPi("SE", 2026, {});
+  await api.exportMonthlyInvoice("BG", "2026-10", { outputFormat: "data", invoiceDate: "", referenceNo: "", portOfShipment: "", portOfDischarge: "" });
   await api.createVehicleAllocationPi({ countryCode: "SE" });
   localStorage.setItem("jato_auth_token", "renewed-session");
   await api.exportPiInvoice("PI-SE-202609-001", { invoiceDate: "2026-09-01", referenceNo: "PI", portOfShipment: "China", portOfDischarge: "Destination" });
