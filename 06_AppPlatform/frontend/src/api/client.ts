@@ -193,6 +193,7 @@ import type {
   BulkVehicleUpdateResult,
   PiOrderDetail,
   PiInvoiceContext,
+  PiExportFormat,
   PiTemplateAnalysis,
   PiTemplateCatalog,
   PiTemplateSave,
@@ -5222,13 +5223,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; selectionDate?: string; hideEmptyRows?: boolean; freightEur?: number; insuranceEur?: number; domesticFreightEur?: number; domesticInsuranceEur?: number }) =>
-    requestBlob("/order-genius/export-pi", {
-      method: "POST",
-      body: JSON.stringify({ country, year, ...opts }),
-      headers: { "Content-Type": "application/json" },
-    }),
-
   getOrderGeniusPaymentTerms: () =>
     request<{ items: PaymentTermRule[] }>("/order-genius/payment-terms"),
 
@@ -5350,8 +5344,8 @@ export const api = {
   getPiInvoiceContext: (piCode: string, templateId?: string) =>
     request<PiInvoiceContext>(`/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/${templateId ? `invoice-context/${encodeURIComponent(templateId)}` : "invoice"}`),
 
-  getMonthlyInvoiceContext: (country: string, month: string, templateId = "", scope: "single" | "monthly" = "single", piCode = "") =>
-    request<{ catalog: PiTemplateCatalog; batches: PiOrderHeader[]; context: PiInvoiceContext | null; error?: string; issue?: import("../utils/orderGeniusIssue").OrderGeniusIssue }>(`/order-genius/vehicle-allocation/monthly-invoice?${new URLSearchParams({ country, month, template_id: templateId, scope, pi_code: piCode })}`),
+  getMonthlyInvoiceContext: (country: string, month: string, templateId = "", scope: "single" | "monthly" = "single", piCode = "", outputFormat: PiExportFormat = "template") =>
+    request<{ catalog: PiTemplateCatalog | null; batches: PiOrderHeader[]; context: PiInvoiceContext | null; error?: string; issue?: import("../utils/orderGeniusIssue").OrderGeniusIssue }>(`/order-genius/vehicle-allocation/monthly-invoice?${new URLSearchParams({ country, month, template_id: templateId, scope, pi_code: piCode, output_format: outputFormat })}`),
 
   exportMonthlyInvoice: (country: string, month: string, options: PiInvoiceOptions) =>
     requestBlob(`/order-genius/vehicle-allocation/monthly-invoice?${new URLSearchParams({ country, month })}`, {

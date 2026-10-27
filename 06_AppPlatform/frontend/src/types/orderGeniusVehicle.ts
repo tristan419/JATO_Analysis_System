@@ -8,7 +8,10 @@ export type PiStatus =
   | "closed"
   | "cancelled";
 
+export type PiExportFormat = "template" | "details" | "data";
+
 export interface PiInvoiceOptions {
+  outputFormat?: PiExportFormat;
   scope?: "single" | "monthly";
   piCode?: string;
   sourceRevision?: string;

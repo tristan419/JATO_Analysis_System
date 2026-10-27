@@ -154,7 +154,9 @@ describe("quantity save → PI readiness", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Import \/ Export/ }));
     fireEvent.click(screen.getByRole("button", { name: "Export PI" }));
     await screen.findByText(/No saved PI.*尚无已保存PI.*Create a batch/);
-    expect(preview).toHaveBeenCalledWith("CH", `${new Date().getFullYear()}-10`, "", "single", "");
+    expect(preview).toHaveBeenCalledWith("CH", `${new Date().getFullYear()}-10`, "", "single", "", "template");
+    expect(screen.queryByRole("button", { name: "Export XLSX" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export PI data" })).toBeNull();
     expect(screen.getByLabelText("Saved PI")).toBeTruthy();
     expect(create).not.toHaveBeenCalled();
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Go to PI Batch / 前往创建批次" }));

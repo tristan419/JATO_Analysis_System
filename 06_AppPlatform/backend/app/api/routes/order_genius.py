@@ -40,7 +40,6 @@ from app.services.order_genius_service import (
     build_material_timeline,
     build_options,
     export_matrix,
-    export_pi_matrix,
     get_fob_for_sku,
     preview_order_quantity_import,
     update_quantity_cell,
@@ -2678,34 +2677,6 @@ def export_order_genius(
     today = _date.today().strftime("%Y%m%d")
     suffix = _export_filename_suffix(filters)
     filename = f"{country}_{year}_{today}{suffix}.xlsx"
-    return StreamingResponse(
-        buf,
-        media_type=(
-            "application/vnd.openxmlformats-officedocument"
-            ".spreadsheetml.sheet"
-        ),
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@router.post("/export-pi")
-def export_order_genius_pi(
-    body: dict,
-    session: Session = Depends(get_db_session),
-    user=Depends(require_min_role("viewer")),
-) -> StreamingResponse:
-    country = body.get("country", "")
-    validate_country_access(session, user.name, user.role, country)
-    year = body.get("year", 2026)
-    filters = _export_filter_params(body)
-    try:
-        buf = export_pi_matrix(session, country, year, allowed_brands=ordering_brands(session, user), **filters)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    from datetime import date as _date
-    today = _date.today().strftime("%Y%m%d")
-    suffix = _export_filename_suffix(filters)
-    filename = f"PI_{country}_{year}_{today}{suffix}.xlsx"
     return StreamingResponse(
         buf,
         media_type=(
