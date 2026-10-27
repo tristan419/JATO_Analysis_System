@@ -60,6 +60,9 @@ function plan(quantity: number): VehicleAllocationPlan {
 }
 const savedQuantity: QuantityCellResponse = { orderQuantityCellId: "q", countryCode: "CH", orderYear: 2026, orderMonth: 10, materialCode: "T6481QNCLLX0003", quantity: 15, fobEur: 29000, rowVersion: 2 };
 beforeEach(() => {
+  // Isolate notification reads from the quantity request's deliberate 401/403.
+  // A delayed unrelated failure must not replace the renewed-session fixture.
+  vi.spyOn(api, "getMaterialNotices").mockImplementation(async (country) => ({ countryCode: country, notices: [] }));
   authState.refreshUser.mockReset().mockResolvedValue(true);
   authState.user.role = "admin";
   authState.user.brands = [];
@@ -115,7 +118,7 @@ describe("quantity save → PI readiness", () => {
     fireEvent(window, new Event("focus"));
     expect(authState.refreshUser).not.toHaveBeenCalled();
     localStorage.setItem("jato_auth_token", "renewed-session");
-    fireEvent(window, new Event("focus"));
+    await act(async () => { fireEvent(window, new Event("focus")); });
     await screen.findByText(/登录身份已更新，请主动重试刚才的操作/);
     expect(authState.refreshUser).toHaveBeenCalledWith({ preserveSession: true });
     expect(save).toHaveBeenCalledTimes(1);
