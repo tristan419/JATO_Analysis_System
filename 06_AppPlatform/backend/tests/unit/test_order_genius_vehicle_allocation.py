@@ -976,6 +976,7 @@ def test_historical_backfill_persists_qpr_across_multiple_pi_batches(vehicle_db)
 
 
 def test_explicit_pi_line_items_cannot_exceed_remaining_quantities(monkeypatch) -> None:
+    monkeypatch.setattr(order_repo, "get_quantity_cell", Mock())
     cells = [SimpleNamespace(material_code="A", quantity=3, fob_eur=100)]
     existing_allocation = SimpleNamespace(
         pi_line_allocation_id="alloc-1",
@@ -1035,7 +1036,86 @@ def test_explicit_pi_line_items_cannot_exceed_remaining_quantities(monkeypatch) 
     assert "requested 2, remaining 1" in str(exc.value.detail)
 
 
+def _seed_batch_cell(vehicle_db):
+    code = "BATCH-001"
+    vehicle_db.add(models.MaterialSkuMaster(baseline_version_id=vehicle_db.info["baseline"], material_code=code,
+        brand="JAECOO", model_name="Example HEV", version="Trim", powertrain="HEV", bom_template="BATCH**001",
+        exterior_color_code="BW", exterior_color_name="White", exterior_color_type="single", colour_tier="single",
+        lifecycle_status="active", is_active=True))
+    vehicle_db.add(models.CountrySkuFobResolved(baseline_version_id=vehicle_db.info["baseline"], country_code="CH",
+        material_code=code, payment_term_code="TT", base_fob_eur=18000, uploaded_fob_eur=18000,
+        final_fob_eur=18000, fob_source_mode="template_base"))
+    vehicle_db.flush()
+    saved = order_service.update_quantity_cell(vehicle_db, "CH", 2026, 10, code, 120, "tester", 0, expected_allocated_quantity=0)
+    return code, saved
+
+
+def test_pending_entry_adds_to_saved_pi_and_summary_excludes_unsubmitted_plan(vehicle_db, monkeypatch):
+    if vehicle_db.bind.dialect.name == "sqlite":
+        # This single-market fixture cannot execute PostgreSQL's JSONB @> operator.
+        monkeypatch.setattr(vehicle_repo, "_header_country_filter", lambda country: models.PiOrderHeader.country_code == country)
+    code, saved = _seed_batch_cell(vehicle_db)
+    first = generate_from_order_matrix(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 10,
+        "lineItems": [{"materialCode": code, "quantity": 120}]}, "tester")
+    added = order_service.update_quantity_cell(vehicle_db, "CH", 2026, 10, code, 80, "tester", saved["row_version"], expected_allocated_quantity=120)
+    assert added["quantity"] == 200
+    user = SimpleNamespace(name="tester", role="admin")
+    # Preview is read-only and ignores the 80 units not in a saved PI.
+    detail, country, brands, batches = vehicle_route._monthly_invoice_source(vehicle_db, user, "CH", "2026-10", "monthly")
+    assert country == "CH" and brands == {"JAECOO"} and len(batches) == 1
+    assert len(detail["vehicles"]) == 120 and detail["sourcePiCodes"] == [first["piCode"]]
+    with pytest.raises(HTTPException) as conflict:
+        order_service.update_quantity_cell(vehicle_db, "CH", 2026, 10, code, 80, "tester", added["row_version"], expected_allocated_quantity=0)
+    assert conflict.value.detail["code"] == "quantity_conflict"
+    assert order_repo.get_quantity_cell(vehicle_db, "CH", 2026, 10, code).quantity == 200
+    second = generate_from_order_matrix(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 10,
+        "lineItems": [{"materialCode": code, "quantity": 80}]}, "tester")
+    plan = get_order_matrix_allocation_plan(vehicle_db, "CH", 2026, 10)
+    assert plan["totals"]["remainingQuantity"] == 0 and plan["totals"]["selectedQuantity"] == 200
+    summary, _, _, _ = vehicle_route._monthly_invoice_source(vehicle_db, user, "CH", "2026-10", "monthly")
+    assert len(summary["vehicles"]) == 200 and set(summary["sourcePiCodes"]) == {first["piCode"], second["piCode"]}
+    assert summary["sourceRevision"] != detail["sourceRevision"]
+    single, _, _, _ = vehicle_route._monthly_invoice_source(vehicle_db, user, "CH", "2026-10", "single", first["piCode"])
+    assert len(single["vehicles"]) == 120 and {v["fobEur"] for v in single["vehicles"]} == {18000}
+    # A no-PI month is not exported from its plan, and no fake batch is created.
+    empty, _, _, empty_batches = vehicle_route._monthly_invoice_source(vehicle_db, user, "CH", "2026-11", "monthly")
+    assert empty is None and empty_batches == []
+
+
+def test_pending_save_waits_for_concurrent_pi_then_rejects_stale_allocation(vehicle_db):
+    if vehicle_db.bind.dialect.name != "postgresql":
+        pytest.skip("Real row-lock test requires disposable PostgreSQL")
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from threading import Event
+    code, saved = _seed_batch_cell(vehicle_db)
+    vehicle_db.commit()
+    order_repo.get_quantity_cell(vehicle_db, "CH", 2026, 10, code, for_update=True)
+    started = Event()
+    def save_stale_remainder():
+        with Session(vehicle_db.bind) as other:
+            started.set()
+            try:
+                order_service.update_quantity_cell(other, "CH", 2026, 10, code, 80, "tester", saved["row_version"], expected_allocated_quantity=0)
+                other.commit()
+                return None
+            except HTTPException as exc:
+                other.rollback()
+                return exc
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(save_stale_remainder)
+        assert started.wait(2)
+        with pytest.raises(TimeoutError):
+            pending.result(timeout=0.2)
+        generate_from_order_matrix(vehicle_db, {"countryCode": "CH", "orderYear": 2026, "orderMonth": 10,
+            "lineItems": [{"materialCode": code, "quantity": 120}]}, "tester")
+        vehicle_db.commit()
+        conflict = pending.result(timeout=5)
+        assert conflict.status_code == 409 and conflict.detail["code"] == "quantity_conflict"
+    assert order_repo.get_quantity_cell(vehicle_db, "CH", 2026, 10, code).quantity == 120
+
+
 def test_combined_pi_allocations_validate_each_market_country(monkeypatch) -> None:
+    monkeypatch.setattr(order_repo, "get_quantity_cell", Mock())
     cells_by_country = {
         "SE": [SimpleNamespace(material_code="A", quantity=3, fob_eur=100)],
         "FI": [SimpleNamespace(material_code="A", quantity=1, fob_eur=100)],

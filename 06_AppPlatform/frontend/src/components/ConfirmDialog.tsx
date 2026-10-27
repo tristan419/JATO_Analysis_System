@@ -17,6 +17,7 @@ export interface ConfirmDialogError {
   details?: ConfirmDialogErrorDetail[];
   sourceFeedback?: string;
   retryBlocked?: boolean;
+  actions?: { label: string; onClick: () => void }[];
 }
 
 interface ConfirmDialogProps {
@@ -188,6 +189,7 @@ export function ConfirmDialog({
               style={{ flexBasis: "100%", maxHeight: "20vh", overflowY: "auto", overflowWrap: "anywhere" }}>
               <strong>{error.title}</strong>
               <p>{error.message}</p>
+              {error.actions?.map((action) => <button key={action.label} type="button" disabled={submitting} onClick={action.onClick}>{action.label}</button>)}
               {error.details?.length ? (
                 <dl>
                   {error.details.map((detail) => (

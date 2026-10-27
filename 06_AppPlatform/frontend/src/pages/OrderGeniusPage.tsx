@@ -44,7 +44,8 @@ import {
 } from "../utils/orderGeniusColourSwatch";
 import { resolveCommonParentMaterialRemark } from "../utils/orderGeniusRemarks";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
-import type { CellValueChangedEvent } from "ag-grid-community";
+import type { CellValueChangedEvent, GridApi } from "ag-grid-community";
+import { orderGeniusIssue, type OrderGeniusIssue } from "../utils/orderGeniusIssue";
 import {
   getOrderGeniusRowId,
   OrderGeniusGrid,
@@ -228,6 +229,8 @@ function formatOrderGeniusFileSize(bytes: number): string {
 }
 
 function getErrorMessage(error: unknown): string {
+  const issue = orderGeniusIssue(error);
+  if (issue) return `${issue.message} ${issue.suggestion}`;
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -692,6 +695,7 @@ export function OrderGeniusPage() {
   const [matrixConflictNotice, setMatrixConflictNotice] = useState<FobConflict[]>([]);
   const [fobCountryCodes, setFobCountryCodes] = useState<string[] | null>(null);
   const [bomAdminCopyTargetCountry, setBomAdminCopyTargetCountry] = useState<string | null>(null);
+  const [bomIssueSearch, setBomIssueSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [authFailureNotice, setAuthFailureNotice] = useState<{
@@ -778,8 +782,12 @@ export function OrderGeniusPage() {
   const [savingCells, setSavingCells] = useState<Set<string>>(new Set());
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({});
   const [quantityDrafts, setQuantityDrafts] = useState<Record<string, number>>({});
+  const [newBatchEntry, setNewBatchEntry] = useState(false);
+  const [quantityDraftAllocations, setQuantityDraftAllocations] = useState<Record<string, number>>({});
+  const [quantityIssue, setQuantityIssue] = useState<OrderGeniusIssue | null>(null);
+  const [locateTarget, setLocateTarget] = useState<OrderGeniusIssue | null>(null);
   const quantityVersionRef = useRef<Record<string, number>>({});
-  const gridApiRef = useRef<any>(null);
+  const gridApiRef = useRef<GridApi<OrderGeniusGridRow> | null>(null);
 
   // ── PI batch creation ─────────────────────────────────────────────
   const [piSelectedRowIds, setPiSelectedRowIds] = useState<Set<string>>(new Set());
@@ -799,6 +807,7 @@ export function OrderGeniusPage() {
   const [creatingPiBatch, setCreatingPiBatch] = useState(false);
   const [piBatchNotice, setPiBatchNotice] = useState("");
   const [piBatchError, setPiBatchError] = useState("");
+  const [piBatchIssue, setPiBatchIssue] = useState<OrderGeniusIssue | null>(null);
   const [confirmHistoricalPi, setConfirmHistoricalPi] = useState(false);
   const [confirmUndatedHistoricalFob, setConfirmUndatedHistoricalFob] = useState(false);
   const [confirmHistoricalSurcharge, setConfirmHistoricalSurcharge] = useState(false);
@@ -818,6 +827,7 @@ export function OrderGeniusPage() {
     setMatrices({});
     setOptions(null);
     setQuantityDrafts({});
+    setQuantityDraftAllocations({}); setQuantityIssue(null); setPiBatchIssue(null); setLocateTarget(null);
     quantityVersionRef.current = {};
     setPiSelectedRowIds(new Set());
     setPiBatchQuantities({});
@@ -856,8 +866,8 @@ export function OrderGeniusPage() {
   useEffect(() => {
     if (gridApiRef.current) {
       setTimeout(() => {
-        gridApiRef.current.refreshCells({ force: true });
-        gridApiRef.current.resetRowHeights();
+        gridApiRef.current?.refreshCells({ force: true });
+        gridApiRef.current?.resetRowHeights();
       }, 100);
     }
   }, [visibleColumns]);
@@ -1038,10 +1048,12 @@ export function OrderGeniusPage() {
 
     const getEffectiveQuantity = (r: MatrixRowWithCountry, month: number): number => {
       const stateKey = quantityCellKey(r._countryCode, r.materialCode, month, selectedYear);
-      if (Object.prototype.hasOwnProperty.call(quantityDrafts, stateKey)) {
-        return quantityDrafts[stateKey] ?? 0;
-      }
-      return r.months?.[String(month)]?.quantity ?? 0;
+      const total = quantityDrafts[stateKey] ?? r.months?.[String(month)]?.quantity ?? 0;
+      if (!newBatchEntry || month !== selectedMonth) return total;
+      const plan = piAllocationPlans[r._countryCode ?? ""];
+      const allocated = quantityDraftAllocations[stateKey] ?? (plan?.year === selectedYear && plan.month === month
+        ? plan.lineItems.find((line) => line.materialCode === r.materialCode)?.generatedQuantity ?? 0 : 0);
+      return Math.max(0, total - allocated);
     };
 
     const makeRow = (r: MatrixRowWithCountry, indent = false, includeParentRemark = true): OrderGeniusGridRow => {
@@ -1064,6 +1076,8 @@ export function OrderGeniusPage() {
         historicalSurchargeReview: r.historicalSurchargeReview,
         remark: includeParentRemark ? parentMaterialRemarkForRow(r) : undefined,
         _countryCode: r._countryCode,
+        _batchEntry: newBatchEntry && selectedMonth != null,
+        _allocatedQuantity: selectedMonth == null ? undefined : piAllocationPlans[r._countryCode ?? ""]?.lineItems.find((line) => line.materialCode === r.materialCode)?.generatedQuantity ?? 0,
         _indent: indent || undefined,
         _versions: {},
         _errors: {},
@@ -1322,13 +1336,14 @@ export function OrderGeniusPage() {
       }
     }
     return result;
-  }, [cellErrors, visibleMatrixRows, consolidatedView, expandedProductGroups, groupByProduct, quantityDrafts, savingCells, selectedCountries.length, selectedMonth, selectedYear]);
+  }, [cellErrors, visibleMatrixRows, consolidatedView, expandedProductGroups, groupByProduct, quantityDrafts, savingCells, selectedCountries.length, selectedMonth, selectedYear, newBatchEntry, piAllocationPlans, quantityDraftAllocations]);
 
   // Stable refs so callback identity doesn't change on re-render (prevents grid flash)
   const selCountriesRef = useRef(selectedCountries); selCountriesRef.current = selectedCountries;
   const selYearRef = useRef(selectedYear); selYearRef.current = selectedYear;
-  const selectionDateRef = useRef(selectionDate); selectionDateRef.current = selectionDate;
   const loadMatricesRef = useRef(loadMatrices); loadMatricesRef.current = loadMatrices;
+  const batchEntryRef = useRef(newBatchEntry); batchEntryRef.current = newBatchEntry;
+  const allocationPlansRef = useRef(piAllocationPlans); allocationPlansRef.current = piAllocationPlans;
 
   const toggleProductGroup = useCallback((groupKey: string) => {
     setExpandedProductGroups((prev) => {
@@ -1346,12 +1361,17 @@ export function OrderGeniusPage() {
       const year = selYearRef.current;
       const countryCode = data._countryCode || selCountriesRef.current[0] || "SE";
       const key = quantityCellKey(countryCode, data.materialCode, month, year);
-      const oldRowVersion = quantityVersionRef.current[key] ?? data._versions[monthField] ?? 0;
+      const oldRowVersion = data._versions[monthField] ?? quantityVersionRef.current[key] ?? 0;
       const oldQuantityRaw = Number(oldValue);
       const oldQuantity = oldValue != null && Number.isFinite(oldQuantityRaw) ? oldQuantityRaw : null;
       const nextQuantityRaw = Number(newValue);
-      const qty = Number.isFinite(nextQuantityRaw) ? Math.max(0, nextQuantityRaw) : 0;
-      if (oldQuantity != null && qty === oldQuantity) return;
+      const entered = Number.isFinite(nextQuantityRaw) ? Math.max(0, Math.floor(nextQuantityRaw)) : 0;
+      if (oldQuantity != null && entered === oldQuantity) return;
+      const batchEntry = batchEntryRef.current;
+      const plan = allocationPlansRef.current[countryCode];
+      if (batchEntry && (!plan || plan.year !== year || plan.month !== month)) return;
+      const allocated = batchEntry ? data._allocatedQuantity ?? plan?.lineItems.find((line) => line.materialCode === data.materialCode)?.generatedQuantity ?? 0 : 0;
+      const qty = entered + allocated;
 
       const clearDraft = () => {
         setQuantityDrafts((prev) => {
@@ -1360,9 +1380,11 @@ export function OrderGeniusPage() {
           delete next[key];
           return next;
         });
+        setQuantityDraftAllocations((prev) => { const next = { ...prev }; delete next[key]; return next; });
       };
 
       setQuantityDrafts((prev) => ({ ...prev, [key]: qty }));
+      if (batchEntry) setQuantityDraftAllocations((prev) => ({ ...prev, [key]: allocated }));
       setSavingCells((prev) => new Set(prev).add(key));
       setPiPlanLoading(true);
       setCellErrors((prev) => {
@@ -1381,14 +1403,15 @@ export function OrderGeniusPage() {
         orderYear: year,
         orderMonth: month,
         materialCode: data.materialCode,
-        quantity: qty,
+        quantity: batchEntry ? entered : qty,
+        expectedAllocatedQuantity: batchEntry ? allocated : undefined,
         rowVersion: oldRowVersion,
         includeHistorical: data.historicalBackfill === true,
       };
 
       try {
         const result = await api.updateQuantityCell(payload);
-        data[monthField] = result.quantity;
+        data[monthField] = batchEntry ? Math.max(0, result.quantity - allocated) : result.quantity;
         data._versions[monthField] = result.rowVersion;
         quantityVersionRef.current[key] = result.rowVersion;
         if (selYearRef.current === year) setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
@@ -1397,59 +1420,20 @@ export function OrderGeniusPage() {
           rowVersion: result.rowVersion,
         }));
         clearDraft();
+        setQuantityIssue((current) => current?.materialCode === data.materialCode && current.country === countryCode ? null : current);
       } catch (err: unknown) {
         const msg = getErrorMessage(err);
+        setQuantityIssue(orderGeniusIssue(err) ?? { code: "quantity_save", country: countryCode, materialCode: data.materialCode,
+          month: `${year}-${String(month).padStart(2, "0")}`, message: msg,
+          suggestion: "Review this cell and its country price/date; input is retained. / 请定位核对该数量格及国家价格/日期，输入已保留。" });
         const authStatus = getErrorStatus(err);
         if (authStatus === 401 || authStatus === 403) {
           setCellErrors((prev) => ({ ...prev, [key]: msg }));
           return;
         }
-        if (msg.toLowerCase().includes("conflict") || msg.includes("409")) {
-          try {
-            const latestMatrix = await api.getOrderGeniusMatrix({
-              country: countryCode,
-              year,
-              materialCodeSearch: data.materialCode,
-              selectionDate: selectionDateRef.current || undefined,
-            });
-            const normalizedMaterial = data.materialCode.trim().toUpperCase();
-            const latestRow = latestMatrix.rows.find(
-              (row) => row.materialCode.trim().toUpperCase() === normalizedMaterial,
-            );
-            const latestCell = latestRow?.months?.[String(month)];
-            const latestQuantity = latestCell?.quantity ?? 0;
-            if (oldQuantity != null && latestQuantity !== oldQuantity) {
-              throw new Error("Concurrent update conflict — refresh and try again.");
-            }
-            const retryResult = await api.updateQuantityCell({
-              ...payload,
-              rowVersion: latestCell?.rowVersion ?? oldRowVersion,
-            });
-            data[monthField] = retryResult.quantity;
-            data._versions[monthField] = retryResult.rowVersion;
-            quantityVersionRef.current[key] = retryResult.rowVersion;
-            if (selYearRef.current === year) setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
-              quantity: retryResult.quantity,
-              isEditable: true,
-              rowVersion: retryResult.rowVersion,
-            }));
-            setCellErrors((prev) => {
-              if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
-              const next = { ...prev };
-              delete next[key];
-              return next;
-            });
-            clearDraft();
-          } catch (retryErr: unknown) {
-            setCellErrors((prev) => ({ ...prev, [key]: getErrorMessage(retryErr) }));
-            loadMatricesRef.current();
-          }
-        } else if (oldQuantity == null) {
-          setCellErrors((prev) => ({ ...prev, [key]: msg }));
-          loadMatricesRef.current();
-        } else {
-          setCellErrors((prev) => ({ ...prev, [key]: msg }));
-        }
+        setCellErrors((prev) => ({ ...prev, [key]: msg }));
+        // Re-read is safe; only the user's explicit Retry may submit the retained draft.
+        if (authStatus === 409 || oldQuantity == null) loadMatricesRef.current();
       } finally {
         setPiBatchRefreshKey((current) => current + 1);
         setSavingCells((prev) => {
@@ -1737,7 +1721,8 @@ export function OrderGeniusPage() {
     if (quantityError && selectedMonth != null) {
       for (const row of piCandidateRows) {
         const key = quantityCellKey(row._countryCode, row.materialCode, selectedMonth, selectedYear);
-        if (cellErrors[key] && quantityDrafts[key] != null) void saveQuantityCell(row, selectedMonth, quantityDrafts[key], null);
+        if (cellErrors[key] && quantityDrafts[key] != null) void saveQuantityCell(row, selectedMonth,
+          newBatchEntry ? Math.max(0, quantityDrafts[key] - (quantityDraftAllocations[key] ?? 0)) : quantityDrafts[key], null);
       }
     } else {
       setPiPlanLoading(true);
@@ -1745,6 +1730,32 @@ export function OrderGeniusPage() {
       else setPiBatchRefreshKey((key) => key + 1);
     }
   };
+
+  const locateOrderIssue = (issue: OrderGeniusIssue) => {
+    setShowDeck(false);
+    if (issue.country) setSelectedCountries([issue.country]);
+    if (issue.month && /^\d{4}-\d{2}$/.test(issue.month)) {
+      setSelectedYear(Number(issue.month.slice(0, 4))); setSelectedMonth(Number(issue.month.slice(5)));
+    }
+    if (issue.materialCode) {
+      setMaterialSearch(issue.materialCode); setBrandFilter(""); setModelFilter(""); setVersionFilter(""); setColourFilter(""); setPowertrainFilter("");
+      setGroupByProduct(false); setHideEmptyRows(false); setLocateTarget(issue);
+    }
+  };
+  useEffect(() => {
+    const api = gridApiRef.current;
+    if (!locateTarget || !api || api.isDestroyed()) return;
+    const frame = window.requestAnimationFrame(() => {
+      api.forEachNode((node) => {
+        if (node.data?.materialCode !== locateTarget.materialCode || node.data?._countryCode !== locateTarget.country || node.rowIndex == null) return;
+        const field = `month_${Number(locateTarget.month?.slice(5))}`;
+        api.ensureNodeVisible(node, "middle"); api.ensureColumnVisible(field); api.setFocusedCell(node.rowIndex, field);
+        document.querySelector(".og-grid-wrapper")?.scrollIntoView({ block: "center" });
+        setLocateTarget(null);
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [locateTarget, flatRows]);
 
   const selectedPiRows = useMemo(() => {
     const result: OrderGeniusGridRow[] = [];
@@ -2205,6 +2216,7 @@ export function OrderGeniusPage() {
 
     setCreatingPiBatch(true);
     setPiBatchError("");
+    setPiBatchIssue(null);
     setPiBatchNotice("");
     setPiBatchCreatedCodes([]);
     try {
@@ -2268,6 +2280,9 @@ export function OrderGeniusPage() {
       setPiBatchRefreshKey((key) => key + 1);
     } catch (err: unknown) {
       setPiBatchError(`PI creation failed / PI 创建失败: ${getErrorMessage(err)}`);
+      setPiBatchIssue(orderGeniusIssue(err) ?? { code: "pi_validation", materialCode: selectedPiRows[0]?.materialCode,
+        country: selectedPiRows[0]?._countryCode, month: `${selectedYear}-${String(selectedMonth).padStart(2, "0")}`,
+        message: getErrorMessage(err), suggestion: "Review the affected material, order date and remaining quantity; the form is retained. / 请定位核对物料、下单日及待入批数量，表单已保留。" });
       setPiBatchRefreshKey((key) => key + 1);
     } finally {
       setCreatingPiBatch(false);
@@ -2474,6 +2489,8 @@ export function OrderGeniusPage() {
         <span>{brandFilter || "All brands"}</span>
         <span>{modelFilter || "All models"}</span>
         <span>{powertrainFilter || "All powertrains"}</span>
+        {canFillOrders ? <label><input type="checkbox" aria-label="Enter new batch" checked={newBatchEntry} disabled={selectedMonth == null || quantitySaving}
+          onChange={(event) => setNewBatchEntry(event.target.checked)} />填写新批次 / Enter new batch</label> : null}
         {selectedMonth != null ? (
           <div className={`og-pi-readiness ${quantityError || piPlanError || error ? "is-error" : piReady ? "is-ready" : "is-pending"}`} role="status" aria-live="polite">
             {piReadinessText}
@@ -2481,6 +2498,12 @@ export function OrderGeniusPage() {
           </div>
         ) : null}
       </div>
+      {newBatchEntry && selectedMonth != null ? <p role="note">Pending quantity only / 仅填待入批余量 · Already in PI / 已入批 {piPlanLoading ? "—" : piPlanTotals.generatedQuantity}
+        {" · "}Month total / 月总量 {piPlanLoading ? "—" : piPlanTotals.selectedQuantity} · Zero pending is blank; saved PIs remain / 余量0显示空白，历史PI保留。</p> : null}
+      {quantityIssue ? <div role="alert" className="alert alert-error">{quantityIssue.message} {quantityIssue.suggestion}
+        <button type="button" onClick={() => locateOrderIssue(quantityIssue)}>Locate quantity / 定位数量格</button>
+        {canMaintainBom && quantityIssue.code === "material_unavailable" ? <button type="button" onClick={() => { setBomIssueSearch(quantityIssue.materialCode ?? ""); setShowBomAdmin(true); }}>Review BOM / 定位BOM</button> : null}
+      </div> : null}
       {authFailureNotice ? (
         <div
           role="alert"
@@ -3137,7 +3160,11 @@ export function OrderGeniusPage() {
             </button>
           </div>
           {piBatchError ? (
-            <div role="alert" className="alert alert-error">{piBatchError}</div>
+            <div role="alert" className="alert alert-error">{piBatchError}
+              {piBatchIssue ? <><p>{piBatchIssue.suggestion}</p><button type="button" onClick={() => locateOrderIssue(piBatchIssue)}>Locate material / 定位问题物料</button>
+                {canMaintainBom && piBatchIssue.code === "material_unavailable" ? <button type="button" onClick={() => { setBomIssueSearch(piBatchIssue.materialCode ?? ""); setShowBomAdmin(true); }}>Review BOM / 定位BOM</button> : null}
+                <button type="button" onClick={() => document.querySelector<HTMLElement>('.og-pi-batch-panel input[type="date"]')?.focus()}>Review order date / 定位下单日</button></> : null}
+            </div>
           ) : null}
           {piBatchNotice ? (
             <div role="status" className="og-pi-batch-notice">
@@ -3387,6 +3414,11 @@ export function OrderGeniusPage() {
 
       {showInvoiceExport ? <PiInvoiceExportDialog countries={selectedCountries}
         month={selectedMonth == null ? undefined : `${selectedYear}-${String(selectedMonth).padStart(2, "0")}`}
+        onCreateBatch={(country, period) => {
+          setShowInvoiceExport(false); setSelectedCountries([country]); setSelectedYear(Number(period.slice(0, 4))); setSelectedMonth(Number(period.slice(5)));
+          setControlTab("pi"); setNewBatchEntry(true);
+          setShowDeck(true);
+        }}
         onClose={() => setShowInvoiceExport(false)} /> : null}
       {showPiTemplates && canFillOrders ? <PiInvoiceTemplateManager key={`pi-templates:${authorizationKey}`}
         countries={isAdmin ? countries.map((item) => item.countryCode) : userCountries}
@@ -3441,7 +3473,7 @@ export function OrderGeniusPage() {
           selectedRowIds={piSelectedRowIds}
           selectableRowIds={selectablePiRowIds}
           piSelectionSummary={piSelectionSummary}
-          canEditQuantities={canFillOrders}
+          canEditQuantities={canFillOrders && (!newBatchEntry || (!piPlanLoading && !piPlanError && selectedMonth != null))}
           visibleColumns={visibleColumns}
           showCountry={selectedCountries.length > 1}
           onCellValueChanged={handleCellValueChanged}
@@ -3498,6 +3530,7 @@ export function OrderGeniusPage() {
               key={authorizationKey}
               isAdmin={isAdmin}
               initialCopyTargetCountry={bomAdminCopyTargetCountry}
+              initialSearch={bomIssueSearch}
               onFobCountriesChanged={loadFobCountries}
               onFobChanged={async () => {
                 const [, refreshed] = await Promise.all([loadFobCountries(), loadMatrices()]);
@@ -3887,6 +3920,7 @@ interface BomFinanceDrawerScope {
 }
 
 interface BomAdminPanelProps {
+  initialSearch?: string;
   isAdmin: boolean;
   initialCopyTargetCountry?: string | null;
   onFobCountriesChanged?: () => void;
@@ -3953,6 +3987,7 @@ function formatBomSourceLabel(
 
 export function BomAdminPanel({
   isAdmin,
+  initialSearch,
   initialCopyTargetCountry = null,
   onFobCountriesChanged,
   onFobChanged,
@@ -3962,7 +3997,7 @@ export function BomAdminPanel({
     cachedBomAdminRef.current = getCachedPageValue<BomAdminPageCache>(BOM_ADMIN_PAGE_CACHE_KEY);
   }
   const cachedBomAdmin = cachedBomAdminRef.current;
-  const cachedSearchText = cachedBomAdmin?.searchText ?? "";
+  const cachedSearchText = initialSearch || cachedBomAdmin?.searchText || "";
   const initialBomLoadSearchRef = useRef(cachedSearchText.trim());
   const appliedBomSearchRef = useRef(cachedSearchText.trim());
   const skipNextDebouncedLoadRef = useRef(true);

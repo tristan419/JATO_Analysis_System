@@ -284,6 +284,7 @@ def pi_invoice_context(detail: dict, template: dict | None = None) -> dict:
     charges = context.get("charges", ["freightEur", "insuranceEur", "handlingEur"])
     for key, field in (("missingFreightUnits", "freightEur"), ("missingInsuranceUnits", "insuranceEur")):
         context[key] = sum(v.get(field) is None for v in detail["vehicles"]) if field in charges else 0
+    context["freightModels"] = _freight_models(detail)
     return context
 
 
@@ -356,13 +357,15 @@ def _invoice_groups(detail: dict, options: dict, charges: list[str]) -> dict:
     vehicles = detail["vehicles"]
     counts = {line["piLineCode"]: 0 for line in detail["lines"]}
     grouped: dict[tuple, int] = {}
+    model_freight = _model_freight(_freight_models(detail), options, charges)
     for vehicle in vehicles:
         code = vehicle["piLineCode"]
         if code not in counts:
             raise ValueError("PI vehicle / line mismatch / 车辆与 PI 明细不一致，请重新读取")
         counts[code] += 1
         fob = _invoice_money(vehicle.get("fobEur"), "FOB", positive=True)
-        freight = _invoice_money(options.get("freightEur", vehicle.get("freightEur")), "Freight / 运费") if "freightEur" in charges else Decimal(0)
+        freight_value = model_freight[(vehicle.get("brand") or "", vehicle.get("modelName") or "")] if model_freight else options.get("freightEur", vehicle.get("freightEur"))
+        freight = _invoice_money(freight_value, "Freight / 运费") if "freightEur" in charges else Decimal(0)
         insurance = _invoice_money(options.get("insuranceEur", vehicle.get("insuranceEur")), "Insurance / 保费") if "insuranceEur" in charges else Decimal(0)
         key = (vehicle.get("modelName"), vehicle.get("version"), vehicle.get("powertrain"),
                vehicle.get("exteriorColorName"), vehicle.get("exteriorColorCode"),
@@ -393,7 +396,39 @@ def generate_pi_invoice_excel(detail: dict, options: dict, template: dict | None
     context = pi_invoice_context(detail, template)
     charges = template["config"]["charges"] if template else ["freightEur", "insuranceEur", "handlingEur"]
     grouped = _invoice_groups(detail, options, charges)
+    if detail.get("summaryExport"):
+        context["sourceVehicles"] = detail["vehicles"]
+        context["summary"] = detail.get("summaryExport", False)
     return _render_invoice(context, grouped, options, template)
+
+
+def _freight_models(detail: dict) -> list[dict]:
+    models: dict[tuple, dict] = {}
+    for vehicle in detail["vehicles"]:
+        identity = (vehicle.get("brand") or "", vehicle.get("modelName") or "")
+        group = models.setdefault(identity, {"brand": identity[0], "modelName": identity[1], "unitCount": 0})
+        group["unitCount"] += 1
+    return list(models.values())
+
+
+def _model_freight(models: list[dict], options: dict, charges: list[str]) -> dict[tuple, Decimal]:
+    """The same explicit model override validation serves saved and legacy callers."""
+    result: dict[tuple, Decimal] = {}
+    if "modelFreightEur" not in options:
+        return result
+    if "freightEur" not in charges or "freightEur" in options or not isinstance(options["modelFreightEur"], list):
+        raise ValueError("Choose uniform or model freight / 请选择统一或车型运费")
+    expected = {(item["brand"], item["modelName"]) for item in models}
+    for group in options["modelFreightEur"]:
+        if not isinstance(group, dict) or not all(isinstance(group.get(field), str) for field in ("brand", "modelName")):
+            raise ValueError("Invalid freight model / 运费车型无效")
+        identity = (group["brand"], group["modelName"])
+        if identity not in expected or identity in result:
+            raise ValueError("Unexpected or repeated freight model; reload source / 运费车型超范围或重复，请重读来源")
+        result[identity] = _invoice_money(group.get("freightEur"), f"Freight / 运费 ({' / '.join(identity)})")
+    if expected != result.keys():
+        raise ValueError("Missing model freight / 请填写所有车型运费，或重读来源")
+    return result
 
 
 def monthly_invoice_context(plan: dict, template: dict | None = None) -> dict:
@@ -411,25 +446,8 @@ def generate_monthly_invoice_excel(plan: dict, options: dict, template: dict | N
     context = monthly_invoice_context(plan, template)
     charges = context.get("charges", ["freightEur", "insuranceEur", "handlingEur"])
     freight = Decimal(0)
-    model_freight: dict[tuple, Decimal] = {}
-    if "modelFreightEur" in options:
-        if "freightEur" not in charges or "freightEur" in options:
-            raise ValueError("Choose uniform or model freight, with a freight-enabled template / 请选择统一或车型运费，模板须计入运费")
-        groups = options["modelFreightEur"]
-        if not isinstance(groups, list):
-            raise ValueError("Invalid model freight list / 车型运费列表无效")
-        expected = {(item["brand"], item["modelName"]) for item in context["freightModels"]}
-        for group in groups:
-            if not isinstance(group, dict) or not all(isinstance(group.get(field), str) for field in ("brand", "modelName")):
-                raise ValueError("Invalid freight model / 运费车型无效")
-            identity = (group["brand"], group["modelName"])
-            if identity not in expected or identity in model_freight:
-                raise ValueError(f"Unexpected or repeated freight model: {' / '.join(identity)} / 运费车型超范围或重复，请重读月计划")
-            model_freight[identity] = _invoice_money(group.get("freightEur"), f"Freight / 运费 ({' / '.join(identity)})")
-        missing = expected - model_freight.keys()
-        if missing:
-            raise ValueError(f"Missing model freight: {', '.join(' / '.join(key) for key in sorted(missing))} / 请填写所有车型运费，或重读月计划")
-    elif "freightEur" in charges:
+    model_freight = _model_freight(context["freightModels"], options, charges)
+    if not model_freight and "freightEur" in charges:
         freight = _invoice_money(options.get("freightEur"), "Freight / 运费")
     insurance = _invoice_money(options.get("insuranceEur"), "Insurance / 保费") if "insuranceEur" in charges else Decimal(0)
     grouped: dict[tuple, int] = {}
@@ -571,9 +589,36 @@ def _render_invoice(context: dict, grouped: dict, options: dict, template: dict 
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.print_title_rows = "26:27"
-    return _save_invoice(wb, cached)
+    return _save_invoice(wb, cached, context)
 
-def _save_invoice(wb, cached: dict) -> io.BytesIO:
+def _save_invoice(wb, cached: dict, context: dict | None = None) -> io.BytesIO:
+    if context and context.get("sourceVehicles"):
+        source = wb.create_sheet("PI sources")
+        fields = ("piCode", "piLineCode", "carCode", "countryCode", "materialCode", "fobEur", "freightEur", "insuranceEur")
+        source.append([("Monthly PI summary / 当月PI汇总。" if context.get("summary") else "") + "Saved snapshot sources / 已保存PI快照来源（费用覆盖仅影响发票页 / overrides apply to invoice sheet only）"])
+        source.append([COLUMN_LABELS.get(field, "PI line / PI明细") for field in fields])
+        for vehicle in context["sourceVehicles"]:
+            source.append([_excel_value(vehicle.get(field)) for field in fields])
+        source.merge_cells("A1:H1")
+        source.row_dimensions[1].height = 40
+        source.row_dimensions[2].height = 32
+        for row in source:
+            for cell in row:
+                cell.font = Font(name="Arial", size=10, bold=cell.row <= 2)
+                cell.alignment = Alignment(vertical="center", wrap_text=cell.row <= 2)
+                if cell.row == 2:
+                    cell.fill = STRIPED_FILL
+                if cell.row > 2 and cell.column >= 6:
+                    cell.number_format = "#,##0.00"
+        source.freeze_panes = "A3"
+        source.auto_filter.ref = f"A2:H{source.max_row}"
+        for column, width in zip("ABCDEFGH", (28, 34, 44, 12, 24, 18, 18, 18)):
+            source.column_dimensions[column].width = width
+        source.print_title_rows = "1:2"
+        source.print_area = f"A1:H{source.max_row}"
+        source.page_setup.orientation = "landscape"
+        source.page_setup.fitToWidth, source.page_setup.fitToHeight = 1, 0
+        source.sheet_properties.pageSetUpPr.fitToPage = True
     output = io.BytesIO()
     wb.save(output)
     wb.close()
@@ -696,4 +741,4 @@ def _render_mapped_invoice(template: dict, context: dict, fields: dict, invoice_
     ws.print_title_rows = f'{config["headerRow"]}:{start - 1}'
     ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-    return _save_invoice(wb, cached)
+    return _save_invoice(wb, cached, context)

@@ -297,9 +297,9 @@ def test_monthly_freight_rejects_both_modes_even_with_a_uniform_fallback(templat
 
 def test_monthly_export_denies_country_before_reading_plan_or_template(monkeypatch):
     monkeypatch.setattr(route, "_validate_country", Mock(side_effect=HTTPException(403, "Unauthorized country")))
-    read = Mock(); monkeypatch.setattr(route, "build_monthly_invoice_plan", read)
+    read = Mock(); monkeypatch.setattr(route, "list_pi_headers", read)
     with pytest.raises(HTTPException) as error:
-        route.preview_monthly_invoice("CH", "2026-10", "", Mock(), Mock())
+        route.preview_monthly_invoice("CH", "2026-10", session=Mock(), user=Mock())
     assert error.value.status_code == 403
     read.assert_not_called()
 
@@ -307,5 +307,44 @@ def test_monthly_export_denies_country_before_reading_plan_or_template(monkeypat
 @pytest.mark.parametrize("month", ["", "2026-13", "202610", "2026-10-01"])
 def test_monthly_export_rejects_missing_or_invalid_month(month):
     with pytest.raises(HTTPException) as error:
-        route.preview_monthly_invoice("CH", month, "", Mock(), Mock())
+        route.preview_monthly_invoice("CH", month, session=Mock(), user=Mock())
     assert error.value.status_code == 400
+
+
+def test_saved_monthly_summary_preserves_distinct_prices_costs_and_sources(templates):
+    first = pi("CH")
+    second = pi("CH")
+    for index, vehicle in enumerate(first["vehicles"]):
+        vehicle.update(piCode="PI-CH-202610-001", carCode=f"A{index}")
+    second["lines"][0]["piLineCode"] = "L02"
+    for index, vehicle in enumerate(second["vehicles"]):
+        vehicle.update(piLineCode="L02", piCode="PI-CH-202610-002", carCode=f"B{index}", fobEur=20000, freightEur=200)
+    detail = {"header": {"piCode": "Monthly-Summary-CH-202610", "countryCode": "CH"},
+        "lines": first["lines"] + second["lines"], "vehicles": first["vehicles"] + second["vehicles"],
+        "sourcePiCodes": ["PI-CH-202610-001", "PI-CH-202610-002"], "summaryExport": True}
+    before = deepcopy(detail)
+    output = exporter.generate_pi_invoice_excel(detail, {})
+    wb = openpyxl.load_workbook(output, data_only=True)
+    assert wb.active["F30"].value == 4
+    assert wb.active["G28"].value == 10000.11 and wb.active["G29"].value == 20000
+    assert wb.active["I28"].value == 123.45 and wb.active["I29"].value == 200
+    assert wb.active["H30"].value == 60000.22
+    assert "Monthly PI summary" in wb["PI sources"]["A1"].value
+    assert {wb["PI sources"].cell(row, 1).value for row in range(3, 7)} == set(detail["sourcePiCodes"])
+    assert detail == before
+    grouped = exporter.generate_pi_invoice_excel(detail, {"modelFreightEur": [{"brand": "OMODA", "modelName": "MODEL BEV", "freightEur": 0}]})
+    assert openpyxl.load_workbook(grouped, data_only=True).active["I28"].value == 0
+
+
+def test_formal_monthly_export_requires_saved_source_and_current_preview(monkeypatch):
+    monkeypatch.setattr(route, "_monthly_invoice_source", Mock(return_value=(None, "CH", {"JAECOO"}, [])))
+    generate = Mock(); monkeypatch.setattr(route, "generate_pi_invoice_excel", generate)
+    with pytest.raises(HTTPException) as error:
+        route.export_monthly_invoice("CH", "2026-10", {}, session=Mock(), user=Mock())
+    assert error.value.status_code == 409 and error.value.detail["code"] == "no_saved_pi"
+    detail = {**pi("CH"), "sourceRevision": "new"}
+    monkeypatch.setattr(route, "_monthly_invoice_source", Mock(return_value=(detail, "CH", {"OMODA"}, [])))
+    with pytest.raises(HTTPException) as error:
+        route.export_monthly_invoice("CH", "2026-10", {"sourceRevision": "old"}, session=Mock(), user=Mock())
+    assert error.value.detail["code"] == "source_changed"
+    generate.assert_not_called()

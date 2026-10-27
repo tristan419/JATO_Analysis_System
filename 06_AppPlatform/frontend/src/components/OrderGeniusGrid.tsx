@@ -19,6 +19,7 @@ import {
   type ICellEditorParams,
   type ICellRendererParams,
   type ValueGetterParams,
+  type GridApi,
 } from "ag-grid-community";
 import { AgGridReact } from "ag-grid-react";
 
@@ -63,6 +64,8 @@ export interface OrderGeniusGridRow {
   } | null;
   remark?: string;
   _countryCode?: string;
+  _batchEntry?: boolean;
+  _allocatedQuantity?: number;
   _months?: Record<string, MonthCell>;
   _indent?: boolean;
   __type?: "groupHeader" | "data" | "consolidated_parent" | "summary";
@@ -110,7 +113,7 @@ export interface OrderGeniusGridProps {
   };
   showCountry: boolean;
   onCellValueChanged: (event: CellValueChangedEvent<OrderGeniusGridRow>) => void;
-  onGridReady?: (api: any) => void;
+  onGridReady?: (api: GridApi<OrderGeniusGridRow>) => void;
   onToggleGroup?: (groupKey: string) => void;
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void;
   /** Stable user/account scope used for local column-width preferences. */
@@ -462,7 +465,7 @@ export function buildOrderGeniusColumnDefs(
           }, 0);
           return true;
         },
-        valueFormatter: (p) => (p.value != null ? String(p.value) : "0"),
+        valueFormatter: (p) => p.data?._batchEntry && p.value === 0 ? "" : p.value != null ? String(p.value) : "0",
         cellClassRules: {
           "og-cell-error": (p: CellClassParams) =>
             !!p.data?._errors?.[field as string],

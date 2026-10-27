@@ -298,9 +298,13 @@ def test_monthly_http_export_reuses_uploaded_top_template_and_rechecks_scope(sou
     session = Mock()
     account = SimpleNamespace(primary_country_code="CZ", secondary_country_codes=[], brands=["OMODA", "JAECOO"])
     session.query.return_value.filter.return_value.first.return_value = account
-    plan = {"country": "CZ", "month": "2026-10", "lines": [{**detail()["vehicles"][0], "brand": "OMODA", "quantity": 54}]}
-    monkeypatch.setattr(route, "build_monthly_invoice_plan", Mock(return_value=plan))
-    monkeypatch.setattr(route, "_invoice_detail", Mock(side_effect=AssertionError("Monthly export must not read/create PI")))
+    saved_pi = detail()
+    saved_pi["header"].update(piCode="PI-CZ-202610-001", orderMonth="2026-10", status="ordered")
+    saved_pi["lines"][0]["quantity"] = 54
+    saved_pi["vehicles"] = [{**detail()["vehicles"][0], "brand": "OMODA", "carCode": f"CAR-{index}"} for index in range(54)]
+    monkeypatch.setattr(route, "list_pi_headers", lambda session, **filters: {"items": [saved_pi["header"]]
+        if filters["month"] == saved_pi["header"]["orderMonth"] else [], "total": 1})
+    monkeypatch.setattr(route, "_invoice_detail", Mock(side_effect=lambda *_: saved_pi))
     app = FastAPI(); app.include_router(route.router)
     app.dependency_overrides[route.get_db_session] = lambda: session
     app.dependency_overrides[get_current_user] = lambda: UserContext("order_filler", "alice")
@@ -311,12 +315,13 @@ def test_monthly_http_export_reuses_uploaded_top_template_and_rechecks_scope(sou
         ctx = preview.json()["context"]
         assert ctx["templateKey"] == saved["id"] and ctx["unitCount"] == 54
         options = {**ctx["defaults"], "templateId": saved["id"], "templateRevision": ctx["templateRevision"],
+                   "sourceRevision": ctx["sourceRevision"],
                    "freightEur": 3.45, "insuranceEur": 0.67}
         response = client.post(path, json=options)
         assert response.status_code == 200
         ws = openpyxl.load_workbook(BytesIO(response.content), data_only=True).active
         assert ws["D12"].value == 54 and ws["I12"].value == 5628.42
-        assert ws["F2"].value == "PI-CZ-202610"
+        assert ws["F2"].value == "PI-CZ-202610-001"
         assert ctx["freightModels"] == [{"brand": "OMODA", "modelName": "MODEL", "unitCount": 54}]
         grouped = {key: value for key, value in options.items() if key != "freightEur"}
         grouped["modelFreightEur"] = [{"brand": "OMODA", "modelName": "MODEL", "freightEur": 20}]
@@ -324,20 +329,23 @@ def test_monthly_http_export_reuses_uploaded_top_template_and_rechecks_scope(sou
         assert model_response.status_code == 200
         model_ws = openpyxl.load_workbook(BytesIO(model_response.content), data_only=True).active
         assert model_ws["F11"].value == 20 and model_ws["I12"].value == 6522.12
-        assert plan["lines"][0]["freightEur"] == 3.45
-        plan["lines"].append({**plan["lines"][0], "modelName": "NEW MODEL", "quantity": 1})
+        assert saved_pi["vehicles"][0]["freightEur"] == 3.45
+        saved_pi["vehicles"][0]["modelName"] = "NEW MODEL"
         rejected = client.post(path, json=grouped)
-        assert rejected.status_code == 409 and "NEW MODEL" in rejected.json()["detail"]
-        plan["lines"].pop()
+        assert rejected.status_code == 409 and rejected.json()["detail"]["code"] == "source_changed"
+        saved_pi["vehicles"][0]["modelName"] = "MODEL"
         assert templates.load_template(saved["id"], "alice", False, "CZ", {"OMODA"})["path"].read_bytes() == content
-        plan.update(month="2026-11", lines=[{**plan["lines"][0], "quantity": 4}])
+        saved_pi["header"].update(piCode="PI-CZ-202611-001", orderMonth="2026-11")
+        saved_pi["lines"][0]["quantity"] = 4
+        saved_pi["vehicles"] = saved_pi["vehicles"][:4]
         later = client.get(path.replace("2026-10", "2026-11")).json()["context"]
-        assert later["templateKey"] == saved["id"] and later["defaults"]["referenceNo"] == "PI-CZ-202611"
+        assert later["templateKey"] == saved["id"] and later["defaults"]["referenceNo"] == "PI-CZ-202611-001"
         assert later["unitCount"] == 4
-        assert client.post(path, json={**options, "templateRevision": "stale"}).status_code == 409
+        stale = client.post(path.replace("2026-10", "2026-11"), json={**options, "sourceRevision": later["sourceRevision"], "templateRevision": "stale"})
+        assert stale.status_code == 409 and stale.json()["detail"]["code"] == "template_changed"
         account.brands = []
-        assert client.post(path, json=options).status_code == 403
-        assert client.get(path).status_code == 403
+        assert client.post(path.replace("2026-10", "2026-11"), json=options).status_code == 403
+        assert client.get(path.replace("2026-10", "2026-11")).status_code == 403
     session.add.assert_not_called(); session.commit.assert_not_called()
 
 

@@ -11,6 +11,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from fastapi import HTTPException
 from app.db.models import CountryTemplateFobPeriod, CountrySkuFobResolved, MaterialSkuMaster, MaterialLifecycle, MaterialReplacement
 
 from app.infra import order_genius_repository as repo
@@ -1398,8 +1399,24 @@ def update_quantity_cell(
     updated_by: str,
     expected_version: int,
     include_historical: bool = False,
+    expected_allocated_quantity: int | None = None,
 ) -> dict:
     """Save a monthly quantity cell, with explicit current/past Historical opt-in."""
+    # The same cell lock is used by PI creation; a new batch never rebases silently.
+    existing = repo.get_quantity_cell(session, country_code, order_year, order_month, material_code, for_update=True)
+    location = {"country": country_code, "materialCode": material_code, "month": f"{order_year}-{order_month:02d}"}
+    if expected_allocated_quantity is not None:
+        if type(expected_allocated_quantity) is not int or expected_allocated_quantity < 0 or type(quantity) is not int or quantity < 0:
+            raise ValueError("Enter non-negative whole units / 请填写非负整数台数")
+        from app.services.order_genius_vehicle_service import get_order_matrix_allocation_plan
+        plan = get_order_matrix_allocation_plan(session, country_code, order_year, order_month)
+        line = next((row for row in plan["lineItems"] if row["materialCode"] == material_code), {})
+        allocated = int(line.get("generatedQuantity", 0))
+        if allocated != expected_allocated_quantity or (existing and existing.row_version != expected_version):
+            raise HTTPException(409, detail={"code": "quantity_conflict", **location,
+                "message": f"Batch baseline changed: total {existing.quantity if existing else 0}, in PI {allocated}, requested remainder {quantity}. / 批次基数已变：月总量{existing.quantity if existing else 0}、已入PI {allocated}、本次余量{quantity}。",
+                "suggestion": "Review the latest allocation, then explicitly save your retained remainder again. / 请核对最新占用，再明确重存保留的余量；未自动重试。"})
+        quantity += allocated
     sku = repo.get_current_baseline_sku_by_code(session, material_code)
     if not sku:
         raise ValueError("Material code not found.")
