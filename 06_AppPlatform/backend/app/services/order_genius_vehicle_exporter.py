@@ -596,12 +596,12 @@ def _save_invoice(wb, cached: dict, context: dict | None = None) -> io.BytesIO:
         source = wb.create_sheet("PI sources")
         fields = ("piCode", "piLineCode", "carCode", "countryCode", "materialCode", "fobEur", "freightEur", "insuranceEur")
         source.append([("Monthly PI summary / 当月PI汇总。" if context.get("summary") else "") + "Saved snapshot sources / 已保存PI快照来源（费用覆盖仅影响发票页 / overrides apply to invoice sheet only）"])
-        source.append(list(fields))
+        source.append([COLUMN_LABELS.get(field, "PI line / PI明细") for field in fields])
         for vehicle in context["sourceVehicles"]:
             source.append([_excel_value(vehicle.get(field)) for field in fields])
         source.merge_cells("A1:H1")
         source.row_dimensions[1].height = 40
-        source.row_dimensions[2].height = 24
+        source.row_dimensions[2].height = 32
         for row in source:
             for cell in row:
                 cell.font = Font(name="Arial", size=10, bold=cell.row <= 2)
