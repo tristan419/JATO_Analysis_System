@@ -196,6 +196,112 @@ def test_streaming_smart_merge_never_reads_source_parquet_with_pandas(
     assert summary["resourceProfile"]["spilledRows"] > 0
 
 
+@pytest.mark.parametrize("decision", [None, "keep_active", "use_latest"])
+def test_smart_merge_advances_months_without_losing_old_history(
+    tmp_path: Path, decision: str | None,
+) -> None:
+    active_path = tmp_path / "active.parquet"
+    candidate_path = tmp_path / "candidate.parquet"
+    output_path = tmp_path / "merged.parquet"
+    pd.DataFrame([
+        {"Country": "Finland", "Make": "BRAND", "Model": "MODEL",
+         "Version name": "Old", "2023 Jan": 7, "2026 Aug": 10},
+        {"Country": "Germany", "Make": "OTHER", "Model": "STABLE",
+         "Version name": "Stable", "2023 Jan": 20, "2026 Aug": 30},
+    ]).to_parquet(active_path, index=False)
+    pd.DataFrame([
+        {"Country": "Finland", "Make": "BRAND", "Model": "MODEL",
+         "Version name": "New", "2026 Aug": 999, "2026 Sep": 12,
+         "YTD 2026 (Sep)": 1011},
+    ]).to_parquet(candidate_path, index=False)
+    original_hashes = (_sha256(active_path), _sha256(candidate_path))
+
+    _, summary = jato_monthly_update_service._smart_merge_parquet_streaming(
+        active_path=active_path, candidate_path=candidate_path, output_path=output_path,
+        regressed_countries=[],
+        historical_reclassification_decisions={"Finland": decision} if decision else None,
+    )
+
+    merged = pq.read_table(output_path).to_pandas()
+    finland = merged.loc[merged["Country"] == "Finland"]
+    germany = merged.loc[merged["Country"] == "Germany"]
+    assert finland["2023 Jan"].sum() == 7
+    assert finland["2026 Aug"].sum() == (999 if decision == "use_latest" else 10)
+    assert finland["2026 Sep"].sum() == 12
+    assert finland["YTD 2026 (Sep)"].sum() == (1011 if decision == "use_latest" else 22)
+    assert germany["2023 Jan"].sum() == 20
+    assert germany["2026 Aug"].sum() == 30
+    assert germany["2026 Sep"].fillna(0).sum() == 0
+    policy = summary["historicalReclassificationPolicies"]["Finland"]
+    assert policy["policy"] == (decision or "keep_active")
+    assert policy["monthBoundaryCheck"] == "pass"
+    assert original_hashes == (_sha256(active_path), _sha256(candidate_path))
+    assert list(tmp_path.glob(".*.smart-merge*")) == []
+
+
+def test_four_country_september_patch_passes_complete_review_after_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    countries = ["奥地利", "比利时", "丹麦", "芬兰"]
+    old_months = [f"2023 {month}" for month in (
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    )]
+    active_rows = [{
+        "国家": country, "Make": "BRAND", "Model": "MODEL",
+        "Version name": "ONE", **{month: index for month in old_months},
+        "2026 Aug": index * 10,
+    } for index, country in enumerate([*countries, "德国"], start=1)]
+    candidate_rows = [{
+        key: value for key, value in row.items() if key not in old_months
+    } | {"2026 Sep": index * 11} for index, row in enumerate(active_rows[:4], start=1)]
+    active_path = tmp_path / "active.parquet"
+    candidate_path = tmp_path / "candidate.parquet"
+    output_path = tmp_path / "merged.parquet"
+    pd.DataFrame(active_rows).to_parquet(active_path, index=False)
+    pd.DataFrame(candidate_rows).to_parquet(candidate_path, index=False)
+    active_hash = _sha256(active_path)
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(jato_monthly_update_service, "_active_data_paths", lambda: {
+        "parquet": active_path, "partition": tmp_path / "no-partitions",
+    })
+    payload = {
+        "jobId": "september-four-countries", "countryScope": countries,
+        "artifacts": {
+            "candidateScope": "target_country_partitions_only",
+            "stagingOutputPath": str(candidate_path),
+            "untouchedPartitionCheck": {"status": "pass"},
+        },
+    }
+    raw_review = jato_monthly_update_service._build_partial_country_review(
+        payload, candidate_fingerprint="a" * 64,
+    )
+    assert raw_review["decisionSuggestion"] == "manual_review_required"
+    assert len([f for f in raw_review["reviewFindings"] if f["ruleId"] == "SC015"]) == 4
+
+    row_count, _summary = jato_monthly_update_service._smart_merge_parquet_streaming(
+        active_path=active_path, candidate_path=candidate_path, output_path=output_path,
+        regressed_countries=[],
+    )
+    assert row_count == 5  # exact matching configurations merge once, never add overlap
+    payload["artifacts"]["candidateScope"] = "full_smart_merge"
+    payload["artifacts"]["stagingOutputPath"] = str(output_path)
+    full_review = jato_monthly_update_service._build_partial_country_review(
+        payload, candidate_fingerprint="b" * 64,
+    )
+    assert full_review["decisionSuggestion"] == "manual_review_required"
+    assert not any(f["severity"] == "blocker" for f in full_review["reviewFindings"])
+    merged = pq.read_table(output_path).to_pandas().set_index("国家")
+    for index, country in enumerate(countries, start=1):
+        assert merged.loc[country, old_months].sum() == 12 * index
+        assert merged.loc[country, "2026 Aug"] == index * 10
+        assert merged.loc[country, "2026 Sep"] == index * 11
+    assert merged.loc["德国", old_months].sum() == 60
+    assert merged.loc["德国", "2026 Aug"] == 50
+    assert pd.isna(merged.loc["德国", "2026 Sep"])
+    assert _sha256(active_path) == active_hash
+
+
 def test_cross_batch_normalized_duplicate_blocks_without_replacing_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

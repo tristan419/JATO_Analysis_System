@@ -2983,6 +2983,108 @@ def test_single_country_schema_contract_downgrades_deprecated_optional_columns()
     assert contract["extra"] == ["MSRP规整"]
 
 
+@pytest.mark.parametrize("overlap", [False, True])
+def test_forward_month_review_preserves_unprovided_history(overlap: bool) -> None:
+    active = pd.DataFrame({
+        "国家": ["芬兰"], "Make": ["BRAND"], "Model": ["MODEL"],
+        "2023 Jan": [7], "2026 Aug": [10],
+    })
+    candidate = pd.DataFrame({
+        "国家": ["芬兰"], "Make": ["BRAND"], "Model": ["MODEL"],
+        "2026 Sep": [12],
+    })
+    if overlap:
+        candidate["2026 Aug"] = 10
+
+    stability = jato_monthly_update_service._single_country_historical_sales_stability(
+        country="芬兰", active_frame=active, candidate_frame=candidate,
+        active_latest_month="2026 Aug",
+        allow_forward_patch=True,
+    )
+
+    assert stability["status"] == "pass"
+    assert stability["comparedMonthCount"] == int(overlap)
+    assert stability["preservedHistoricalMonths"] == (
+        ["2023 Jan"] if overlap else ["2023 Jan", "2026 Aug"]
+    )
+
+
+def test_forward_month_review_still_requires_overlap_revision_decision() -> None:
+    active = pd.DataFrame({
+        "国家": ["芬兰"], "Make": ["BRAND"], "Model": ["MODEL"],
+        "2023 Jan": [7], "2026 Aug": [10],
+    })
+    candidate = active.drop(columns=["2023 Jan"]).assign(**{
+        "2026 Aug": [11], "2026 Sep": [12],
+    })
+
+    stability = jato_monthly_update_service._single_country_historical_sales_stability(
+        country="芬兰", active_frame=active, candidate_frame=candidate,
+        active_latest_month="2026 Aug",
+        allow_forward_patch=True,
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "historical_sales_changed"
+    assert stability["preservedHistoricalMonths"] == ["2023 Jan"]
+    assert stability["historicalReclassification"]["decisionRequired"] is True
+
+
+def test_missing_history_without_forward_month_stays_blocked() -> None:
+    stability = jato_monthly_update_service._single_country_historical_sales_stability(
+        country="芬兰",
+        active_frame=pd.DataFrame({"2023 Jan": [7], "2026 Aug": [10]}),
+        candidate_frame=pd.DataFrame({"2026 Aug": [10]}),
+        active_latest_month="2026 Aug",
+        allow_forward_patch=True,
+    )
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "candidate_missing_historical_months"
+    assert "0 处历史销量差异" not in (
+        jato_monthly_update_service._single_country_source_feedback(
+            rule_id="SC011", country="芬兰", metrics=stability,
+        ) or ""
+    )
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_partial_review_explains_history_preservation(tmp_path: Path, monkeypatch, complete: bool) -> None:
+    active_path = tmp_path / "active.parquet"
+    candidate_path = tmp_path / "candidate.parquet"
+    active = pd.DataFrame({
+        "国家": ["芬兰"], "Make": ["BRAND"], "Model": ["MODEL"],
+        "2023 Jan": [7], "2026 Aug": [10],
+    })
+    active.to_parquet(active_path, index=False)
+    active.drop(columns=["2023 Jan"]).assign(**{"2026 Sep": [12]}).to_parquet(
+        candidate_path, index=False,
+    )
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(jato_monthly_update_service, "_active_data_paths", lambda: {
+        "parquet": active_path, "partition": tmp_path / "no-partitions",
+    })
+
+    review = jato_monthly_update_service._build_single_country_review({
+        "jobId": "forward-month-review", "country": "芬兰",
+        "artifacts": {
+            "stagingOutputPath": str(candidate_path),
+            "candidateScope": "full_smart_merge" if complete else "target_country_partition_only",
+        },
+    }, candidate_fingerprint="a" * 64)
+
+    if complete:
+        assert review["decisionSuggestion"] == "reject_input_batch"
+        finding = next(item for item in review["reviewFindings"] if item["ruleId"] == "SC011")
+        assert finding["severity"] == "blocker"
+        assert finding["metrics"]["reason"] == "candidate_missing_historical_months"
+        return
+    assert review["decisionSuggestion"] == "manual_review_required"
+    assert not any(item["severity"] == "blocker" for item in review["reviewFindings"])
+    finding = next(item for item in review["reviewFindings"] if item["ruleId"] == "SC015")
+    assert finding["metrics"]["preservedHistoricalMonths"] == ["2023 Jan"]
+    assert "保留" in finding["message"]
+
+
 def test_historical_sales_stability_identifies_make_reclassification() -> None:
     active = pd.DataFrame(
         {

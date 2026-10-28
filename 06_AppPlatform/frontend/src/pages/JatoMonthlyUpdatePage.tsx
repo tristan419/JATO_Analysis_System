@@ -171,7 +171,7 @@ const historicalReclassificationDecisionCopy: Record<
 > = {
   use_latest: {
     title: "使用本次上传覆盖历史",
-    description: "该国家截至 active latest 的历史月份以本次 washed 文件为准；这是整国替换，不会与 active 累加。",
+    description: "明确修订该国家上传中提供的历史月份；未提供的旧月份仍保留 active，不会累加。",
   },
   keep_active: {
     title: "保留当前 active 历史",
@@ -1499,9 +1499,9 @@ export function JatoMonthlyUpdatePage() {
           </div>
           {useLatestCountries.length > 0 ? (
             <div className="confirm-dialog-risk">
-              <strong>整国替换历史，不与 active 累加</strong>
+              <strong>仅替换明确提供的历史月份，不与 active 累加</strong>
               <span>
-                use_latest 会用该国上传历史整体替换 Candidate 中对应历史；未上传国家及选择 keep_active 的国家历史均不变。
+                use_latest 仅替换该国本次提供的历史月份；文件未提供的旧月份、未上传国家及选择 keep_active 的国家历史均保留 active。
               </span>
             </div>
           ) : (
@@ -2173,7 +2173,7 @@ export function JatoMonthlyUpdatePage() {
             <p className="section-note">
               第一期仅执行 candidate 流程并回传日志 / 关键产物；正式 release promote 仍然保留人工确认步骤。
               上传后会自动识别文件里的最新有效月份，并自动生成批次号；仍允许 mixed freshness，只要没有国家回退。
-              本次上传覆盖到的国家会直接替换网站当前该国家快照，不会把新旧月份累加到一起；未上传的国家继续沿用 current active。
+              默认保留已发布历史，只接入上传中的新月份；未提供的旧月份和未上传国家保持不变。修订重叠历史须另行确认，不会累加销量。 / New months advance; existing history stays unless explicitly revised.
             </p>
           </div>
           <div className="table-status-chip">
@@ -2347,7 +2347,7 @@ export function JatoMonthlyUpdatePage() {
             <section>
               <h4>Smart-Merged Candidate（Smart Merge 候选）</h4>
               <p>
-                当出现 regression 时，可以选择 Smart Merge：回退国家沿用 active 数据，前进/持平国家使用 patch 数据，未上传国家沿用 active。Smart Merge 创建新 candidate，<em>仍需要 Review → Publish，不直接修改 active。</em>
+                Smart Merge 保留未上传国家和回退国家；推进国家默认保留 active 历史，只接入新月份。若明确选择修订历史，仅替换上传提供的月份，缺失旧月份仍保留。Smart Merge 创建完整 candidate，<em>仍需要 Review → Publish，不直接修改 active。</em>
               </p>
             </section>
             <section>
