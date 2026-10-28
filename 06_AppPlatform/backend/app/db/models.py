@@ -2079,10 +2079,10 @@ class CountryTemplateFobPeriod(TimestampMixin, Base):
               postgresql_where=text("status = 'default' AND valid_from IS NULL")),
         CheckConstraint(
             "(valid_from IS NOT NULL AND base_fob_eur IS NOT NULL) OR "
-            "(status = 'default' AND valid_from IS NULL AND valid_to IS NULL AND base_fob_eur IS NULL)",
+            "(status IN ('default', 'country_deleted') AND valid_from IS NULL AND valid_to IS NULL AND base_fob_eur IS NULL)",
             name="ck_fob_period_or_default_scope",
         ),
-        CheckConstraint("status IN ('active', 'deleted', 'default')", name="ck_fob_period_status"),
+        CheckConstraint("status IN ('active', 'deleted', 'default', 'country_deleted')", name="ck_fob_period_status"),
         CheckConstraint(
             "valid_to IS NULL OR valid_to >= valid_from",
             name="ck_country_template_fob_period_window",

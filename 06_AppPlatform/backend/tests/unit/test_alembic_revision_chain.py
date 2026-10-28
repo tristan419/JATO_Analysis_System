@@ -68,7 +68,20 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20261018_0060"]
+    assert sorted(revisions - parent_revisions) == ["20261028_0061"]
+
+
+def test_country_column_trash_revision_only_extends_existing_constraints() -> None:
+    spec = importlib.util.spec_from_file_location("country_trash_0061", VERSIONS_DIR / "20261028_0061_country_column_trash.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = StringIO()
+    module.op = Operations(MigrationContext.configure(dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output}))
+    module.upgrade()
+    sql = output.getvalue().upper()
+    assert "COUNTRY_DELETED" in sql
+    assert sql.count("ALTER TABLE ORDERING.COUNTRY_TEMPLATE_FOB_PERIOD") == 4
+    assert all(word not in sql for word in ("UPDATE ", "DELETE FROM", "INSERT INTO", "CREATE TABLE", "DROP TABLE", "ALTER COLUMN"))
 
 
 def test_custom_columns_revision_has_no_business_backfill() -> None:

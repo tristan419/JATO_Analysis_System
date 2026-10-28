@@ -70,6 +70,77 @@ def sku(db, code, tier, brand="JAECOO", template="T**001", model="JAECOO7 SHS", 
     return value
 
 
+def test_country_column_delete_restore_preserves_values_and_individually_deleted_records(db):
+    sku(db, "DM1", "single")
+    quote = fob(db, "DM1", 1234, base=1200, surcharge=34, country="DM")
+    old = fob(db, "OLD", 999, country="DM")
+    old.is_active = False
+    other = fob(db, "DM1", 2000, country="CH")
+    phase = models.CountryTemplateFobPeriod(country_code="DM", bom_template="T**001", status="active",
+        valid_from=date(2026, 10, 1), valid_to=date(2026, 10, 31), base_fob_eur=1100, allowed_colour_codes=["CL"], row_version=3)
+    default = models.CountryTemplateFobPeriod(country_code="DM", bom_template="T**001", status="default", allowed_colour_codes=[], row_version=2)
+    old_phase = models.CountryTemplateFobPeriod(country_code="DM", bom_template="T**001", status="deleted",
+        valid_from=date(2026, 9, 1), base_fob_eur=1000)
+    db.add_all([phase, default, old_phase])
+    db.commit()
+    assert repo.clear_country_fobs(db, "DM") == 3
+    db.commit()
+    assert "DM" not in repo.list_active_fob_country_codes(db)
+    assert other.is_active and not quote.is_active and not old.is_active
+    assert phase.status == default.status == "country_deleted"
+    assert old_phase.status == "deleted"
+    assert repo.list_country_fob_trash(db)[0]["rows"] == 3
+    assert repo.clear_country_fobs(db, "DM") == 0
+    result = repo.restore_country_fobs_from_trash(db, "DM")
+    db.commit()
+    assert result == {"countryCode": "DM", "rows": 3, "restored": 3, "skippedActiveConflict": 0}
+    assert quote.is_active and not old.is_active
+    assert (float(quote.final_fob_eur), float(quote.base_fob_eur), float(quote.colour_surcharge_eur)) == (1234, 1200, 34)
+    assert phase.status == "active" and default.status == "default" and old_phase.status == "deleted"
+    assert (phase.valid_from, phase.valid_to, float(phase.base_fob_eur), phase.allowed_colour_codes) == (date(2026, 10, 1), date(2026, 10, 31), 1100, ["CL"])
+    assert default.allowed_colour_codes == []
+    assert repo.list_country_fob_trash(db) == []
+
+
+def test_country_column_period_only_brand_scope_and_conflicting_restore(db):
+    sku(db, "OJ", "single", brand="JAECOO", template="OJ**")
+    sku(db, "OTHER", "single", brand="OMODA", template="OM**")
+    phase = models.CountryTemplateFobPeriod(country_code="DM", bom_template="OJ**", status="active",
+        valid_from=date(2026, 10, 1), valid_to=date(2026, 10, 31), base_fob_eur=1100)
+    other = models.CountryTemplateFobPeriod(country_code="DM", bom_template="OM**", status="active",
+        valid_from=date(2026, 10, 1), base_fob_eur=2200)
+    db.add_all([phase, other]); db.commit()
+    assert repo.clear_country_fobs(db, "DM", allowed_brands={"JAECOO"}) == 1
+    db.commit()
+    assert other.status == "active"
+    assert repo.list_country_fob_trash(db, allowed_brands={"OMODA"}) == []
+    assert repo.list_country_fob_trash(db, allowed_countries={"CH"}) == []
+    assert repo.list_country_fob_trash(db, allowed_brands={"JAECOO"})[0]["rows"] == 1
+    fresh = models.CountryTemplateFobPeriod(country_code="DM", bom_template="OJ**", status="active",
+        valid_from=date(2026, 10, 15), base_fob_eur=1300)
+    db.add(fresh); db.commit()
+    result = repo.restore_country_fobs_from_trash(db, "DM", allowed_brands={"JAECOO"})
+    assert result["restored"] == 0 and result["skippedActiveConflict"] == 1
+    assert phase.status == "country_deleted" and float(fresh.base_fob_eur) == 1300
+
+
+def test_country_column_route_denies_before_mutation_and_passes_brand_scope(db, monkeypatch):
+    denied = []
+    monkeypatch.setattr(routes, "validate_country_access", lambda *args: (_ for _ in ()).throw(HTTPException(403, "denied")))
+    monkeypatch.setattr(repo, "clear_country_fobs", lambda *args, **kwargs: denied.append(args))
+    user = SimpleNamespace(name="editor", role="editor")
+    with pytest.raises(HTTPException) as error:
+        routes.delete_country_fobs("DM", db, user)
+    assert error.value.status_code == 403 and denied == []
+    monkeypatch.setattr(routes, "validate_country_access", lambda *args: None)
+    monkeypatch.setattr(routes, "ordering_brands", lambda *args: {"JAECOO"})
+    def cleared(session, country, allowed_brands):
+        assert session is db and country == "DM" and allowed_brands == {"JAECOO"}
+        return 3
+    monkeypatch.setattr(repo, "clear_country_fobs", cleared)
+    assert routes.delete_country_fobs("dm", db, user) == {"countryCode": "DM", "cleared": 3}
+
+
 def test_monthly_invoice_reads_plan_and_effective_month_price_without_any_db_writes(db):
     from sqlalchemy import event
     sku(db, "S", "single"); fob(db, "S", 1500, base=1500)
