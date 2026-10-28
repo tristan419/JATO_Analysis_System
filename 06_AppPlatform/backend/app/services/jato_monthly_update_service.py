@@ -53,7 +53,7 @@ STATE_FILENAME = "job_state.json"
 LOG_FILENAME = "job.log"
 UPLOAD_STATE_FILENAME = "upload_state.json"
 REVIEW_BUNDLE_FILENAME = "review_bundle.json"
-REVIEW_BUNDLE_SCHEMA_VERSION = 4
+REVIEW_BUNDLE_SCHEMA_VERSION = 5
 CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION = 2
 CANDIDATE_ARTIFACT_FIELDS = (
     ("parquet", "stagingOutputPath"),
@@ -712,13 +712,18 @@ def _failure_digest_from_exception(
                 else "resume_failed_stage"
             ),
         }
+    detail = (
+        exc.detail
+        if isinstance(exc, HTTPException) and isinstance(exc.detail, dict)
+        else {}
+    )
     return {
         "code": "JOB_STEP_FAILED",
         "category": "processing",
         "phase": phase,
         "retryable": False,
         "message": message,
-        "sourceFeedback": (
+        "sourceFeedback": detail.get("sourceFeedback") or (
             "请根据 Review 的 ruleId、国家、月份和字段反馈修正源文件；"
             "若无 sourceFeedback，再交由平台管理员排查。"
         ),
@@ -2224,6 +2229,23 @@ def _single_country_configuration_key_columns(frame: pd.DataFrame) -> list[str]:
     ]
 
 
+def _duplicate_configuration_samples(
+    frame: pd.DataFrame,
+    duplicate_mask: pd.Series,
+    months: list[str],
+) -> list[dict[str, Any]]:
+    """Bounded original values, including nulls, for locating a collision."""
+    columns = [
+        column for column in (
+            _find_country_column(list(frame.columns)), "Make", "Model",
+            "Version name", "Trim level", "Registration type",
+            "MSRP including delivery charge", *months[-6:],
+        ) if column and column in frame.columns
+    ]
+    sample = frame.loc[duplicate_mask, columns].head(8).astype(object)
+    return sample.where(sample.notna(), None).to_dict(orient="records")
+
+
 def _single_country_make_model_deltas(
     *,
     active_frame: pd.DataFrame,
@@ -3326,7 +3348,12 @@ def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict
     if rule_id == "SC003":
         return f"请提供不早于当前 active {metrics.get('active') or '月份'} 的 {country} 数据。本次最新月份为 {metrics.get('candidate') or '未知'}，发生回退；请确认导出筛选条件包含本次要推进的最新月份。"
     if rule_id == "SC004":
-        return f"请去除 {country} 文件中的完全相同配置行（检测到 {metrics.get('duplicateRows', 0)} 行）。只删除所有配置字段均相同的重复记录；价格、Registration type、动力或车身不同的版本不能合并。"
+        return (
+            f"请核对 {country} 的归一化配置冲突（{metrics.get('duplicateRows', 0)} 行），"
+            "先对照配置与各月销量样本确认原因；不要直接删行或相加。"
+            "空值不等于 0；价格、Registration type、动力或车身不同的版本不能合并。"
+            " Check configuration/monthly-sales samples; do not delete or sum rows blindly."
+        )
     if rule_id == "SC005":
         return f"请修正 {country} 文件中的负销量（检测到 {metrics.get('negativeSalesCells', 0)} 个单元格）。请按原始 JATO 导出确认更正、冲销或缺失值的处理方式，不能直接把负数绝对值化。"
     if rule_id == "SC006":
@@ -8297,7 +8324,11 @@ def _build_single_country_review(
         candidate_frame=candidate_frame,
     )
     key_columns = _single_country_configuration_key_columns(candidate_frame)
-    duplicate_count = int(candidate_frame.duplicated(subset=key_columns, keep=False).sum()) if key_columns else 0
+    duplicate_mask = (
+        _normalized_static_key_frame(candidate_frame, key_columns).duplicated(keep=False)
+        if key_columns else pd.Series(False, index=candidate_frame.index)
+    )
+    duplicate_count = int(duplicate_mask.sum())
     negative_sales_count = int(sum(
         pd.to_numeric(candidate_frame[column], errors="coerce").lt(0).sum()
         for column in month_columns
@@ -8452,6 +8483,10 @@ def _build_single_country_review(
         add_finding("blocker", "SC004", "目标国家 candidate 存在完全相同的配置指纹。", {
             "duplicateRows": duplicate_count,
             "keyColumnCount": len(key_columns),
+            "sampleMonths": month_columns[-6:],
+            "samples": _duplicate_configuration_samples(
+                candidate_frame, duplicate_mask, month_columns,
+            ),
         })
     if negative_sales_count:
         add_finding("blocker", "SC005", "目标国家 candidate 存在负销量。", {"negativeSalesCells": negative_sales_count})
@@ -16447,7 +16482,7 @@ def _carry_forward_deprecated_static_columns(
     active_frame: pd.DataFrame,
     candidate_frame: pd.DataFrame,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Retain deprecated values only when an active config key has one value."""
+    """Inherit consistent active values without erasing uploaded distinctions."""
     columns = sorted(
         column
         for column in DEPRECATED_OPTIONAL_STATIC_COLUMNS
@@ -16520,6 +16555,17 @@ def _carry_forward_deprecated_static_columns(
         unambiguous_values = distinct_values.loc[
             ~distinct_values.duplicated(subset=key_names, keep=False)
         ]
+        if column in candidate_frame.columns:
+            supplied_keys = candidate_keys.loc[
+                ~_series_missing_value_mask(candidate_frame[column])
+            ]
+            # A supplied zero is a value, not permission to fill another source
+            # row's null. Doing so can turn distinct rows into duplicates.
+            unambiguous_values = unambiguous_values.loc[
+                ~pd.MultiIndex.from_frame(unambiguous_values[key_names]).isin(
+                    pd.MultiIndex.from_frame(supplied_keys)
+                )
+            ]
         matched = candidate_lookup.reset_index(drop=True).merge(
             unambiguous_values[[*key_names, carry_column]],
             how="inner",
@@ -16751,6 +16797,11 @@ def _keep_active_history_country_frame(
                 .drop_duplicates()
                 .shape[0]
             )
+            country_column = _find_country_column(list(source_frame.columns))
+            country = (
+                str(source_frame[country_column].iloc[0]) if country_column else "unknown"
+            )
+            sample_months = historical_months if source_name == "active" else future_months
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -16761,9 +16812,18 @@ def _keep_active_history_country_frame(
                         "拒绝自动相加。"
                     ),
                     "source": source_name,
+                    "country": country,
                     "duplicateRows": int(duplicate_mask.sum()),
                     "duplicateGroupCount": duplicate_group_count,
                     "keyColumnCount": len(key_columns),
+                    "sampleMonths": sample_months[-6:],
+                    "samples": _duplicate_configuration_samples(
+                        source_frame, duplicate_mask, sample_months,
+                    ),
+                    "sourceFeedback": _single_country_source_feedback(
+                        rule_id="SC004", country=country,
+                        metrics={"duplicateRows": int(duplicate_mask.sum())},
+                    ),
                 },
             )
 

@@ -3,7 +3,30 @@
 ## Status
 implemented
 
-### 2026-10-28 month-forward correction (local validation passed; not deployed)
+### 2026-10-29 static carry-forward collision correction (validated locally)
+
+- Actual 4c inspection: Finland's raw advancing rows have no normalized static
+  duplicates. Carry-forward fills null MSRP with active zero, creating 473
+  duplicate pairs; the first failed hash bucket reports 8 rows / 4 groups.
+- Fix the existing carry-forward helper to preserve uploaded null/value
+  distinctions within each stable-key group. No row removal or automatic sum.
+- Unify Review normalization with Smart Merge and enrich true-collision
+  feedback using the existing service/error path; no new table or workflow.
+- Verification: 323 monthly backend tests pass. Retained production parquet
+  copies pass raw Review → bounded streaming merge → complete Review with no
+  blockers (1,046,221 output rows). All four countries retain published history;
+  new monthly totals match the upload. All 17 untouched country checks pass.
+- Finland July/August/September remain 6,044 / 6,643 / 6,982; its 30,076 uploaded
+  rows are not deleted or deduplicated by carry-forward. Local input hashes and
+  server source hashes match before/after validation.
+- Review schema v5 uses the existing stale-report refresh path. A failed
+  Smart Merge can use its existing dedicated resume flow after code deployment;
+  successful jobs with old cached Reviews require normal Review refresh.
+- Pending: PR/CI and Candidate validation. Do not resume the production job or
+  publish data automatically; Active promotion requires explicit authorization.
+- Business rules: [data lifecycle runbook](../Fullstack/04_DevOps/JATO_MONTHLY_UPDATE_DATA_LIFECYCLE_2026-05-17.md#2026-10-29-preserve-uploaded-static-field-distinctions).
+
+### 2026-10-28 month-forward correction (deployed Active 69d0d871)
 
 - Incident: `jato-update-398aa04a` converted successfully but Review rejected
   four countries for omitted 2023 month columns (`candidate_missing_historical_months`).
@@ -17,7 +40,10 @@ implemented
   passed, including a synthetic four-country September patch missing all 2023
   columns through raw Review → streaming merge → complete Review. Frontend
   type check, production build and router regression also passed. The original
-  production upload has not been replayed; Active and the reported job remain unchanged.
+  production upload was not replayed in that code validation. PR #310 was
+  deployed to Active `69d0d871`; the user subsequently rebuilt Review and ran
+  Smart Merge, exposing the carry-forward collision described above. No monthly
+  data was published by that deployment.
 - Review schema advances to v4 using the existing stale-review / isolated
   refresh mechanism. Cached v3 conclusions cannot be reused under the new rules;
   complete candidates still must contain the preserved historical months.
