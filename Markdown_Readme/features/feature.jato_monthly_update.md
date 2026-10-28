@@ -3,6 +3,26 @@
 ## Status
 implemented
 
+### 2026-10-28 month-forward correction (local validation passed; not deployed)
+
+- Incident: `jato-update-398aa04a` converted successfully but Review rejected
+  four countries for omitted 2023 month columns (`candidate_missing_historical_months`).
+- Advancing uploads need not re-export complete history. Default streaming
+  Smart Merge retains active history and consumes only subsequent months.
+- Review checks supplied overlap for explicit revisions; `use_latest` must also
+  preserve omitted old months. Missing columns are never interpreted as zeros.
+- Reuse current Review, per-country decisions, static-key matching and Smart
+  Merge; no new table, migration, upload workflow or automatic publish.
+- Verification: 317 monthly backend regression tests and all 648 frontend tests
+  passed, including a synthetic four-country September patch missing all 2023
+  columns through raw Review → streaming merge → complete Review. Frontend
+  type check, production build and router regression also passed. The original
+  production upload has not been replayed; Active and the reported job remain unchanged.
+- Review schema advances to v4 using the existing stale-review / isolated
+  refresh mechanism. Cached v3 conclusions cannot be reused under the new rules;
+  complete candidates still must contain the preserved historical months.
+- Business rules: [data lifecycle runbook](../Fullstack/04_DevOps/JATO_MONTHLY_UPDATE_DATA_LIFECYCLE_2026-05-17.md#2026-10-28-advance-months-without-requiring-a-full-history-export).
+
 ## Category
 backend · source: git_commit
 

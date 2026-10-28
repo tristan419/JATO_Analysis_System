@@ -124,7 +124,7 @@ def test_review_refresh_memory_failure_is_retryable_without_reupload() -> None:
 
 @pytest.mark.parametrize(
     ("bundle_schema_version", "queues_refresh"),
-    [(2, True), (3, False)],
+    [(2, True), (3, True), (jato_monthly_update_service.REVIEW_BUNDLE_SCHEMA_VERSION, False)],
 )
 def test_review_refresh_rebuilds_old_schema_but_rejects_current_bundle(
     tmp_path: Path,

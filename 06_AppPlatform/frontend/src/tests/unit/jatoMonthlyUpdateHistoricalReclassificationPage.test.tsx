@@ -266,7 +266,8 @@ describe("JATO historical reclassification review interaction", () => {
     expect(dialog.textContent).toContain("丹麦");
     expect(dialog.textContent).toContain("覆盖至 2026-03 的 39 个历史月份");
     expect(dialog.textContent).toContain("历史 Dashboard、同比与份额会变化");
-    expect(within(dialog).getByText("整国替换历史，不与 active 累加")).toBeTruthy();
+    expect(within(dialog).getByText("仅替换明确提供的历史月份，不与 active 累加")).toBeTruthy();
+    expect(dialog.textContent).toContain("文件未提供的旧月份");
     expect(dialog.textContent).toContain("未上传国家");
 
     fireEvent.click(within(dialog).getByRole("button", {
@@ -336,7 +337,7 @@ describe("JATO historical reclassification review interaction", () => {
     expect(dialog.textContent).toContain("使用上传覆盖历史0 个国家");
     expect(within(dialog).getByText("本批次全部保留 active 历史")).toBeTruthy();
     expect(dialog.textContent).toContain("现有历史不会被上传文件覆盖");
-    expect(within(dialog).queryByText("整国替换历史，不与 active 累加")).toBeNull();
+    expect(within(dialog).queryByText("仅替换明确提供的历史月份，不与 active 累加")).toBeNull();
 
     fireEvent.click(within(dialog).getByRole("button", {
       name: "确认并生成 Candidate",
@@ -419,7 +420,7 @@ describe("JATO historical reclassification review interaction", () => {
     });
     expect(dialog.textContent).toContain("捷克");
     expect(dialog.textContent).toContain("使用本次上传覆盖历史");
-    expect(within(dialog).getByText("整国替换历史，不与 active 累加")).toBeTruthy();
+    expect(within(dialog).getByText("仅替换明确提供的历史月份，不与 active 累加")).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", {
       name: "确认并生成 Candidate",
     }));

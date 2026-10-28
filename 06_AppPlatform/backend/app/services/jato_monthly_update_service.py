@@ -53,7 +53,7 @@ STATE_FILENAME = "job_state.json"
 LOG_FILENAME = "job.log"
 UPLOAD_STATE_FILENAME = "upload_state.json"
 REVIEW_BUNDLE_FILENAME = "review_bundle.json"
-REVIEW_BUNDLE_SCHEMA_VERSION = 3
+REVIEW_BUNDLE_SCHEMA_VERSION = 4
 CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION = 2
 CANDIDATE_ARTIFACT_FIELDS = (
     ("parquet", "stagingOutputPath"),
@@ -3098,6 +3098,7 @@ def _single_country_historical_sales_stability(
     candidate_frame: pd.DataFrame,
     active_latest_month: str | None,
     source_upload_sha256: str | None = None,
+    allow_forward_patch: bool = False,
 ) -> dict[str, Any]:
     if active_latest_month is None:
         return {"status": "unavailable", "reason": "active_latest_month_missing"}
@@ -3109,7 +3110,32 @@ def _single_country_historical_sales_stability(
     )
     missing = [month for month in historical_months if month not in candidate_months]
     if missing:
-        return {"status": "fail", "reason": "candidate_missing_historical_months", "missingMonths": missing}
+        candidate_latest = _latest_month_from_frame(candidate_frame)
+        if (
+            not allow_forward_patch
+            or candidate_latest is None
+            or _time_sort_key(candidate_latest) <= _time_sort_key(active_latest_month)
+        ):
+            return {
+                "status": "fail",
+                "reason": "candidate_missing_historical_months",
+                "missingMonths": missing,
+            }
+        # An advancing upload is a month patch, not a complete historical
+        # replacement. Smart Merge preserves absent months from active; still
+        # compare every supplied overlap so revisions require the usual review.
+        historical_months = [
+            month for month in historical_months if month in candidate_months
+        ]
+        if not historical_months:
+            return {
+                "status": "pass",
+                "reason": "forward_months_only",
+                "comparedThrough": active_latest_month,
+                "comparedMonthCount": 0,
+                "mismatchCount": 0,
+                "preservedHistoricalMonths": missing,
+            }
 
     active_sales = _historical_sales_frame(
         active_frame,
@@ -3248,6 +3274,7 @@ def _single_country_historical_sales_stability(
         "reason": cause,
         "comparedThrough": active_latest_month,
         "comparedMonthCount": len(historical_months),
+        "preservedHistoricalMonths": missing,
         "comparedMakeCount": compared_make_count,
         "comparedMakeModelCount": compared_make_model_count,
         "mismatchCount": len(samples),
@@ -3315,6 +3342,12 @@ def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict
     if rule_id == "SC010":
         return f"{country} 文件新增字段：{columns('extraColumns') or '见 Review 明细'}。请提供字段定义、单位和是否应保留的确认；新增列不应覆盖或改名现有业务列。"
     if rule_id == "SC011":
+        if metrics.get("reason") == "candidate_missing_historical_months":
+            return (
+                f"{country} 缺少历史月份：{columns('missingMonths')}，不能直接替换 active。"
+                "推进批次须通过 Smart Merge 保留旧月份，再校验完整 Candidate；"
+                "若本次没有新月份，请提供晚于 active 的月份。缺失历史不能当作零销量。"
+            )
         confirmed = metrics.get("confirmedReclassifications")
         unconfirmed = metrics.get("unconfirmedReclassificationCandidates")
         unpaired = metrics.get("unpairedMakeModels")
@@ -8285,6 +8318,10 @@ def _build_single_country_review(
         candidate_frame=candidate_frame,
         active_latest_month=active_latest,
         source_upload_sha256=source_upload_sha256,
+        allow_forward_patch=(
+            str(artifacts.get("candidateScope") or "")
+            in PARTITION_SCOPED_CANDIDATE_SCOPES
+        ),
     )
     current_reclassification = historical_stability.get(
         "historicalReclassification"
@@ -8396,6 +8433,17 @@ def _build_single_country_review(
         add_finding("review", "SC010", "目标国家 candidate 包含 active 中没有的新业务列：" + "、".join(schema_contract["extra"]) + "。", {
             "extraColumns": schema_contract["extra"],
         })
+    preserved_months = historical_stability.get("preservedHistoricalMonths")
+    if preserved_months:
+        add_finding(
+            "info", "SC015",
+            (
+                "未提供的历史月份由 Smart Merge 保留 active，不删除、不补零；"
+                "默认仅接入新月份，重叠历史修订须另行确认。"
+                "Missing historical months stay in active; revisions require confirmation."
+            ),
+            {"preservedHistoricalMonths": preserved_months, "defaultPolicy": "keep_active"},
+        )
     if candidate_latest is None:
         add_finding("blocker", "SC002", "candidate 没有有效销量月份。", {})
     if active_latest and candidate_latest and _time_sort_key(candidate_latest) < _time_sort_key(active_latest):
@@ -16599,11 +16647,13 @@ def _keep_active_history_country_frame(
     active_frame: pd.DataFrame,
     candidate_frame: pd.DataFrame,
     active_latest_month: str | None = None,
+    preserved_months: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Use active through its latest month and candidate only afterwards.
+    """Use active history and candidate afterwards, or preserve selected months.
 
     Rows are combined only when every normalized static configuration field is
-    exactly equal.  Similar model/version labels are never guessed or merged.
+    exactly equal. Explicit use_latest can preserve just the months absent from
+    the upload. Similar model/version labels are never guessed or merged.
     """
     active_latest = active_latest_month or _latest_month_from_frame(
         active_frame
@@ -16642,13 +16692,17 @@ def _keep_active_history_country_frame(
         month
         for month in month_columns
         if _time_sort_key(month) <= _time_sort_key(active_latest)
+        and (preserved_months is None or month in preserved_months)
     ]
     future_months = [
         month
         for month in month_columns
-        if _time_sort_key(month) > _time_sort_key(active_latest)
+        if month not in historical_months
     ]
-    if not future_months:
+    if not any(
+        _time_sort_key(month) > _time_sort_key(active_latest)
+        for month in future_months
+    ):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -16748,6 +16802,25 @@ def _keep_active_history_country_frame(
     for month in month_columns:
         grouped_static[month] = grouped_sales[month]
     merged = grouped_static[all_columns].reset_index(drop=True)
+    # Derived totals must follow the chosen monthly slices, not stale uploaded
+    # YTD values (which may include history that keep_active deliberately ignores).
+    for column in all_columns:
+        ytd_match = re.fullmatch(
+            r"YTD\s+(\d{4})\s+\(([A-Za-z]{3})\)", column, re.IGNORECASE,
+        )
+        if ytd_match or YEAR_COLUMN_PATTERN.fullmatch(column):
+            year = ytd_match.group(1) if ytd_match else column
+            end = f"{year} {ytd_match.group(2)}" if ytd_match else f"{year} Dec"
+            included = [
+                month for month in month_columns
+                if month.startswith(f"{year} ")
+                and _time_sort_key(month) <= _time_sort_key(end)
+            ]
+            if included:
+                merged[column] = (
+                    merged[included].apply(pd.to_numeric, errors="coerce")
+                    .fillna(0).sum(axis=1)
+                )
     merged_keys = _normalized_static_key_frame(merged, key_columns)
     duplicate_rows = int(merged_keys.duplicated(keep=False).sum())
     if duplicate_rows:
@@ -16813,6 +16886,7 @@ def _keep_active_history_country_frame(
             "historicalMonthsFrom": "active",
             "futureMonthsFrom": "candidate",
             "historicalMonthCount": len(historical_months),
+            "preservedHistoricalMonths": historical_months,
             "futureMonthCount": len(future_months),
             "activeInputRows": int(len(active_frame)),
             "candidateInputRows": int(len(candidate_frame)),
@@ -17614,12 +17688,21 @@ def _smart_merge_parquet_streaming(
     historical_reclassification_decisions: dict[str, str] | None = None,
     output_path: Path | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """Build a complete candidate with bounded Arrow scans and disk spill."""
+    """Build a complete candidate, advancing months without replacing history.
+
+    Only explicit use_latest decisions replace supplied historical months;
+    omitted months are always retained. Arrow scans and spill remain bounded.
+    """
     import pyarrow as pa
     import pyarrow.parquet as pq
 
     active_schema = pq.read_schema(active_path)
     candidate_schema = pq.read_schema(candidate_path)
+    missing_candidate_months = sorted(
+        set(_detect_month_columns(active_schema.names))
+        - set(_detect_month_columns(candidate_schema.names)),
+        key=_time_sort_key,
+    )
     active_country_column = _find_country_column(
         [str(column).strip() for column in active_schema.names]
     )
@@ -17843,6 +17926,12 @@ def _smart_merge_parquet_streaming(
                         int(candidate_spill["maxInputBatchRows"]),
                     )
                     history_policy = decision_map.get(country_key)
+                    if (
+                        history_policy is None
+                        and _time_sort_key(candidate_latest[candidate_country])
+                        > _time_sort_key(active_latest[active_country])
+                    ):
+                        history_policy = "keep_active"
                     history_summary: dict[str, Any] = {
                         "policy": history_policy or "use_candidate",
                         "historicalMonthsFrom": "candidate",
@@ -17903,7 +17992,9 @@ def _smart_merge_parquet_streaming(
                             country_summary,
                             bucket_summary,
                         )
-                        if history_policy == "keep_active":
+                        if history_policy == "keep_active" or (
+                            history_policy == "use_latest" and missing_candidate_months
+                        ):
                             merged_frame, bucket_history = (
                                 _keep_active_history_country_frame(
                                     active_frame=active_frame,
@@ -17911,8 +18002,13 @@ def _smart_merge_parquet_streaming(
                                     active_latest_month=active_latest.get(
                                         active_country
                                     ),
+                                    preserved_months=(
+                                        missing_candidate_months
+                                        if history_policy == "use_latest" else None
+                                    ),
                                 )
                             )
+                            bucket_history["policy"] = history_policy
                             if "activeInputRows" not in history_summary:
                                 history_summary = {
                                     **bucket_history,

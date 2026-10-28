@@ -70,9 +70,36 @@ flowchart TD
 
 ## Expected Monthly Update Behavior
 
+### 2026-10-28: advance months without requiring a full history export
+
+Confirmed after Review of `jato-update-398aa04a` (`2026-09-partial-4c`):
+an advancing upload may omit old months (for example, all twelve 2023 months).
+Missing old month columns are not zero sales and do not, by themselves, reject
+the input. Reuse the existing country Review and bounded streaming Smart Merge:
+
+- Default `keep_active`: retain each country's published months and analytical
+  classifications through its own active latest month; take only later months
+  from the upload. Countries absent from the upload remain untouched.
+- Compare every supplied historical overlap. Actual sales/classification
+  revisions still use the existing per-country decision and approval flow.
+- Explicit `use_latest` replaces only historical months actually provided in
+  the upload; omitted months still come from active. Never add overlapping sales.
+- Reuse exact static configuration keys and the existing duplicate/resource
+  guards. Do not guess rows by model name or row position. Recalculate existing
+  YTD/year totals from the selected monthly slices.
+- The merged complete candidate must pass Review before approval/publication;
+  a raw partition-only candidate is still not directly publishable.
+- A file missing history but not advancing the latest month remains blocked;
+  this change does not introduce a history-only repair workflow.
+
+Existing cached Reviews require the normal Review refresh/new-attempt flow to
+use new rules. This code change does not publish the above job, modify active
+runtime data, or import Candidate application data into Active.
+
 When a monthly xlsx contains only a subset of countries:
 
-1. Uploaded countries are replaced/advanced from the uploaded xlsx.
+1. Uploaded countries advance by month using the policy above, rather than
+   replacing their complete history merely because they appear in the file.
 2. Countries not in the upload are supplemented from the current active parquet.
 3. Countries whose latest month already equals the upload month should not be duplicated.
 4. Existing country/month sales should not be doubled.
