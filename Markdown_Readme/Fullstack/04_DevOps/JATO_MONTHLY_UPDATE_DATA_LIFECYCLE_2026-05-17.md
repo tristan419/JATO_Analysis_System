@@ -70,6 +70,32 @@ flowchart TD
 
 ## Expected Monthly Update Behavior
 
+### 2026-10-29: preserve uploaded static-field distinctions
+
+Read-only inspection of `jato-update-398aa04a` identified a platform-generated
+collision, not duplicate September input. Finland advances from June; the
+uploaded July–September rows distinguish null from `0` in `MSRP including
+delivery charge`. Carrying active `0` into those nulls collapses 473 pairs of
+otherwise distinct configurations (the first failed bucket reports four).
+
+- Reuse `_carry_forward_deprecated_static_columns`: if an uploaded stable-key
+  group supplies a non-null field value, preserve its other rows' nulls. Only
+  groups with no supplied value may inherit a consistent active value.
+- Preserve explicit zeros, source rows and monthly sales; do not deduplicate,
+  auto-sum collisions, rewrite the upload, or weaken Publish checks.
+- Review and Smart Merge use the existing normalized static-key function.
+  Real collisions must include bounded country/configuration/monthly-sales
+  samples and actionable feedback, not just a duplicate count.
+- Revalidate on retained source copies before deployment. Code deployment is
+  separate from resuming Smart Merge and publishing the monthly data.
+
+Validated locally against the retained original 4c parquet and current active
+copy: raw Review → streaming merge → complete Review has no blockers; all four
+countries retain historical sales/classifications and use uploaded future
+totals. The existing checks prove 17 untouched countries remain unchanged.
+Input hashes also match the server source files after replay. The production
+job was not resumed and no data was published during this validation.
+
 ### 2026-10-28: advance months without requiring a full history export
 
 Confirmed after Review of `jato-update-398aa04a` (`2026-09-partial-4c`):

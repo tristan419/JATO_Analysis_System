@@ -3085,6 +3085,63 @@ def test_partial_review_explains_history_preservation(tmp_path: Path, monkeypatc
     assert "保留" in finding["message"]
 
 
+def test_review_reports_normalized_duplicates_with_original_sales_samples(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    active_path = tmp_path / "active.parquet"
+    candidate_path = tmp_path / "candidate.parquet"
+    active = pd.DataFrame({
+        "国家": ["芬兰"], "Make": ["KIA"], "Model": ["PICANTO"],
+        "Version name": ["LX"], "2026 Jun": [5],
+    })
+    candidate = pd.concat([
+        active.assign(**{"2026 Jul": 2}),
+        active.assign(**{"Version name": " lx ", "2026 Jul": 3}),
+    ], ignore_index=True)
+    active.to_parquet(active_path, index=False)
+    candidate.to_parquet(candidate_path, index=False)
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(jato_monthly_update_service, "_active_data_paths", lambda: {
+        "parquet": active_path, "partition": tmp_path / "no-partitions",
+    })
+
+    review = jato_monthly_update_service._build_single_country_review({
+        "jobId": "normalized-duplicate-review", "country": "芬兰",
+        "artifacts": {
+            "stagingOutputPath": str(candidate_path),
+            "candidateScope": "target_country_partition_only",
+        },
+    }, candidate_fingerprint="a" * 64)
+
+    finding = next(item for item in review["reviewFindings"] if item["ruleId"] == "SC004")
+    assert finding["severity"] == "blocker"
+    assert finding["metrics"]["duplicateRows"] == 2
+    assert [row["2026 Jul"] for row in finding["metrics"]["samples"]] == [2, 3]
+    assert "不要直接删行或相加" in finding["sourceFeedback"]
+    digest = jato_monthly_update_service._failure_digest_from_exception(
+        phase="smart_merging",
+        exc=HTTPException(status_code=409, detail={"sourceFeedback": finding["sourceFeedback"]}),
+    )
+    assert digest["sourceFeedback"] == finding["sourceFeedback"]
+
+
+def test_duplicate_samples_bound_rows_months_and_serialize_nulls() -> None:
+    months = [f"2026 {month}" for month in ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul")]
+    frame = pd.DataFrame({
+        "Country": ["Finland"] * 12,
+        "Model": ["PICANTO"] * 12,
+        "MSRP including delivery charge": [None] * 12,
+        **{month: [1] * 12 for month in months},
+    })
+    samples = jato_monthly_update_service._duplicate_configuration_samples(
+        frame, pd.Series(True, index=frame.index), months,
+    )
+    assert len(samples) == 8
+    assert "2026 Jan" not in samples[0]
+    assert samples[0]["MSRP including delivery charge"] is None
+    json.dumps(samples, allow_nan=False)
+
+
 def test_historical_sales_stability_identifies_make_reclassification() -> None:
     active = pd.DataFrame(
         {
@@ -3627,6 +3684,31 @@ def test_deprecated_static_fields_carry_forward_only_for_consistent_active_value
         ]
         == 1
     )
+
+
+@pytest.mark.parametrize("empty_value", [None, ""])
+def test_deprecated_carry_preserves_null_when_upload_supplies_group_value(empty_value) -> None:
+    identity = {"国家": "芬兰", "Make": "KIA", "Model": "PICANTO"}
+    active = pd.DataFrame([
+        {**identity, "Version name": "LX", "MSRP including delivery charge": 0},
+        {**identity, "Version name": "OTHER", "MSRP including delivery charge": 25},
+    ])
+    candidate = pd.DataFrame([
+        {**identity, "Version name": "LX", "MSRP including delivery charge": empty_value},
+        {**identity, "Version name": " lx ", "MSRP including delivery charge": 0},
+        {**identity, "Version name": "OTHER", "MSRP including delivery charge": empty_value},
+    ], index=[4, 8, 12])
+    original = candidate.copy(deep=True)
+
+    carried, summary = jato_monthly_update_service._carry_forward_deprecated_static_columns(
+        active_frame=active, candidate_frame=candidate,
+    )
+
+    assert jato_monthly_update_service._series_missing_value_mask(carried["MSRP including delivery charge"]).loc[4]
+    assert carried.loc[8, "MSRP including delivery charge"] == 0
+    assert carried.loc[12, "MSRP including delivery charge"] == 25
+    assert summary["matchedConfigurationRowCount"] == 1
+    pd.testing.assert_frame_equal(candidate, original)
 
 
 def test_single_country_source_feedback_reports_exact_washer_request() -> None:

@@ -360,7 +360,49 @@ def test_cross_batch_normalized_duplicate_blocks_without_replacing_candidate(
     assert exc_info.value.detail["blockerType"] == "duplicate_configurations"
     assert exc_info.value.detail["source"] == "candidate_future"
     assert exc_info.value.detail["duplicateRows"] == 2
+    assert exc_info.value.detail["country"] == "Germany"
+    assert exc_info.value.detail["samples"][0]["2026 Jun"] == 3
+    assert exc_info.value.detail["samples"][1]["2026 Jun"] == 4
+    assert "Germany" in exc_info.value.detail["sourceFeedback"]
     assert _sha256(candidate_path) == candidate_sha_before
     assert list(
         tmp_path.glob(f".{candidate_path.name}.*.smart-merge*")
     ) == []
+
+
+def test_streaming_merge_preserves_uploaded_null_and_zero_price_rows(
+    tmp_path: Path,
+) -> None:
+    active_path = tmp_path / "active.parquet"
+    candidate_path = tmp_path / "candidate.parquet"
+    output_path = tmp_path / "merged.parquet"
+    identity = {
+        "Country": "Finland", "Make": "KIA", "Model": "PICANTO",
+        "Version name": "1.0 LX 4P",
+    }
+    pd.DataFrame([{
+        **identity, "MSRP including delivery charge": 0.0,
+        "2023 Jan": 7, "2026 Jun": 5,
+    }]).to_parquet(active_path, index=False)
+    pd.DataFrame([
+        {**identity, "MSRP including delivery charge": None,
+         "2026 Jun": 0, "2026 Jul": 2, "2026 Aug": 0, "2026 Sep": 0},
+        {**identity, "MSRP including delivery charge": 0.0,
+         "2026 Jun": 999, "2026 Jul": 0, "2026 Aug": 3, "2026 Sep": 4},
+    ]).to_parquet(candidate_path, index=False, row_group_size=1)
+    original_hashes = (_sha256(active_path), _sha256(candidate_path))
+
+    row_count, _summary = (
+        jato_monthly_update_service._smart_merge_parquet_streaming(
+            active_path=active_path, candidate_path=candidate_path,
+            output_path=output_path, regressed_countries=[],
+        )
+    )
+
+    merged = pq.read_table(output_path).to_pandas()
+    assert row_count == 2
+    assert merged["MSRP including delivery charge"].isna().sum() == 1
+    assert merged["MSRP including delivery charge"].eq(0).sum() == 1
+    assert merged[["2023 Jan", "2026 Jun", "2026 Jul", "2026 Aug", "2026 Sep"]].sum().tolist() == [7, 5, 2, 3, 4]
+    assert original_hashes == (_sha256(active_path), _sha256(candidate_path))
+    assert not jato_monthly_update_service._find_candidate_duplicate_configurations(output_path)
