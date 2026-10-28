@@ -15,6 +15,7 @@ import {
 import { animate } from "animejs";
 import { createPortal } from "react-dom";
 import { BomTemplateLifecycleEditor } from "../components/orderGenius/BomTemplateLifecycleEditor";
+import { BomCountryColumns } from "../components/orderGenius/BomCountryColumns";
 import { MaterialTimelineBoard } from "../components/orderGenius/MaterialTimelineBoard";
 import { MaterialReplacementEditor } from "../components/orderGenius/MaterialReplacementEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -6935,6 +6936,12 @@ export function BomAdminPanel({
                     </div>
                   ) : null}
                 </form>
+                <BomCountryColumns countries={sortedActiveFobCountries} onChanged={async () => {
+                  const loaded = await load();
+                  onFobCountriesChanged?.();
+                  onFobChanged?.();
+                  return loaded;
+                }} />
                 <div className="bom-admin-tool-tile">
                   <div style={{ fontSize: 11, fontWeight: 800, color: "#334155", marginBottom: 8 }}>BOM Admin Excel</div>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>

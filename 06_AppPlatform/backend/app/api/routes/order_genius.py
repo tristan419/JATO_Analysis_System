@@ -1773,7 +1773,7 @@ def delete_country_fobs(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
-    """Clear one BOM Admin country column by deactivating all active FOB rows."""
+    """Soft-delete a BOM country column, including phases, without changing values."""
     country_code = clean_text(country).upper()
     if not country_code:
         raise HTTPException(status_code=400, detail="country is required")

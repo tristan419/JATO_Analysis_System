@@ -16,7 +16,7 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, func, inspect, or_, select, text, update
+from sqlalchemy import and_, delete, func, inspect, literal, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -1488,7 +1488,7 @@ def initialize_sku_fobs_from_source(
 
 
 def clear_country_fobs(session: Session, country_code: str, allowed_brands: set[str] | None = None) -> int:
-    """Deactivate all active BOM FOB rows for one country column."""
+    """Trash a country column, retaining its amounts, phase dates and colour scopes."""
     result = session.execute(
         update(CountrySkuFobResolved)
         .where(
@@ -1503,21 +1503,21 @@ def clear_country_fobs(session: Session, country_code: str, allowed_brands: set[
             updated_at_utc=datetime.now(timezone.utc),
         )
     )
-    return int(result.rowcount or 0)
+    periods = session.execute(
+        update(CountryTemplateFobPeriod).where(
+            CountryTemplateFobPeriod.country_code == country_code,
+            CountryTemplateFobPeriod.status.in_(("active", "default")),
+            *([CountryTemplateFobPeriod.bom_template.in_(select(MaterialSkuMaster.bom_template).where(
+                func.upper(MaterialSkuMaster.brand).in_(allowed_brands)))] if allowed_brands is not None else []),
+        ).values(status="country_deleted", row_version=CountryTemplateFobPeriod.row_version + 1,
+                 updated_at_utc=datetime.now(timezone.utc))
+    )
+    return int(result.rowcount or 0) + int(periods.rowcount or 0)
 
 
 def list_country_fob_trash(session: Session, allowed_brands: set[str] | None = None,
                           allowed_countries: set[str] | None = None) -> list[dict[str, object]]:
     """List country columns currently parked in BOM FOB trash."""
-    active_countries = {
-        str(code or "").strip().upper()
-        for code in session.execute(
-            select(CountrySkuFobResolved.country_code)
-            .where(CountrySkuFobResolved.is_active == True)
-            .distinct()
-        ).scalars().all()
-        if len(str(code or "").strip()) == 2
-    }
     rows = session.execute(
         select(
             CountrySkuFobResolved.country_code,
@@ -1526,17 +1526,26 @@ def list_country_fob_trash(session: Session, allowed_brands: set[str] | None = N
         )
         .where(
             CountrySkuFobResolved.is_active == False,
+            CountrySkuFobResolved.fob_source_mode == "country_column_trash",
             *([CountrySkuFobResolved.country_code.in_(allowed_countries)] if allowed_countries is not None else []),
             *([CountrySkuFobResolved.material_code.in_(select(MaterialSkuMaster.material_code).where(
                 func.upper(MaterialSkuMaster.brand).in_(allowed_brands)))] if allowed_brands is not None else []),
         )
     ).all()
+    rows += session.execute(select(
+        CountryTemplateFobPeriod.country_code,
+        literal("country_column_trash"),
+        CountryTemplateFobPeriod.updated_at_utc,
+    ).where(
+        CountryTemplateFobPeriod.status == "country_deleted",
+        *([CountryTemplateFobPeriod.country_code.in_(allowed_countries)] if allowed_countries is not None else []),
+        *([CountryTemplateFobPeriod.bom_template.in_(select(MaterialSkuMaster.bom_template).where(
+            func.upper(MaterialSkuMaster.brand).in_(allowed_brands)))] if allowed_brands is not None else []),
+    )).all()
     by_country: dict[str, dict[str, object]] = {}
     for country_code, source_mode, deleted_at in rows:
         country = str(country_code or "").strip().upper()
         if len(country) != 2:
-            continue
-        if source_mode != "country_column_trash" and country in active_countries:
             continue
         item = by_country.setdefault(country, {"countryCode": country, "rows": 0, "deletedAtUtc": None})
         item["rows"] = int(item["rows"]) + 1
@@ -1547,22 +1556,13 @@ def list_country_fob_trash(session: Session, allowed_brands: set[str] | None = N
 
 
 def _select_country_trash_rows(session: Session, country: str, allowed_brands: set[str] | None = None) -> list[CountrySkuFobResolved]:
-    active_country_exists = session.execute(
-        select(CountrySkuFobResolved.country_sku_fob_id)
-        .where(
-            CountrySkuFobResolved.country_code == country,
-            CountrySkuFobResolved.is_active == True,
-        )
-        .limit(1)
-    ).first()
     stmt = select(CountrySkuFobResolved).where(
         CountrySkuFobResolved.country_code == country,
         CountrySkuFobResolved.is_active == False,
+        CountrySkuFobResolved.fob_source_mode == "country_column_trash",
         *([CountrySkuFobResolved.material_code.in_(select(MaterialSkuMaster.material_code).where(
             func.upper(MaterialSkuMaster.brand).in_(allowed_brands)))] if allowed_brands is not None else []),
     )
-    if active_country_exists:
-        stmt = stmt.where(CountrySkuFobResolved.fob_source_mode == "country_column_trash")
     return list(session.execute(stmt).scalars().all())
 
 
@@ -1591,9 +1591,33 @@ def restore_country_fobs_from_trash(session: Session, country_code: str, allowed
         row.fob_source_mode = "country_column_restore"
         row.updated_at_utc = now
         restored += 1
+    periods = list(session.execute(select(CountryTemplateFobPeriod).where(
+        CountryTemplateFobPeriod.country_code == country,
+        CountryTemplateFobPeriod.status == "country_deleted",
+        *([CountryTemplateFobPeriod.bom_template.in_(select(MaterialSkuMaster.bom_template).where(
+            func.upper(MaterialSkuMaster.brand).in_(allowed_brands)))] if allowed_brands is not None else []),
+    ).with_for_update()).scalars().all())
+    for row in periods:
+        active = select(CountryTemplateFobPeriod.country_template_fob_period_id).where(
+            CountryTemplateFobPeriod.country_code == country,
+            CountryTemplateFobPeriod.bom_template == row.bom_template,
+            CountryTemplateFobPeriod.status == ("default" if row.valid_from is None else "active"),
+        )
+        if row.valid_from is not None:
+            active = active.where(
+                or_(CountryTemplateFobPeriod.valid_to.is_(None), CountryTemplateFobPeriod.valid_to >= row.valid_from),
+                *([CountryTemplateFobPeriod.valid_from <= row.valid_to] if row.valid_to is not None else []),
+            )
+        if session.execute(active.limit(1)).first():
+            skipped_active_conflict += 1
+            continue
+        row.status = "default" if row.valid_from is None else "active"
+        row.row_version += 1
+        row.updated_at_utc = now
+        restored += 1
     return {
         "countryCode": country,
-        "rows": len(trashed_rows),
+        "rows": len(trashed_rows) + len(periods),
         "restored": restored,
         "skippedActiveConflict": skipped_active_conflict,
     }
