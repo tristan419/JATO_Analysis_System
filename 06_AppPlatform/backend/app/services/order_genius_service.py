@@ -690,6 +690,8 @@ def build_material_timeline(
     today = today or date.today()
     skus = repo.list_all_material_skus_for_admin(session, allowed_brands=allowed_brands, limit=None)
     by_code = {sku.material_code: sku for sku in skus if sku.bom_template}
+    colour_pricing = repo.resolve_colour_surcharges_for_skus(session, list(by_code.values()))
+    default_scopes = repo.list_default_colour_scopes(session, country_code)
     fobs, conflicts = repo.list_fobs_for_country_material_codes(
         session, country_code, list(by_code), include_conflicts=True,
     )
@@ -808,7 +810,7 @@ def build_material_timeline(
                 session, country_code, sku, reference.year, reference.month,
                 default_fob=fobs.get(sku.material_code), periods=schedules.get(template, []),
                 uses_periods=bool(schedules.get(template)),
-                colour_pricing=repo.resolve_colour_surcharge_for_sku(session, sku, repo.resolve_effective_colour_tier(sku)),
+                colour_pricing=colour_pricing[sku.material_sku_id], default_colour_scopes=default_scopes,
             )
             if quote["isEditable"] and any(span["from"] <= reference.isoformat() <= span["to"] for span in quote["availableRanges"]):
                 ready += 1

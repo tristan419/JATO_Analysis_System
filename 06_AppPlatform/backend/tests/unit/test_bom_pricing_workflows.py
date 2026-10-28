@@ -146,6 +146,7 @@ def test_list_loading_query_count_does_not_grow_with_materials(db):
         for read in [
             lambda: service.build_matrix_batch(db, ["CH", "SE"], 2026, selection_date=date(2026, 10, 15)),
             lambda: repo.list_bom_with_fob(db, include_conflicts=True),
+            lambda: service.build_material_timeline(db, "CH", allowed_brands=None, today=date(2026, 10, 15)),
         ]:
             statements = []
             def capture(_conn, _cursor, statement, *_args):
@@ -159,7 +160,7 @@ def test_list_loading_query_count_does_not_grow_with_materials(db):
             current.append(len(statements))
         counts.append(current)
     assert counts[0] == counts[1]
-    assert counts[1][0] <= 20 and counts[1][1] <= 11
+    assert counts[1][0] <= 20 and counts[1][1] <= 11 and counts[1][2] <= 8
 
 
 @pytest.mark.parametrize("tier", ["single", "dual", "special", None])
