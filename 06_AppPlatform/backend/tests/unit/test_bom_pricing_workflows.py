@@ -133,6 +133,110 @@ def fob(db, code, value, base=None, surcharge=None, term="TT", country="CH", sou
     return row
 
 
+def test_list_loading_query_count_does_not_grow_with_materials(db):
+    from sqlalchemy import event
+    counts = []
+    for target in (8, 80):
+        for index in range(0 if target == 8 else 8, target):
+            code = f"LOAD{index:03}"
+            sku(db, code, ("single", "dual", "special")[index % 3], template=f"T**{index // 8:03}")
+            fob(db, code, 1300, base=1000)
+        db.commit()
+        current = []
+        for read in [
+            lambda: service.build_matrix_batch(db, ["CH", "SE"], 2026, selection_date=date(2026, 10, 15)),
+            lambda: repo.list_bom_with_fob(db, include_conflicts=True),
+            lambda: service.build_material_timeline(db, "CH", allowed_brands=None, today=date(2026, 10, 15)),
+        ]:
+            statements = []
+            def capture(_conn, _cursor, statement, *_args):
+                statements.append(statement.lstrip().upper())
+            event.listen(db.bind, "before_cursor_execute", capture)
+            try:
+                result = read()
+            finally:
+                event.remove(db.bind, "before_cursor_execute", capture)
+            assert result and statements and all(statement.startswith("SELECT") for statement in statements)
+            current.append(len(statements))
+        counts.append(current)
+    assert counts[0] == counts[1]
+    assert counts[1][0] <= 20 and counts[1][1] <= 11 and counts[1][2] <= 8
+
+
+@pytest.mark.parametrize("tier", ["single", "dual", "special", None])
+def test_preloaded_rules_match_single_sku_and_refresh_after_edits(db, tier):
+    original = sku(db, "RULE", tier or "single")
+    original.colour_tier = tier or ""
+    # Model+colour beats brand+colour, including explicit zero; inactive never wins.
+    repo.upsert_special_colour_surcharge(db, "JAECOO", "RULE", 150, colour_tier="special")
+    exact = repo.upsert_special_colour_surcharge(db, "JAECOO", "RULE", 0, model_name=original.model_name, colour_tier="special")
+    db.commit()
+    expected = repo.resolve_colour_surcharge_for_sku(db, original, repo.resolve_effective_colour_tier(original))
+    assert repo.resolve_colour_surcharges_for_skus(db, [original])[original.material_sku_id] == expected
+    exact.is_active = False
+    for rule in repo.list_colour_surcharges(db):
+        rule.surcharge_eur = 450
+    db.commit()
+    assert repo.resolve_colour_surcharges_for_skus(db, [original])[original.material_sku_id] == repo.resolve_colour_surcharge_for_sku(
+        db, original, repo.resolve_effective_colour_tier(original))
+    if tier == "special":
+        assert repo.resolve_colour_surcharges_for_skus(db, [original])[original.material_sku_id]["amount"] == 150
+    elif tier == "dual":
+        assert repo.resolve_colour_surcharges_for_skus(db, [original])[original.material_sku_id]["amount"] == 450
+
+
+def test_preloaded_colour_rules_keep_same_code_in_different_baselines_distinct(db):
+    first = sku(db, "SAME", "single")
+    baseline = repo.create_baseline_version(db, "next", None, "test", "test")
+    db.flush()
+    db.info["baseline"] = baseline.baseline_version_id
+    second = sku(db, "SAME", "dual")
+    db.commit()
+    pricing = repo.resolve_colour_surcharges_for_skus(db, [first, second])
+    assert len(pricing) == 2
+    assert pricing[first.material_sku_id]["amount"] == 0
+    assert pricing[second.material_sku_id]["amount"] == 300
+
+
+@pytest.mark.parametrize("codes", [None, [], ["S"]])
+def test_preloaded_periods_match_date_resolution_and_read_latest(db, codes):
+    original = sku(db, "S", "single")
+    fob(db, "S", 1500, base=1500)
+    for start, end, base in [(1, 10, 1000), (15, 20, 0), (25, 31, 1200)]:
+        db.add(models.CountryTemplateFobPeriod(country_code="CH", bom_template=original.bom_template,
+            valid_from=date(2026, 10, start), valid_to=date(2026, 10, end), base_fob_eur=base,
+            status="active", allowed_colour_codes=codes))
+    db.commit()
+    periods = repo.list_country_template_fob_periods(db, "CH")
+    pricing = repo.resolve_colour_surcharges_for_skus(db, [original])[original.material_sku_id]
+    for day in (1, 10, 11, 15, 21, 25, 31):
+        when = date(2026, 10, day)
+        assert service.resolve_date_effective_fob(db, "CH", original, when, periods=periods, colour_pricing=pricing) == service.resolve_date_effective_fob(db, "CH", original, when)
+    first = service.build_matrix(db, "CH", 2026, selection_date=date(2026, 10, 1))
+    periods[0].base_fob_eur = 1400
+    db.commit()
+    second = service.build_matrix(db, "CH", 2026, selection_date=date(2026, 10, 1))
+    if codes == []:
+        assert second["rows"][0]["fobEur"] is None
+    else:
+        assert first["rows"][0]["fobEur"] != second["rows"][0]["fobEur"]
+
+
+def test_preloaded_overlapping_periods_preserve_conflict_and_country_scope(db):
+    original = sku(db, "S", "single")
+    for country in ("CH", "SE"):
+        for start in (1, 10):
+            db.add(models.CountryTemplateFobPeriod(country_code=country, bom_template=original.bom_template,
+                valid_from=date(2026, 10, start), valid_to=None, base_fob_eur=1200, status="active"))
+    db.commit()
+    periods = repo.list_country_template_fob_periods(db, "CH")
+    assert len(periods) == 2 and {row.country_code for row in periods} == {"CH"}
+    when = date(2026, 10, 15)
+    expected = service.resolve_date_effective_fob(db, "CH", original, when)
+    assert "Overlapping" in expected[1]["reason"]
+    assert service.resolve_date_effective_fob(db, "CH", original, when, periods=periods) == expected
+
+
 def release_period(db, codes, start=date(2026, 10, 1), end=date(2026, 10, 31), country="CH", period=None):
     row = repo.save_country_template_fob_period(
         db, country_code=country, bom_template="T**001", valid_from=start, valid_to=end,

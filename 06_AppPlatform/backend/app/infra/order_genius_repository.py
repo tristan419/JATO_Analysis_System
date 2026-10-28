@@ -1119,15 +1119,15 @@ def save_default_colour_scope(session: Session, country_code: str, bom_template:
 def list_country_template_fob_periods(
     session: Session,
     country_code: str,
-    bom_template: str,
+    bom_template: str | None = None,
 ) -> list[CountryTemplateFobPeriod]:
     return list(
         session.execute(
             select(CountryTemplateFobPeriod)
             .where(
                 CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
-                CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
                 CountryTemplateFobPeriod.status == "active",
+                *([CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper()] if bom_template is not None else []),
             )
             .order_by(CountryTemplateFobPeriod.valid_from)
         ).scalars().all()
@@ -1155,8 +1155,13 @@ def resolve_country_template_fob_period(
     country_code: str,
     bom_template: str,
     target_date: date,
+    *,
+    periods: list[CountryTemplateFobPeriod] | None = None,
 ) -> CountryTemplateFobPeriod | None:
-    rows = list(
+    rows = [row for row in periods
+            if row.country_code == clean_text(country_code).upper()
+            and row.bom_template == clean_text(bom_template).upper() and row.status == "active"
+            and row.valid_from <= target_date and (row.valid_to is None or row.valid_to >= target_date)] if periods is not None else list(
         session.execute(
             select(CountryTemplateFobPeriod).where(
                 CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
@@ -1829,12 +1834,13 @@ def list_bom_with_fob(
     allowed_countries: set[str] | None = None,
 ) -> tuple[list[dict], list[str]] | tuple[list[dict], list[str], list[dict[str, object]]]:
     """Return SKUs with their FOB per country, grouped for BOM admin display."""
-    all_countries = list_active_fob_country_codes(session)
+    active_countries = list_active_fob_country_codes(session)
+    all_countries = active_countries
     if allowed_countries is not None:
         all_countries = [country for country in all_countries if country in allowed_countries]
     import re
     terms = re.split(r"[\s,，;；]+", search or "")
-    requested_countries = {term.upper() for term in terms if term.upper() in set(list_active_fob_country_codes(session))}
+    requested_countries = {term.upper() for term in terms if term.upper() in set(active_countries)}
     if country_code:
         requested_countries.add(country_code.upper())
     remaining_search = " ".join(term for term in terms if term.upper() not in requested_countries)
@@ -1956,6 +1962,7 @@ def list_bom_with_fob(
         s.bom_template: (s.interior_color_name, s.interior_colour_code, s.interior_package)
         for s in skus if s.bom_template and s.interior_color_name
     }
+    colour_pricing = resolve_colour_surcharges_for_skus(session, skus)
     payloads: list[dict] = []
     for s in skus:
         display_colour_name, display_colour_hex = resolve_colour_display_values(
@@ -1976,7 +1983,7 @@ def list_bom_with_fob(
             "storedColourHex": s.colour_hex,
             "colourCodeConfirmed": s.colour_code_confirmed,
             "colourTier": resolve_effective_colour_tier(s),
-            "colourPricing": resolve_colour_surcharge_for_sku(session, s, resolve_effective_colour_tier(s)),
+            "colourPricing": colour_pricing[s.material_sku_id],
             "bomTemplate": s.bom_template,
             "interiorColorName": s.interior_color_name or interior_by_template.get(s.bom_template, (None, None, None))[0],
             "interiorColourCode": s.interior_colour_code or interior_by_template.get(s.bom_template, (None, None, None))[1],
@@ -3782,8 +3789,11 @@ def list_country_payment_terms(
 
 
 def get_brand_colour_surcharge(
-    session: Session, brand: str, colour_type: str
+    session: Session, brand: str, colour_type: str,
+    *, rules: list[BrandColourSurchargeRule] | None = None,
 ) -> BrandColourSurchargeRule | None:
+    if rules is not None:
+        return next((row for row in rules if row.brand == brand and row.colour_type == colour_type and row.is_active), None)
     stmt = select(BrandColourSurchargeRule).where(
         BrandColourSurchargeRule.brand == brand,
         BrandColourSurchargeRule.colour_type == colour_type,
@@ -3858,6 +3868,7 @@ def get_special_colour_surcharge_for_sku(
     session: Session,
     sku: MaterialSkuMaster,
     colour_tier: str = "special",
+    *, rules: list[SpecialColourSurchargeRule] | None = None,
 ) -> SpecialColourSurchargeRule | None:
     """Return the most specific override for one SKU and saved BOM tier."""
     normalized_brand = resolve_material_brand(
@@ -3874,6 +3885,12 @@ def get_special_colour_surcharge_for_sku(
         return None
     if not normalized_brand or not normalized_code:
         return None
+
+    if rules is not None:
+        matching = [row for row in rules if row.is_active and row.brand == normalized_brand
+                    and row.colour_code == normalized_code and row.colour_tier == normalized_tier]
+        exact = next((row for row in matching if row.model_name == normalized_model), None)
+        return exact if exact is not None else next((row for row in matching if row.model_name is None), None)
 
     exact = session.execute(
         select(SpecialColourSurchargeRule).where(
@@ -3955,6 +3972,9 @@ def resolve_colour_surcharge_for_sku(
     session: Session,
     sku: MaterialSkuMaster,
     colour_tier: str | None,
+    *,
+    brand_rules: list[BrandColourSurchargeRule] | None = None,
+    special_rules: list[SpecialColourSurchargeRule] | None = None,
 ) -> dict[str, object]:
     """Return the surcharge amount and whether it is explicitly configured."""
     normalized_tier = clean_text(colour_tier).lower()
@@ -3963,9 +3983,7 @@ def resolve_colour_surcharge_for_sku(
     if normalized_tier not in {"dual", "special"}:
         return {"status": "missing_tier", "amount": None, "source": None}
 
-    special_rule = get_special_colour_surcharge_for_sku(
-        session, sku, normalized_tier
-    )
+    special_rule = get_special_colour_surcharge_for_sku(session, sku, normalized_tier, rules=special_rules)
     special_amount = getattr(special_rule, "surcharge_eur", None)
     if special_amount is not None:
         amount = float(special_amount)
@@ -3984,6 +4002,7 @@ def resolve_colour_surcharge_for_sku(
         session,
         brand,
         normalized_tier,
+        rules=brand_rules,
     )
     brand_amount = getattr(rule, "surcharge_eur", None)
     if brand_amount is None:
@@ -3994,6 +4013,17 @@ def resolve_colour_surcharge_for_sku(
         "amount": amount,
         "source": "brand_tier",
     }
+
+
+def resolve_colour_surcharges_for_skus(session: Session, skus: list[MaterialSkuMaster]) -> dict[UUID, dict[str, object]]:
+    """Read rules once for this list operation; reuse the single-SKU precedence."""
+    if not skus:
+        return {}
+    brand_rules = list_colour_surcharges(session)
+    special_rules = list_special_colour_surcharges(session)
+    return {sku.material_sku_id: resolve_colour_surcharge_for_sku(
+        session, sku, resolve_effective_colour_tier(sku), brand_rules=brand_rules, special_rules=special_rules,
+    ) for sku in skus}
 
 
 def _positive_float(value: object) -> float | None:

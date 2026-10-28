@@ -95,6 +95,50 @@ async function openOctober() {
 }
 
 describe("quantity save → PI readiness", () => {
+  it("loads the confirmed country scope once, without speculative matrix/options requests", async () => {
+    const countries = deferred<Awaited<ReturnType<typeof api.getOrderGeniusCountries>>>();
+    vi.mocked(api.getOrderGeniusCountries).mockReturnValue(countries.promise);
+    render(<OrderGeniusPage />);
+    expect(api.getOrderGeniusMatrixBatch).not.toHaveBeenCalled();
+    expect(api.getOrderGeniusOptions).not.toHaveBeenCalled();
+    expect(api.getVehicleAllocationOrderMatrixPlan).not.toHaveBeenCalled();
+    await act(async () => countries.resolve({ items: [{ countryCode: "CH", countryName: "Switzerland", paymentTermCode: "TT", paymentMethod: "TT", lcDays: null }] }));
+    await waitFor(() => expect(api.getOrderGeniusMatrixBatch).toHaveBeenCalledTimes(1));
+    expect(api.getOrderGeniusOptions).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.getOrderGeniusMatrixBatch).mock.calls[0][0].countries).toEqual(["CH"]);
+  });
+
+  it("requests PI batches while the allocation plan is pending, but keeps creation unavailable", async () => {
+    const allocation = deferred<VehicleAllocationPlan>();
+    vi.mocked(api.getVehicleAllocationOrderMatrixPlan).mockReturnValue(allocation.promise);
+    render(<OrderGeniusPage />);
+    await waitFor(() => expect(api.getOrderGeniusMatrixBatch).toHaveBeenCalledTimes(1));
+    const month = screen.getAllByRole("combobox").find((element) => element.textContent?.includes("All months"));
+    if (!month) throw new Error("Missing month selector");
+    fireEvent.change(month, { target: { value: "10" } });
+    await waitFor(() => expect(api.getVehicleAllocationOrderMatrixPlan).toHaveBeenCalledTimes(1));
+    expect(api.getVehicleAllocationPis).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/PI ready/)).toBeNull();
+    await act(async () => allocation.resolve(plan(0)));
+    await waitFor(() => expect(screen.getByText("PI ready · 0 units available")).toBeTruthy());
+  });
+
+  it("ends initial loading for an empty country scope without fetching a fallback country", async () => {
+    vi.mocked(api.getOrderGeniusCountries).mockResolvedValue({ items: [] });
+    render(<OrderGeniusPage />);
+    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    expect(api.getOrderGeniusMatrixBatch).not.toHaveBeenCalled();
+    expect(api.getOrderGeniusOptions).not.toHaveBeenCalled();
+  });
+
+  it("shows a country loading failure without starting dependent requests", async () => {
+    vi.mocked(api.getOrderGeniusCountries).mockRejectedValue(new Error("offline"));
+    render(<OrderGeniusPage />);
+    await screen.findByText("Failed to load countries");
+    expect(screen.queryByText("Loading...")).toBeNull();
+    expect(api.getOrderGeniusMatrixBatch).not.toHaveBeenCalled();
+  });
+
   it.each([401, 403])("offers a new-tab re-login immediately after %s and preserves the failed quantity for manual retry", async (status) => {
     localStorage.setItem("jato_auth_token", "failed-session");
     await openOctober();

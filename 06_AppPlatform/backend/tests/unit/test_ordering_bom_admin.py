@@ -310,12 +310,12 @@ def test_special_colour_rule_precedes_brand_special_default(monkeypatch) -> None
     )
     special_rule = SimpleNamespace(surcharge_eur=200)
     brand_rule = SimpleNamespace(surcharge_eur=300)
-    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_: special_rule)
-    monkeypatch.setattr(repo, "get_brand_colour_surcharge", lambda *_: brand_rule)
+    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_, **__: special_rule)
+    monkeypatch.setattr(repo, "get_brand_colour_surcharge", lambda *_, **__: brand_rule)
 
     assert repo.resolve_colour_surcharge_for_sku(_FakeSession(), sku, "special")["amount"] == 200
 
-    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_: None)
+    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_, **__: None)
     assert repo.resolve_colour_surcharge_for_sku(_FakeSession(), sku, "special")["amount"] == 300
 
 
@@ -363,8 +363,8 @@ def test_missing_tier_and_missing_rule_never_become_zero(monkeypatch) -> None:
         exterior_color_type=None,
     )
     assert repo.resolve_colour_surcharge_for_sku(_FakeSession(), sku, None)["status"] == "missing_tier"
-    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_: None)
-    monkeypatch.setattr(repo, "get_brand_colour_surcharge", lambda *_: None)
+    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_, **__: None)
+    monkeypatch.setattr(repo, "get_brand_colour_surcharge", lambda *_, **__: None)
     assert repo.resolve_colour_surcharge_for_sku(_FakeSession(), sku, "dual")["status"] == "missing_rule"
 
 
@@ -393,14 +393,14 @@ def test_colour_override_is_bound_to_the_requested_tier(monkeypatch) -> None:
     monkeypatch.setattr(
         repo,
         "get_special_colour_surcharge_for_sku",
-        lambda _session, _sku, tier="special": (
+        lambda _session, _sku, tier="special", **_kwargs: (
             dual_rule if tier == "dual" else special_rule
         ),
     )
     monkeypatch.setattr(
         repo,
         "get_brand_colour_surcharge",
-        lambda _session, _brand, tier: defaults[tier],
+        lambda _session, _brand, tier, **_kwargs: defaults[tier],
     )
 
     assert repo.resolve_colour_surcharge_for_sku(_FakeSession(), sku, "special")["amount"] == 300
@@ -609,6 +609,7 @@ def test_effective_colour_tier_requires_explicit_saved_value() -> None:
 
 def _legacy_jaecoo_sku() -> SimpleNamespace:
     return SimpleNamespace(
+        material_sku_id=uuid4(),
         material_code="T7000Z5**MY0026",
         bom_template="T7000Z5**MY0026",
         brand="JEACOO",

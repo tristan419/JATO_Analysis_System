@@ -495,6 +495,9 @@ def resolve_date_effective_fob(
     selection_date: date | None,
     allow_historical_backfill: bool = False,
     default_colour_scopes: dict[str, list[str] | None] | None = None,
+    *,
+    periods: list[CountryTemplateFobPeriod] | None = None,
+    colour_pricing: dict | None = None,
 ) -> tuple[float | None, dict | None, dict | None]:
     """Resolve one date using template lifecycle, country base and saved tier."""
     if selection_date is None or not sku.bom_template:
@@ -529,6 +532,7 @@ def resolve_date_effective_fob(
             country_code,
             sku.bom_template,
             selection_date,
+            periods=periods,
         )
     except ValueError as exc:
         conflict = {
@@ -540,11 +544,10 @@ def resolve_date_effective_fob(
         }
         return None, conflict, {"status": "conflict", "selectionDate": selection_date.isoformat()}
     if period is None:
-        if not repo.has_country_template_fob_periods(
-            session,
-            country_code,
-            sku.bom_template,
-        ):
+        uses_periods = bool(periods) if periods is not None else repo.has_country_template_fob_periods(
+            session, country_code, sku.bom_template,
+        )
+        if not uses_periods:
             if not repo.is_default_colour_released(session, country_code, sku, default_colour_scopes):
                 return None, {"materialCode": sku.material_code, "countryCode": country_code,
                     "status": "conflict", "reason": "Colour is not released in the country default / 全局默认未释放此颜色",
@@ -581,7 +584,7 @@ def resolve_date_effective_fob(
         }, {**period_payload, "status": "colour_not_released"}
 
     tier = repo.resolve_effective_colour_tier(sku)
-    surcharge = repo.resolve_colour_surcharge_for_sku(session, sku, tier)
+    surcharge = colour_pricing if colour_pricing is not None else repo.resolve_colour_surcharge_for_sku(session, sku, tier)
     amount = surcharge.get("amount")
     if amount is None:
         reason = "Missing saved colour tier" if surcharge.get("status") == "missing_tier" else "Missing colour surcharge rule"
@@ -687,6 +690,8 @@ def build_material_timeline(
     today = today or date.today()
     skus = repo.list_all_material_skus_for_admin(session, allowed_brands=allowed_brands, limit=None)
     by_code = {sku.material_code: sku for sku in skus if sku.bom_template}
+    colour_pricing = repo.resolve_colour_surcharges_for_skus(session, list(by_code.values()))
+    default_scopes = repo.list_default_colour_scopes(session, country_code)
     fobs, conflicts = repo.list_fobs_for_country_material_codes(
         session, country_code, list(by_code), include_conflicts=True,
     )
@@ -805,7 +810,7 @@ def build_material_timeline(
                 session, country_code, sku, reference.year, reference.month,
                 default_fob=fobs.get(sku.material_code), periods=schedules.get(template, []),
                 uses_periods=bool(schedules.get(template)),
-                colour_pricing=repo.resolve_colour_surcharge_for_sku(session, sku, repo.resolve_effective_colour_tier(sku)),
+                colour_pricing=colour_pricing[sku.material_sku_id], default_colour_scopes=default_scopes,
             )
             if quote["isEditable"] and any(span["from"] <= reference.isoformat() <= span["to"] for span in quote["availableRanges"]):
                 ready += 1
@@ -844,9 +849,10 @@ def _historical_surcharge_review(
     sku: MaterialSkuMaster,
     fob: CountrySkuFobResolved | None,
     fob_period: dict | None,
+    colour_pricing: dict | None = None,
 ) -> dict:
     tier = repo.resolve_effective_colour_tier(sku)
-    resolved = repo.resolve_colour_surcharge_for_sku(session, sku, tier)
+    resolved = colour_pricing if colour_pricing is not None else repo.resolve_colour_surcharge_for_sku(session, sku, tier)
     current_amount = resolved.get("amount")
     saved_amount = float(fob.colour_surcharge_eur) if fob and fob.colour_surcharge_eur is not None else None
     if tier == "single" and saved_amount is None:
@@ -903,6 +909,10 @@ def _build_matrix_for_country(
     conflict_codes = {str(item["materialCode"]) for item in fob_conflicts}
 
     default_scopes = repo.list_default_colour_scopes(session, country_code)
+    colour_pricing_by_sku = repo.resolve_colour_surcharges_for_skus(session, active_skus)
+    periods_by_template: dict[str, list[CountryTemplateFobPeriod]] = {}
+    for period in repo.list_country_template_fob_periods(session, country_code):
+        periods_by_template.setdefault(period.bom_template, []).append(period)
 
     # Keep unresolved groups visible with no price so normal rows remain usable.
     dated_fob_by_material = {
@@ -912,6 +922,8 @@ def _build_matrix_for_country(
             sku,
             selection_date,
             default_colour_scopes=default_scopes,
+            periods=periods_by_template.get(sku.bom_template, []),
+            colour_pricing=colour_pricing_by_sku[sku.material_sku_id],
             allow_historical_backfill=(
                 include_historical
                 and repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
@@ -924,8 +936,8 @@ def _build_matrix_for_country(
     for sku in active_skus:
         if sku.bom_template not in schedules:
             schedules[sku.bom_template] = (
-                repo.list_country_template_fob_periods(session, country_code, sku.bom_template),
-                repo.has_country_template_fob_periods(session, country_code, sku.bom_template),
+                periods_by_template.get(sku.bom_template, []),
+                bool(periods_by_template.get(sku.bom_template)),
             )
     # Load saved records before hiding unpriced materials; history is not a quote.
     all_quantities = repo.list_quantities_for_country_year(session, country_code, year)
@@ -961,6 +973,7 @@ def _build_matrix_for_country(
         historical_skus = {code: sku for code, sku in historical_skus.items()
                            if str(sku.brand or "").strip().upper() in allowed_brands}
         historical_codes = list(historical_skus)
+    colour_pricing_by_sku.update(repo.resolve_colour_surcharges_for_skus(session, list(historical_skus.values())))
     matrix_interior_by_template = _interior_by_template(
         active_skus + list(historical_skus.values())
     )
@@ -993,7 +1006,7 @@ def _build_matrix_for_country(
         )
         row_months: dict[str, dict] = {}
         row_ttl = 0
-        colour_pricing = repo.resolve_colour_surcharge_for_sku(session, sku, repo.resolve_effective_colour_tier(sku))
+        colour_pricing = colour_pricing_by_sku[sku.material_sku_id]
         for month in range(1, 13):
             cell = qty_map.get((sku.material_code, month))
             qty = cell.quantity if cell else 0
@@ -1018,7 +1031,7 @@ def _build_matrix_for_country(
             repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
         )
         historical_surcharge_review = (
-            _historical_surcharge_review(session, sku, fob, fob_period)
+            _historical_surcharge_review(session, sku, fob, fob_period, colour_pricing)
             if historical_backfill
             else None
         )
@@ -1084,6 +1097,8 @@ def _build_matrix_for_country(
         )
         dated_fob, dated_conflict, fob_period = resolve_date_effective_fob(
             session, country_code, hist_sku, selection_date,
+            periods=periods_by_template.get(hist_sku.bom_template, []),
+            colour_pricing=colour_pricing_by_sku[hist_sku.material_sku_id],
         )
         if fob_period is not None:
             conflict = dated_conflict
