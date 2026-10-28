@@ -494,7 +494,7 @@ def test_line_payload_uses_order_date_period_and_saved_colour_tier(monkeypatch) 
     )
     monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
     monkeypatch.setattr(order_repo, "get_fob_for_country_sku", lambda *_args: SimpleNamespace(final_fob_eur=19000))
-    monkeypatch.setattr(order_repo, "resolve_country_template_fob_period", lambda *_args: period)
+    monkeypatch.setattr(order_repo, "resolve_country_template_fob_period", lambda *_args, **_kwargs: period)
     monkeypatch.setattr(order_repo, "resolve_effective_colour_tier", lambda _sku: "dual")
     monkeypatch.setattr(
         order_repo,

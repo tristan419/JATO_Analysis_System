@@ -696,7 +696,7 @@ export function OrderGeniusPage() {
   const [fobCountryCodes, setFobCountryCodes] = useState<string[] | null>(null);
   const [bomAdminCopyTargetCountry, setBomAdminCopyTargetCountry] = useState<string | null>(null);
   const [bomIssueSearch, setBomIssueSearch] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [authFailureNotice, setAuthFailureNotice] = useState<{
     message: string;
@@ -821,9 +821,11 @@ export function OrderGeniusPage() {
   const [piBatchRefreshKey, setPiBatchRefreshKey] = useState(0);
   const matrixRequestIdRef = useRef(0);
   const countryInitDone = useRef(false);
+  const countryScopeReady = countryInitDone.current;
   useEffect(() => {
     matrixRequestIdRef.current += 1;
     countryInitDone.current = false;
+    setLoading(true);
     setMatrices({});
     setOptions(null);
     setQuantityDrafts({});
@@ -879,8 +881,9 @@ export function OrderGeniusPage() {
       .then((res) => {
         if (!active) return;
         setCountries(res.items);
-        if (res.items.length > 0 && !countryInitDone.current) {
+        if (!countryInitDone.current) {
           countryInitDone.current = true;
+          if (!res.items.length) { setSelectedCountries([]); return; }
           const validCodes = new Set(res.items.map((c) => c.countryCode));
           const resolved = (isAdmin ? allCountriesISO : userCountries).filter((c) => validCodes.has(c));
           if (resolved.length === 0) {
@@ -891,7 +894,7 @@ export function OrderGeniusPage() {
           }
         }
       })
-      .catch(() => { if (active) setError("Failed to load countries"); });
+      .catch(() => { if (active) { setError("Failed to load countries"); setLoading(false); } });
     return () => { active = false; };
   }, [allCountriesISO, authorizationKey]);
 
@@ -910,7 +913,7 @@ export function OrderGeniusPage() {
 
   // ── Load options (use primary country for filter dropdowns) ────────
   useEffect(() => {
-    if (!primaryCountry) return;
+    if (!countryScopeReady || !countryInitDone.current || !selectedCountries.length) return;
     let active = true;
     api
       .getOrderGeniusOptions({
@@ -924,10 +927,11 @@ export function OrderGeniusPage() {
       .then((next) => { if (active) setOptions(next); })
       .catch((e: unknown) => { if (active) setError(getErrorMessage(e)); });
     return () => { active = false; };
-  }, [authorizationKey, primaryCountry, brandFilter, modelFilter, powertrainFilter, versionFilter, colourFilter]);
+  }, [authorizationKey, countryScopeReady, primaryCountry, brandFilter, modelFilter, powertrainFilter, versionFilter, colourFilter]);
 
   // ── Load matrices for all selected countries ────────────────────────
   const loadMatrices = useCallback((): Promise<boolean> => {
+    if (!countryScopeReady || !countryInitDone.current) return Promise.resolve(false);
     const requestId = matrixRequestIdRef.current + 1;
     matrixRequestIdRef.current = requestId;
     if (selectedCountries.length === 0) {
@@ -977,7 +981,7 @@ export function OrderGeniusPage() {
         }
       });
   }, [
-    authorizationKey, selectedCountries, selectedYear, brandFilter, modelFilter,
+    authorizationKey, countryScopeReady, selectedCountries, selectedYear, brandFilter, modelFilter,
     powertrainFilter, versionFilter, colourFilter, debouncedMaterialSearch, selectionDate, includeHistorical,
   ]);
 
@@ -1583,7 +1587,7 @@ export function OrderGeniusPage() {
       setPiPlanLoading(false);
       return;
     }
-    if (quantitySaving) return;
+    if (quantitySaving || loading || !countryScopeReady || !countryInitDone.current) return;
     let cancelled = false;
     setPiPlanLoading(true);
     setPiPlanError("");
@@ -1605,11 +1609,13 @@ export function OrderGeniusPage() {
       return batches;
     };
 
-    void Promise.all(selectedCountries.map(async (countryCode) => ({
-      countryCode,
-      plan: await api.getVehicleAllocationOrderMatrixPlan(countryCode, selectedYear, selectedMonth),
-      batches: await loadBatchesForCountry(countryCode),
-    })))
+    void Promise.all(selectedCountries.map(async (countryCode) => {
+      const [plan, batches] = await Promise.all([
+        api.getVehicleAllocationOrderMatrixPlan(countryCode, selectedYear, selectedMonth),
+        loadBatchesForCountry(countryCode),
+      ]);
+      return { countryCode, plan, batches };
+    }))
       .then((results) => {
         if (cancelled) return;
         const plans: Record<string, VehicleAllocationPlan> = {};
@@ -1636,7 +1642,7 @@ export function OrderGeniusPage() {
     return () => {
       cancelled = true;
     };
-  }, [piBatchRefreshKey, selectedCountries, selectedMonth, selectedYear, quantitySaving]);
+  }, [countryScopeReady, loading, piBatchRefreshKey, selectedCountries, selectedMonth, selectedYear, quantitySaving]);
 
   const piReady = selectedMonth != null && !loading && !error && !quantitySaving && !quantityError && !piPlanLoading && !piPlanError
     && selectedCountries.length > 0 && selectedCountries.every((country) => {
