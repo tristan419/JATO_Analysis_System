@@ -389,7 +389,7 @@ describe("vehicle detail search and view", () => {
   it("opens the same selected editor from the deck status tab", async () => {
     await selectPi();
     fireEvent.click(screen.getByLabelText("Select filtered vehicles"));
-    fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+    fireEvent.click(screen.getByText("Status", { selector: "button > span" }));
     fireEvent.click(screen.getByRole("tab", { name: /Update Status/i }));
     expect(screen.getByText("150 selected vehicles / 勾选车辆")).toBeTruthy();
     expect(screen.getByLabelText("Note / 备注")).toBeTruthy();
@@ -511,7 +511,7 @@ describe("COC library lookup and downloads", () => {
     const download = vi.spyOn(api, "piCocDownload").mockResolvedValue(new Blob());
     await selectPi();
     fireEvent.click(screen.getByText("COC library / 在线库", { selector: "button" }));
-    const tools = within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" }));
+    const tools = within(screen.getByRole("complementary", { name: "Vehicle status and settings" }));
     const table = within(screen.getByRole("table", { name: "Vehicle details" }));
     fireEvent.click(tools.getByRole("button", { name: "Search library / 在库里查找" }));
     await tools.findByText(/COC PDF 1\/150 · Awaiting/);
@@ -534,7 +534,7 @@ describe("COC library lookup and downloads", () => {
     fireEvent.click(screen.getByRole("button", { name: "COC library / 在线库" }));
     fireEvent.click(screen.getByRole("button", { name: "Search library / 在库里查找" }));
     await screen.findByText(/COC PDF 1\/150 · Awaiting/);
-    fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+    fireEvent.click(screen.getByText("Status", { selector: "button > span" }));
     expect(screen.queryByRole("button", { name: "Search library / 在库里查找" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "PDF ↓" }));
     await screen.findByText(/下载未完成/);
@@ -542,9 +542,14 @@ describe("COC library lookup and downloads", () => {
     expect(screen.queryByText(/500 Internal/)).toBeNull();
   });
 });
-function openView() {
-  fireEvent.click(screen.getByText("PI Tools", { selector: "button > span" }));
-  fireEvent.click(within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" })).getByRole("tab", { name: /View/ }));
+function openToolTab(name: RegExp): void {
+  if (!screen.queryByRole("complementary", { name: "Vehicle status and settings" })) {
+    fireEvent.click(screen.getByText("Status", { selector: "button > span" }));
+  }
+  fireEvent.click(within(screen.getByRole("complementary", { name: "Vehicle status and settings" })).getByRole("tab", { name }));
+}
+function openView(): void {
+  openToolTab(/View/);
 }
 
 function vinPreview(replacing = false): VehicleImportPreview {
@@ -565,7 +570,7 @@ function vinPreview(replacing = false): VehicleImportPreview {
 }
 
 async function uploadVinFile() {
-  fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+  openToolTab(/Import VINs/);
   const file = new File(["mock workbook"], "production.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   fireEvent.change(screen.getByLabelText("BOM and VIN XLSX"), { target: { files: [file] } });
   return file;
@@ -622,7 +627,7 @@ describe("PI-scoped BOM + VIN import", () => {
     vi.spyOn(window, "confirm").mockReturnValue(false);
     await selectPi();
     fireEvent.click(screen.getByRole("checkbox", { name: "Select CAR-1" }));
-    fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+    openToolTab(/Import VINs/);
     fireEvent.click(screen.getByRole("button", { name: /Clear selected VINs/ }));
     await screen.findByText("Clear VIN preview / 清 VIN 预览");
     expect(preview).toHaveBeenCalledWith({ piCode: PI, removeVins: true,
@@ -636,7 +641,7 @@ describe("PI-scoped BOM + VIN import", () => {
     const apply = vi.spyOn(api, "applyVehicleAllocationImport").mockResolvedValue({ createdUnits: 0, updatedUnits: 1, removedUnits: 1, warnings: [] });
     vi.spyOn(window, "confirm").mockReturnValue(true);
     await selectPi();
-    fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+    openToolTab(/Import VINs/);
     fireEvent.click(screen.getByLabelText(/Remove these VINs from file/));
     const file = new File(["mock workbook"], "original.xlsx");
     fireEvent.change(screen.getByLabelText("BOM and VIN XLSX"), { target: { files: [file] } });
@@ -744,7 +749,7 @@ describe("PI allocation layout and scope", () => {
     expect(screen.queryByRole("button", { name: /^Generate$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /Add Line/i })).toBeNull();
     expect(screen.getByRole("link", { name: "Create PI in Order Genius" }).getAttribute("href")).toBe("/product/order-genius");
-    fireEvent.click(screen.getByRole("button", { name: /PI Tools/ }));
+    openToolTab(/Import VINs/);
     expect(screen.getByRole("button", { name: "Import File" }).hasAttribute("disabled")).toBe(false);
     expect(screen.getByLabelText(/Allow replacing existing VINs/).hasAttribute("checked")).toBe(false);
     expect(screen.getAllByRole("tab").length).toBe(3);
@@ -779,9 +784,31 @@ describe("PI allocation layout and scope", () => {
     await screen.findByText("150 units / 台");
   });
 
+  it("keeps columns inside Status without taking space from the main grid", async () => {
+    await selectPi();
+    const main = screen.getByRole("main");
+    expect(within(main).queryByRole("button", { name: "Columns / 列设置" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Columns / 显示列" })).toBeNull();
+    fireEvent.click(screen.getByLabelText("Select CAR-1"));
+    fireEvent.click(screen.getByText("Status", { selector: "button > span" }));
+    const drawer = screen.getByRole("complementary", { name: "Vehicle status and settings" });
+    expect(within(drawer).getByRole("tab", { name: /Update status/i }).getAttribute("aria-selected")).toBe("true");
+    openView();
+    expect(within(drawer).getByRole("group", { name: "Columns / 显示列" })).toBeTruthy();
+    expect(within(main).queryByRole("group", { name: "Columns / 显示列" })).toBeNull();
+    fireEvent.click(within(drawer).getByText("系统列"));
+    fireEvent.click(within(drawer).getByRole("checkbox", { name: "Engine ID / 发动机序号" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("group", { name: "Columns / 显示列" })).toBeNull();
+    expect(within(main).getByRole("columnheader", { name: "Engine ID / 发动机序号" })).toBeTruthy();
+    expect((screen.getByLabelText("Select CAR-1") as HTMLInputElement).checked).toBe(true);
+    openView();
+    expect((screen.getByRole("checkbox", { name: "Engine ID / 发动机序号" }) as HTMLInputElement).checked).toBe(true);
+  });
+
   it("uses one column list for headers, cells and restore defaults", async () => {
     await selectPi();
-    fireEvent.click(screen.getByRole("button", { name: "Columns / 列设置" }));
+    openView();
     fireEvent.click(screen.getByText("系统列"));
     const columns = within(screen.getByRole("group", { name: "Columns / 显示列" }));
     const table = screen.getByRole("table", { name: "Vehicle details" });
@@ -889,13 +916,13 @@ describe("unified Grid editing contract", () => {
     vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:export"; static revokeObjectURL = vi.fn(); });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     await selectPi();
-    fireEvent.click(screen.getByText("Columns / 列设置", { selector: "button" }));
+    openView();
     const columns = within(screen.getByRole("group", { name: "Columns / 显示列" }));
     fireEvent.click(columns.getByText("系统列"));
     fireEvent.click(columns.getByLabelText("Interior"));
     fireEvent.click(columns.getByLabelText("Note / 备注"));
     openView();
-    const tools = within(screen.getByRole("complementary", { name: "PI vehicle allocation tools" }));
+    const tools = within(screen.getByRole("complementary", { name: "Vehicle status and settings" }));
     expect(tools.queryByRole("button", { name: "Export PI" })).toBeNull();
     fireEvent.click(tools.getByRole("button", { name: "Export current view / 导出所见" }));
     await waitFor(() => expect(download).toHaveBeenCalled());

@@ -67,7 +67,7 @@ const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 const PI_TOOL_TABS: Array<DeckControlTabItem<PiToolTab>> = [
   { key: "import", label: "Import VINs", caption: "导入 VIN" },
   { key: "status", label: "Update status", caption: "更新状态" },
-  { key: "view", label: "View", caption: "筛选与列" },
+  { key: "view", label: "View", caption: "列设置与导出" },
 ];
 
 function display(value: string | number | null | undefined): string {
@@ -249,7 +249,6 @@ export function OrderGeniusVehicleAllocationPage() {
     return () => { observer.disconnect(); window.removeEventListener("resize", fitViewport); };
   }, []);
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<Set<VehicleColumnKey>>(new Set(DEFAULT_COLUMNS));
-  const [columnsOpen, setColumnsOpen] = useState(false);
   const [customColumns, setCustomColumns] = useState<VehicleCustomColumn[]>([]);
   const [columnsError, setColumnsError] = useState("");
   const [columnsRetry, setColumnsRetry] = useState(0);
@@ -276,7 +275,7 @@ export function OrderGeniusVehicleAllocationPage() {
     try { localStorage.setItem(columnPreference, JSON.stringify([...keys])); } catch { setNotice("当前浏览器未允许保存个人列布局"); }
   }
   const [toolDrawerOpen, setToolDrawerOpen] = useState(false);
-  const [activeToolTab, setActiveToolTab] = useState<PiToolTab>("import");
+  const [activeToolTab, setActiveToolTab] = useState<PiToolTab>("status");
   const toolBodyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const panelBody = toolBodyRef.current?.parentElement;
@@ -902,22 +901,22 @@ export function OrderGeniusVehicleAllocationPage() {
       <DeckFloatingDrawer
         open={toolDrawerOpen}
         onOpenChange={setToolDrawerOpen}
-        triggerPrimary="PI Tools"
-        triggerSecondaryOpen="Close tools"
-        triggerSecondaryClosed={checkedPiCodes.length ? `${workspaceVehicles.length} vehicles` : "Open tools"}
+        triggerPrimary="Status"
+        triggerSecondaryOpen="Close / 收起"
+        triggerSecondaryClosed={checkedPiCodes.length ? `${workspaceVehicles.length} vehicles` : "Open / 展开"}
         eyebrow="Order Genius"
-        ariaLabel="PI vehicle allocation tools"
+        ariaLabel="Vehicle status and settings"
         closeLabel="Close"
         className="vehicle-allocation-tool-drawer"
         panelClassName="vehicle-allocation-tool-panel"
-        title={activeToolTab === "status" && editorTargets.length ? editorTargets.length === 1 ? editorTargets[0].carCode : `Update ${editorTargets.length} selected vehicles` : "Vehicle allocation tools"}
+        title={activeToolTab === "status" && editorTargets.length ? editorTargets.length === 1 ? editorTargets[0].carCode : `Update ${editorTargets.length} selected vehicles` : "Status & settings / 状态与设置"}
         footer={activeToolTab === "status" ? <LoadingActionButton type="submit" form="vehicle-edit-form" loading={bulkSaving} disabled={!canEdit || scopeBusy || !editorTargets.length}>Save changes / 保存修改</LoadingActionButton> : undefined}
       >
         <DeckControlTabs
           tabs={PI_TOOL_TABS}
           activeKey={activeToolTab}
           onChange={openPiTool}
-          ariaLabel="PI vehicle allocation tools"
+          ariaLabel="Vehicle status and settings"
         />
         <div className="va-tool-tab-body" ref={toolBodyRef}>
           {activeToolTab === "import" ? (
@@ -989,6 +988,15 @@ export function OrderGeniusVehicleAllocationPage() {
           </> : null}
           {activeToolTab === "view" ? (
             <>
+              <VehicleColumnSettings columns={customColumns} visible={visibleColumnKeys}
+                targets={vinPasteScopeVehicles.filter((v) => selectedCarCodes.has(v.carCode))} busy={scopeBusy} error={columnsError}
+                onRetry={() => setColumnsRetry((n) => n + 1)} onVisible={saveVisibleColumns}
+                onCreate={async (label) => { const column = await api.createVehicleCustomColumn(label); setCustomColumns((previous) => [...previous, column]); saveVisibleColumns(new Set<VehicleColumnKey>([...visibleColumnKeys, `custom:${column.id}`])); }}
+                onDelete={async (id) => { await api.deleteVehicleCustomColumn(id); setCustomColumns((previous) => previous.filter((c) => c.id !== id)); const next = new Set(visibleColumnKeys); next.delete(`custom:${id}`); saveVisibleColumns(next); }}
+                onSave={async (id, value, targets) => {
+                  await api.updateVehicleCustomValues({ carCodes: targets.map((v) => v.carCode), rowVersions: Object.fromEntries(targets.map((v) => [v.carCode, v.rowVersion])), fields: { customValues: { [id]: value || null } } });
+                  await readWorkspace([...new Set([...checkedPiCodes, ...targets.map((v) => v.piCode)])], [...selectedCarCodes]);
+                }} />
               <p>Drag headers to move columns; drag header edges to resize. Filter and sort from each header. / 拖动表头移列，拖动边界调宽，在表头筛选及排序。</p>
               <section className="va-tool-card">
                 <label htmlFor="vin-batch-search">VIN batch search / VIN 批量搜索</label>
@@ -1009,12 +1017,11 @@ export function OrderGeniusVehicleAllocationPage() {
                 <p>Current filtered selected / 当前筛选已选 {currentSelectedCount}/{ordinaryCodes.size} · Global selected / 全局已选 {selectedCarCodes.size}/{vinPasteScopeVehicles.length} · Outside current filters / 筛选外已选 {selectedCarCodes.size - currentSelectedCount}</p>
               </section>
 
-              <button type="button" className="btn-secondary" onClick={() => { setColumnsOpen(true); setToolDrawerOpen(false); }}>Columns / 列设置</button>
-                <button type="button" className="btn-secondary" onClick={() => {
-                  setEditorTargets([]); setBatchVins([]); setVinBatchText("");
-                  setFilters((current) => ({ country: current.country, piCode: current.piCode }));
-                  saveVisibleColumns(new Set(DEFAULT_COLUMNS)); setGridResetKey((value) => value + 1);
-                }}>Reset columns & filters / 重置列与筛选</button>
+              <button type="button" className="btn-secondary" onClick={() => {
+                setEditorTargets([]); setBatchVins([]); setVinBatchText("");
+                setFilters((current) => ({ country: current.country, piCode: current.piCode }));
+                saveVisibleColumns(new Set(DEFAULT_COLUMNS)); setGridResetKey((value) => value + 1);
+              }}>Reset columns & filters / 重置列与筛选</button>
               <LoadingActionButton disabled={(!checkedPiCodes.length && !searchResults?.length) || scopeBusy} loading={exporting} loadingLabel="Exporting..." onClick={() => void exportCurrentView()} variant="secondary">Export current view / 导出所见</LoadingActionButton>
               <button type="button" onClick={() => { setAnalysisView("pivot"); setToolDrawerOpen(false); }}>Open pivot / 打开透视</button>
             </>
@@ -1239,16 +1246,6 @@ export function OrderGeniusVehicleAllocationPage() {
           ) : null}
 
           {piLoading ? <p role="status">Loading PI / 正在读取 PI…</p> : null}
-          <div className="va-column-entry"><button type="button" className="btn-secondary" aria-expanded={columnsOpen} onClick={() => setColumnsOpen(!columnsOpen)}>Columns / 列设置</button></div>
-          {columnsOpen && <VehicleColumnSettings columns={customColumns} visible={visibleColumnKeys}
-            targets={vinPasteScopeVehicles.filter((v) => selectedCarCodes.has(v.carCode))} busy={scopeBusy} error={columnsError}
-            onRetry={() => setColumnsRetry((n) => n + 1)} onVisible={saveVisibleColumns}
-            onCreate={async (label) => { const column = await api.createVehicleCustomColumn(label); setCustomColumns((previous) => [...previous, column]); saveVisibleColumns(new Set<VehicleColumnKey>([...visibleColumnKeys, `custom:${column.id}`])); }}
-            onDelete={async (id) => { await api.deleteVehicleCustomColumn(id); setCustomColumns((previous) => previous.filter((c) => c.id !== id)); const next = new Set(visibleColumnKeys); next.delete(`custom:${id}`); saveVisibleColumns(next); }}
-            onSave={async (id, value, targets) => {
-              await api.updateVehicleCustomValues({ carCodes: targets.map((v) => v.carCode), rowVersions: Object.fromEntries(targets.map((v) => [v.carCode, v.rowVersion])), fields: { customValues: { [id]: value || null } } });
-              await readWorkspace([...new Set([...checkedPiCodes, ...targets.map((v) => v.piCode)])], [...selectedCarCodes]);
-            }} />}
           {analysisView === "pivot" ? <VehicleAnalysisPivot vehicles={vinPasteScopeVehicles}
             statusLabels={statusLabels}
             filtered={vinPasteScopeVehicles.filter((v) => ordinaryCodes.has(v.carCode))} selected={selectedCarCodes} busy={scopeBusy || exporting}
@@ -1406,11 +1403,9 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-wide{grid-column:1/-1}
         .va-columns{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;border:1px solid #d8dee6;border-radius:8px;padding:12px}
         .va-columns label{display:flex;align-items:center;gap:6px;font-size:12px}
-        .va-column-entry{display:flex;justify-content:flex-end;margin:8px 0}
         .va-column-add,.va-custom-column{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
         .va-column-add input{flex:1;min-width:160px}
         .va-custom-column label{flex:1;min-width:140px}
-        .va-columns{max-height:45dvh;overflow:auto;flex:none}
         .va-columns p{margin:0;font-size:12px;color:#475467}
         .va-import-error{color:#b42318;background:#fff5f4;padding:10px;border-radius:6px;margin:8px 0;font-size:12px}
         .va-import-error a{display:inline-block;margin:8px}
