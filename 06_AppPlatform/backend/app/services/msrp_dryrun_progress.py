@@ -11,6 +11,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.services.msrp_source_issue_classifier import (
+    MSRP_SOURCE_ISSUE_FIELDS,
+    classify_msrp_source_issue,
+    effective_msrp_country_issue_maps,
+)
+
 DEFAULT_REPO_DIR = Path(__file__).resolve().parents[4]
 REPO_DIR = Path(os.environ.get("REPO_DIR", str(DEFAULT_REPO_DIR)))
 LOG_DIR = REPO_DIR / "03_Scripts" / "logs"
@@ -301,6 +307,20 @@ def _normalize_source(source: dict[str, Any], index: int, total: int) -> dict[st
         value = source.get(key)
         if value not in (None, ""):
             payload[key] = value
+    should_classify = bool(
+        payload.get("failureReason")
+        or str(payload.get("httpStatus") or "") == "403"
+        or (
+            payload.get("extractorError")
+            and payload["status"] in {"empty", "fail"}
+        )
+    )
+    if should_classify:
+        issue = classify_msrp_source_issue({**source, **payload})
+        for key in MSRP_SOURCE_ISSUE_FIELDS:
+            value = issue.get(key)
+            if value not in (None, ""):
+                payload[key] = value
     return payload
 
 
@@ -459,6 +479,14 @@ def _normalize_country_from_v3(
         _normalize_source(source, index, total)
         for index, source in enumerate(country.get("sources") or [], start=1)
     ]
+    failure_breakdown, strategy_recommendations = (
+        effective_msrp_country_issue_maps(
+            {
+                **country,
+                "sources": sources,
+            }
+        )
+    )
     if sources:
         pass_count, empty_count, fail_count, error_count = _source_counts(sources)
     else:
@@ -478,9 +506,16 @@ def _normalize_country_from_v3(
         "completed": country.get("status") != "missing",
         "passRate": pass_rate,
         "status": "missing" if country.get("status") == "missing" else _status_for_pass_rate(pass_rate),
-        "topFailureReason": country.get("topFailureReason"),
-        "failureBreakdown": country.get("failureBreakdown") or {},
-        "strategyRecommendations": country.get("strategyRecommendations") or {},
+        "topFailureReason": (
+            max(
+                failure_breakdown,
+                key=lambda reason: (failure_breakdown[reason], reason),
+            )
+            if failure_breakdown
+            else country.get("topFailureReason")
+        ),
+        "failureBreakdown": failure_breakdown,
+        "strategyRecommendations": strategy_recommendations,
         **_finance_summary_from_country(country, sources),
         "sources": sources,
     }
