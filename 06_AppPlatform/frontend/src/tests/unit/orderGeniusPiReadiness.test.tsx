@@ -145,7 +145,7 @@ describe("quantity save → PI readiness", () => {
     const fetch = vi.fn(async () => Response.json({ detail: status === 401 ? "Authentication required" : "Forbidden" }, { status }));
     vi.stubGlobal("fetch", fetch);
     const save = vi.spyOn(api, "updateQuantityCell");
-    fireEvent.click(screen.getByText("Save 15"));
+    await act(async () => { fireEvent.click(screen.getByText("Save 15")); });
     const login = await screen.findByRole("link", { name: "Sign in again" });
     expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
     expect(login.getAttribute("target")).toBe("_blank");
@@ -181,7 +181,7 @@ describe("quantity save → PI readiness", () => {
     localStorage.setItem("jato_auth_token", "failed-session");
     await openOctober();
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ detail: "Forbidden" }, { status: 403 })));
-    fireEvent.click(screen.getByText("Save 15"));
+    await act(async () => { fireEvent.click(screen.getByText("Save 15")); });
     await screen.findByRole("link", { name: "Sign in again" });
     if (result === false) authState.refreshUser.mockResolvedValue(false);
     else authState.refreshUser.mockRejectedValue(new Error("Offline"));
