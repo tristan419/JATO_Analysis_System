@@ -197,8 +197,9 @@ def test_streaming_smart_merge_never_reads_source_parquet_with_pandas(
 
 
 @pytest.mark.parametrize("decision", [None, "keep_active", "use_latest"])
+@pytest.mark.parametrize("ytd_column", ["YTD 2026 (Sep)", "YTD 2026(Sep)"])
 def test_smart_merge_advances_months_without_losing_old_history(
-    tmp_path: Path, decision: str | None,
+    tmp_path: Path, decision: str | None, ytd_column: str,
 ) -> None:
     active_path = tmp_path / "active.parquet"
     candidate_path = tmp_path / "candidate.parquet"
@@ -212,7 +213,7 @@ def test_smart_merge_advances_months_without_losing_old_history(
     pd.DataFrame([
         {"Country": "Finland", "Make": "BRAND", "Model": "MODEL",
          "Version name": "New", "2026 Aug": 999, "2026 Sep": 12,
-         "YTD 2026 (Sep)": 1011},
+         ytd_column: 1011},
     ]).to_parquet(candidate_path, index=False)
     original_hashes = (_sha256(active_path), _sha256(candidate_path))
 
@@ -228,13 +229,54 @@ def test_smart_merge_advances_months_without_losing_old_history(
     assert finland["2023 Jan"].sum() == 7
     assert finland["2026 Aug"].sum() == (999 if decision == "use_latest" else 10)
     assert finland["2026 Sep"].sum() == 12
-    assert finland["YTD 2026 (Sep)"].sum() == (1011 if decision == "use_latest" else 22)
+    assert finland[ytd_column].sum() == (1011 if decision == "use_latest" else 22)
     assert germany["2023 Jan"].sum() == 20
     assert germany["2026 Aug"].sum() == 30
     assert germany["2026 Sep"].fillna(0).sum() == 0
     policy = summary["historicalReclassificationPolicies"]["Finland"]
     assert policy["policy"] == (decision or "keep_active")
     assert policy["monthBoundaryCheck"] == "pass"
+    assert original_hashes == (_sha256(active_path), _sha256(candidate_path))
+    assert list(tmp_path.glob(".*.smart-merge*")) == []
+
+
+@pytest.mark.parametrize("decision", ["keep_active", "use_latest"])
+def test_same_month_country_does_not_block_another_country_advancing(
+    tmp_path: Path, decision: str,
+) -> None:
+    active_path, candidate_path, output_path = (
+        tmp_path / name for name in ["active.parquet", "candidate.parquet", "merged.parquet"]
+    )
+    pd.DataFrame([
+        {"Country": "Hungary", "Make": "BRAND", "Model": "MODEL",
+         "Version name": "Old", "2023 Jan": 7, "2026 Aug": 0, "2026 Sep": 0},
+        {"Country": "Poland", "Make": "OTHER", "Model": "MODEL",
+         "Version name": "Old", "2023 Jan": 20, "2026 Aug": 10, "2026 Sep": None},
+    ]).to_parquet(active_path, index=False)
+    pd.DataFrame([
+        {"Country": "Hungary", "Make": "BRAND", "Model": "MODEL",
+         "Version name": "New", "2026 Aug": 9, "2026 Sep": 12},
+        {"Country": "Poland", "Make": "OTHER", "Model": "MODEL",
+         "Version name": "New", "2026 Aug": 999, "2026 Sep": 56},
+    ]).to_parquet(candidate_path, index=False)
+    original_hashes = (_sha256(active_path), _sha256(candidate_path))
+
+    _, summary = jato_monthly_update_service._smart_merge_parquet_streaming(
+        active_path=active_path, candidate_path=candidate_path, output_path=output_path,
+        regressed_countries=[], historical_reclassification_decisions={"Hungary": decision},
+    )
+
+    merged = pq.read_table(output_path).to_pandas()
+    hungary = merged.loc[merged["Country"] == "Hungary"]
+    poland = merged.loc[merged["Country"] == "Poland"]
+    assert hungary["2023 Jan"].sum() == 7
+    assert hungary["2026 Aug"].sum() == (0 if decision == "keep_active" else 9)
+    assert hungary["2026 Sep"].sum() == (0 if decision == "keep_active" else 12)
+    assert poland["2023 Jan"].sum() == 20
+    assert poland["2026 Aug"].sum() == 10
+    assert poland["2026 Sep"].sum() == 56
+    policies = summary["historicalReclassificationPolicies"]
+    assert policies["Hungary"]["monthBoundaryCheck"] == "pass"
     assert original_hashes == (_sha256(active_path), _sha256(candidate_path))
     assert list(tmp_path.glob(".*.smart-merge*")) == []
 

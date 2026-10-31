@@ -1917,6 +1917,42 @@ def test_historical_sales_change_requires_explicit_history_decision() -> None:
     assert report["defaultDecision"] == "keep_active"
 
 
+@pytest.mark.parametrize("ytd_column", ["YTD 2026 (Sep)", "YTD 2026(Sep)", "YTD 2026  (Sep)"])
+def test_configuration_keys_exclude_ytd_but_preserve_seating(ytd_column: str) -> None:
+    frame = pd.DataFrame([
+        {"Make": "BRAND", "Seating capacity": seats, ytd_column: ytd,
+         "2026 Sep": 1, "2025": 10}
+        for seats, ytd in [(4, 10), (4, 20), (6, 10)]
+    ])
+    keys = jato_monthly_update_service._single_country_configuration_key_columns(frame)
+    assert keys == ["Make", "Seating capacity"]
+    assert frame.duplicated(keys, keep=False).tolist() == [True, True, False]
+
+
+def test_keep_active_without_new_months_preserves_values_and_nulls() -> None:
+    active = pd.DataFrame([
+        {"国家": "匈牙利", "Make": "BRAND", "Model": "MODEL",
+         "Version name": "Old", "length (mm)": None,
+         "2026 Jul": 10, "2026 Aug": 0, "2026 Sep": 0},
+    ], index=[7])
+    candidate = active.reset_index(drop=True).assign(**{
+        "Version name": "New", "length (mm)": 4500,
+        "2026 Aug": 9358, "2026 Sep": 12493,
+    })
+    original_active, original_candidate = active.copy(), candidate.copy()
+
+    merged, summary = jato_monthly_update_service._keep_active_history_country_frame(
+        active_frame=active, candidate_frame=candidate,
+    )
+
+    pd.testing.assert_frame_equal(merged, active.reset_index(drop=True))
+    pd.testing.assert_frame_equal(active, original_active)
+    pd.testing.assert_frame_equal(candidate, original_candidate)
+    assert summary["activeLatestMonth"] == "2026 Sep"
+    assert summary["futureMonthCount"] == 0
+    assert summary["monthBoundaryCheck"] == "pass"
+
+
 def test_keep_active_history_slices_months_without_accumulation() -> None:
     active = pd.DataFrame(
         [
@@ -2018,7 +2054,8 @@ def test_keep_active_rejects_normalized_duplicates_before_sum() -> None:
     assert exc_info.value.detail["duplicateRows"] == 2
 
 
-def test_keep_active_rejects_duplicate_active_source() -> None:
+@pytest.mark.parametrize("candidate_months", [{"2026 Feb": 12}, {}])
+def test_keep_active_rejects_duplicate_active_source(candidate_months: dict[str, int]) -> None:
     active = pd.DataFrame(
         [
             {
@@ -2045,7 +2082,7 @@ def test_keep_active_rejects_duplicate_active_source() -> None:
                 "Model": "MODEL",
                 "Version name": "New",
                 "2026 Jan": 10,
-                "2026 Feb": 12,
+                **candidate_months,
             }
         ]
     )

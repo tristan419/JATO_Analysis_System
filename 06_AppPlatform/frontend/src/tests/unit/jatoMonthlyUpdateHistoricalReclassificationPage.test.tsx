@@ -386,7 +386,17 @@ describe("JATO historical reclassification review interaction", () => {
     review.historicalReclassificationReport.countries[0] = {
       ...review.historicalReclassificationReport.countries[0],
       monthlyTotalsStable: false,
+      comparedThrough: "2026 Sep",
     };
+    review.countryMonthlySalesSummary = [{
+      country: "捷克",
+      rows: [
+        { month: "2026 Aug", referenceSales: 0, candidateSales: 9358, changeStatus: "changed" },
+        { month: "2026 Sep", referenceSales: 0, candidateSales: 12493, changeStatus: "changed" },
+        { month: "2026 Oct", referenceSales: null, candidateSales: 12, changeStatus: "changed" },
+        { month: "2023 Jan", referenceSales: 7, candidateSales: null, changeStatus: "changed" },
+      ],
+    }];
     review.reviewFindings = [makeBlockerFinding({
       target: "捷克",
       ruleId: "SC011",
@@ -408,6 +418,12 @@ describe("JATO historical reclassification review interaction", () => {
     const useLatestRadios = await screen.findAllByRole("radio", {
       name: /使用本次上传覆盖历史/,
     });
+    expect(useLatestRadios[0].closest("label")?.textContent).toContain("2026 Sep: 12,493");
+    expect(useLatestRadios[0].closest("label")?.textContent).not.toContain("2026 Oct:");
+    expect(useLatestRadios[0].closest("label")?.textContent).not.toContain("2023 Jan:");
+    const keepActiveRadio = screen.getAllByRole("radio", { name: /保留当前 active 历史/ })[0];
+    expect(keepActiveRadio.closest("label")?.textContent).toContain("2026 Sep: 0");
+    expect(keepActiveRadio.matches(":checked")).toBe(true);
     fireEvent.click(useLatestRadios[0]);
     const resolveButton = screen.getByRole("button", {
       name: "应用选择并生成完整 Candidate",

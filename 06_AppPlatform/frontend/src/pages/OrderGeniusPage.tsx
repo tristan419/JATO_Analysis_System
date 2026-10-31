@@ -722,13 +722,13 @@ export function OrderGeniusPage() {
       authFailureTokenRef.current = localStorage.getItem("jato_auth_token");
       if (status === 401) {
         setAuthFailureNotice({
-          message: "登录已失效，未保存的 BOM/订单输入仍保留在当前页面；请重新登录后再重试。",
+          message: "Your session has expired. Your unsaved BOM and order inputs are still on this page. Please sign in again, then retry.",
           requiresLogin: true,
         });
         return;
       }
       setAuthFailureNotice({
-        message: "请求被拒绝（403），请先重新登录后重试；若仍失败，请联系管理员核对国家、品牌及操作权限。当前输入未清除。",
+        message: "Request rejected (403). Please sign in again and retry. If it still fails, ask an administrator to check your country, brand, and action permissions. Your inputs have been preserved.",
         requiresLogin: true,
       });
     };
@@ -748,13 +748,13 @@ export function OrderGeniusPage() {
         .then((isValid) => {
           if (!isValid || authFailureTokenRef.current !== failedToken) return;
           setAuthFailureNotice({
-            message: "登录身份已更新，请主动重试刚才的操作；若仍提示403，请联系管理员核对权限。",
+            message: "Your sign-in has been updated. Please retry the previous action manually. If you still receive 403, ask an administrator to check your permissions.",
             requiresLogin: false,
           });
         })
         .catch(() => {
           setAuthFailureNotice({
-            message: "无法核验登录状态；输入未清除，请检查网络后重试。",
+            message: "Unable to verify your sign-in status. Your inputs have been preserved. Check your connection and try again.",
             requiresLogin: true,
           });
         })
@@ -2433,9 +2433,9 @@ export function OrderGeniusPage() {
                 href={`/login?redirect=${encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`)}`}
                 target="_blank"
                 rel="noopener noreferrer"
-              >Re-login / 重新登录</a>
+              >Sign in again</a>
             ) : null}
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAuthFailureNotice(null)}>知道了</button>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAuthFailureNotice(null)}>Dismiss</button>
           </span>
         </div>
       ) : null}

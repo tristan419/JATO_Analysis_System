@@ -126,7 +126,7 @@ MONTH_COLUMN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 YEAR_COLUMN_PATTERN = re.compile(r"^\d{4}$")
-YTD_COLUMN_PATTERN = re.compile(r"^YTD\s+\d{4}\s+\([A-Za-z]{3}\)$", re.IGNORECASE)
+YTD_COLUMN_PATTERN = re.compile(r"^YTD\s+(\d{4})\s*\(([A-Za-z]{3})\)$", re.IGNORECASE)
 BATCH_ID_PATTERN = re.compile(r"^(20\d{2}-\d{2})-r(\d+)$")
 RECOVERY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 REVIEW_REFRESH_REQUEST_ID_PATTERN = re.compile(
@@ -16745,18 +16745,6 @@ def _keep_active_history_country_frame(
         for month in month_columns
         if month not in historical_months
     ]
-    if not any(
-        _time_sort_key(month) > _time_sort_key(active_latest)
-        for month in future_months
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "keep_active candidate 没有晚于 active 的月份，"
-                "不能生成推进后的完整 candidate。"
-            ),
-        )
-
     active_expected = (
         active[historical_months]
         .apply(pd.to_numeric, errors="coerce")
@@ -16827,6 +16815,22 @@ def _keep_active_history_country_frame(
                 },
             )
 
+    if not future_months:
+        return active.reset_index(drop=True), {
+            "policy": "keep_active",
+            "activeLatestMonth": active_latest,
+            "historicalMonthsFrom": "active",
+            "futureMonthsFrom": "candidate",
+            "historicalMonthCount": len(historical_months),
+            "preservedHistoricalMonths": historical_months,
+            "futureMonthCount": 0,
+            "activeInputRows": int(len(active_frame)),
+            "candidateInputRows": int(len(candidate_frame)),
+            "outputRows": int(len(active)),
+            "exactStaticKeyColumnCount": len(key_columns),
+            "monthBoundaryCheck": "pass",
+        }
+
     combined = pd.DataFrame(
         {
             column: pd.concat(
@@ -16865,9 +16869,7 @@ def _keep_active_history_country_frame(
     # Derived totals must follow the chosen monthly slices, not stale uploaded
     # YTD values (which may include history that keep_active deliberately ignores).
     for column in all_columns:
-        ytd_match = re.fullmatch(
-            r"YTD\s+(\d{4})\s+\(([A-Za-z]{3})\)", column, re.IGNORECASE,
-        )
+        ytd_match = YTD_COLUMN_PATTERN.fullmatch(column)
         if ytd_match or YEAR_COLUMN_PATTERN.fullmatch(column):
             year = ytd_match.group(1) if ytd_match else column
             end = f"{year} {ytd_match.group(2)}" if ytd_match else f"{year} Dec"

@@ -150,8 +150,9 @@ describe("quantity save → PI readiness", () => {
     const fetch = vi.fn(async () => Response.json({ detail: status === 401 ? "Authentication required" : "Forbidden" }, { status }));
     vi.stubGlobal("fetch", fetch);
     const save = vi.spyOn(api, "updateQuantityCell");
-    fireEvent.click(screen.getByText("Save 15"));
-    const login = await screen.findByRole("link", { name: "Re-login / 重新登录" });
+    await act(async () => { fireEvent.click(screen.getByText("Save 15")); });
+    const login = await screen.findByRole("link", { name: "Sign in again" });
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
     expect(login.getAttribute("target")).toBe("_blank");
     expect(login.getAttribute("rel")).toBe("noopener noreferrer");
     expect(login.getAttribute("href")).toContain("/login?redirect=");
@@ -160,15 +161,17 @@ describe("quantity save → PI readiness", () => {
     expect(localStorage.getItem("jato_auth_token")).toBe("failed-session");
     expect(screen.getByTestId("eligible-rows").textContent).toBe("0");
     if (status === 403) {
-      expect(screen.getByText(/请求被拒绝（403）/).textContent).toContain("核对国家、品牌及操作权限");
+      expect(screen.getByText(/Request rejected \(403\)/).textContent).toContain("country, brand, and action permissions");
       expect(screen.queryByText(/当前账号没有执行此 BOM 操作的权限/)).toBeNull();
-      expect(screen.queryByText(/登录已失效/)).toBeNull();
+      expect(screen.queryByText(/Your session has expired/)).toBeNull();
+    } else {
+      expect(screen.getByText(/Your session has expired/).textContent).toContain("unsaved BOM and order inputs");
     }
     fireEvent(window, new Event("focus"));
     expect(authState.refreshUser).not.toHaveBeenCalled();
     localStorage.setItem("jato_auth_token", "renewed-session");
     await act(async () => { fireEvent(window, new Event("focus")); });
-    await screen.findByText(/登录身份已更新，请主动重试刚才的操作/);
+    await screen.findByText(/Your sign-in has been updated\. Please retry the previous action manually/);
     expect(authState.refreshUser).toHaveBeenCalledWith({ preserveSession: true });
     expect(save).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("eligible-rows").textContent).toBe("0");
@@ -183,16 +186,16 @@ describe("quantity save → PI readiness", () => {
     localStorage.setItem("jato_auth_token", "failed-session");
     await openOctober();
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ detail: "Forbidden" }, { status: 403 })));
-    fireEvent.click(screen.getByText("Save 15"));
-    await screen.findByRole("link", { name: "Re-login / 重新登录" });
+    await act(async () => { fireEvent.click(screen.getByText("Save 15")); });
+    await screen.findByRole("link", { name: "Sign in again" });
     if (result === false) authState.refreshUser.mockResolvedValue(false);
     else authState.refreshUser.mockRejectedValue(new Error("Offline"));
     localStorage.setItem("jato_auth_token", "renewed-session");
     fireEvent(window, new Event("focus"));
     await waitFor(() => expect(authState.refreshUser).toHaveBeenCalledTimes(1));
-    if (result === "network") await screen.findByText(/无法核验登录状态/);
-    expect(screen.getByRole("link", { name: "Re-login / 重新登录" })).toBeTruthy();
-    expect(screen.queryByText(/登录身份已更新/)).toBeNull();
+    if (result === "network") await screen.findByText(/Unable to verify your sign-in status/);
+    expect(screen.getByRole("link", { name: "Sign in again" })).toBeTruthy();
+    expect(screen.queryByText(/Your sign-in has been updated/)).toBeNull();
   });
 
   it("no saved PI guides directly to PI Batch without changing the month or creating automatically", async () => {

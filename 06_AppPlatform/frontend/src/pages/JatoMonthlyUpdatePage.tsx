@@ -175,7 +175,7 @@ const historicalReclassificationDecisionCopy: Record<
   },
   keep_active: {
     title: "保留当前 active 历史",
-    description: "截至 active latest 的历史月份保持不变，只采用上传中的后续新月份。",
+    description: "截至 active latest 的历史月份保持不变，只采用上传中的后续新月份；若无后续新月份，该国保持 active 原样，本次历史补录不会接入。",
   },
 };
 
@@ -3264,6 +3264,11 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                           const keepActiveValidation = keepActiveValidationByCountry.get(
                             countryReport.country.trim().toLocaleLowerCase()
                           );
+                          const historicalSalesChanges = reviewBundle.countryMonthlySalesSummary
+                            .find((item) => item.country === countryReport.country)?.rows
+                            .filter((row) => row.referenceSales != null
+                              && row.candidateSales != null
+                              && row.referenceSales !== row.candidateSales) ?? [];
                           return (
                             <article
                               key={countryReport.country}
@@ -3330,6 +3335,14 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                                       <span>
                                         <strong>{historicalReclassificationDecisionCopy[decision].title}</strong>
                                         <small>{historicalReclassificationDecisionCopy[decision].description}</small>
+                                        {historicalSalesChanges.length > 0 && (
+                                          <small>
+                                            选择后：{historicalSalesChanges.slice(0, 6).map((row) => (
+                                              `${row.month}: ${formatMonthlyUpdateNumber(decision === "keep_active" ? row.referenceSales : row.candidateSales)}`
+                                            )).join(" · ")}
+                                            {historicalSalesChanges.length > 6 && ` · 另有 ${historicalSalesChanges.length - 6} 个月，见逐月销量核对表`}
+                                          </small>
+                                        )}
                                       </span>
                                     </label>
                                   ))}

@@ -97,12 +97,12 @@ describe("Order Genius colour rule page contract", () => {
 
   it("surfaces protected-request auth failures without discarding quantity drafts", () => {
     expect(pageSource).toContain("AUTH_FAILURE_EVENT");
-    expect(pageSource).toContain("登录已失效，未保存的 BOM/订单输入仍保留在当前页面");
-    expect(pageSource).toContain("请求被拒绝（403），请先重新登录后重试");
+    expect(pageSource).toContain("Your session has expired. Your unsaved BOM and order inputs are still on this page.");
+    expect(pageSource).toContain("Request rejected (403). Please sign in again and retry.");
     expect(pageSource).not.toContain("当前账号没有执行此 BOM 操作的权限");
     expect(pageSource).toContain("refreshUser({ preserveSession: true })");
-    expect(pageSource).toContain("登录身份已更新，请主动重试刚才的操作");
-    expect(pageSource).toContain("Re-login / 重新登录</a>");
+    expect(pageSource).toContain("Your sign-in has been updated. Please retry the previous action manually.");
+    expect(pageSource).toContain("Sign in again</a>");
     expect(pageSource).toContain("const authStatus = getErrorStatus(err)");
     expect(pageSource).toContain("if (authStatus === 401 || authStatus === 403)");
   });
