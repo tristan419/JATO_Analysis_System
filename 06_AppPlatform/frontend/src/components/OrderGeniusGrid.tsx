@@ -25,6 +25,9 @@ import { AgGridReact } from "ag-grid-react";
 
 import { parseOrderGeniusColourSwatch } from "../utils/orderGeniusColourSwatch";
 import type { MonthCell } from "../types/orderGenius";
+import type { AssetCatalog, MaterialIdentity } from "../types/materialAssets";
+import { MaterialColourPreview } from "./orderGenius/MaterialColourPreview";
+import { MaterialCompareLabel, comparisonIndex } from "./orderGenius/materialComparison";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -41,6 +44,8 @@ const ORDER_GENIUS_COLUMN_WIDTH_MAX = 1200;
 const ORDER_GENIUS_COLUMN_WIDTH_STORAGE_PREFIX = "jato:order-genius:column-widths:v1:";
 
 export interface OrderGeniusGridRow {
+  brand?: string;
+  __materialModel?: string;
   materialCode: string;
   bomTemplate?: string | null;
   modelName: string;
@@ -50,6 +55,8 @@ export interface OrderGeniusGridRow {
   colourTier?: string | null;
   colourHex?: string | null;
   interiorColorName?: string | null;
+  interiorColourCode?: string | null;
+  editionTag?: string | null;
   fobEur: number | null;
   lifecycleStatus: string;
   editable: boolean;
@@ -116,13 +123,18 @@ export interface OrderGeniusGridProps {
   onGridReady?: (api: GridApi<OrderGeniusGridRow>) => void;
   onToggleGroup?: (groupKey: string) => void;
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void;
-  onColourPreview?: (row: OrderGeniusGridRow) => void;
+  photoScope?: string;
+  loadPhotoCatalog?: () => Promise<AssetCatalog>;
+  comparisonMaterials?: readonly MaterialIdentity[];
+  onToggleComparison?: (material: MaterialIdentity) => void;
   /** Stable user/account scope used for local column-width preferences. */
   columnWidthStorageScope?: string;
 }
 
 interface OrderGeniusGridContext {
   onToggleGroup?: (groupKey: string) => void;
+  comparisonMaterials?: readonly MaterialIdentity[];
+  onToggleComparison?: (material: MaterialIdentity) => void;
 }
 
 interface PiSelectionSummary {
@@ -257,7 +269,7 @@ export function buildOrderGeniusColumnDefs(
   isPiRowSelected?: (row: OrderGeniusGridRow) => boolean,
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void,
   isPiRowSelectable?: (row: OrderGeniusGridRow) => boolean,
-  onColourPreview?: (row: OrderGeniusGridRow) => void,
+  photoTools?: { scope: string; loadCatalog?: () => Promise<AssetCatalog> },
 ): ColDef<OrderGeniusGridRow>[] {
   const cols: ColDef<OrderGeniusGridRow>[] = [];
 
@@ -336,20 +348,7 @@ export function buildOrderGeniusColumnDefs(
           : `${name}${code ? ` (${code})` : ""}`;
         return (
           <span style={{ display: "flex", alignItems: "center", gap: 5 }} title={title}>
-            <button type="button" disabled={!onColourPreview || !p.data?.bomTemplate}
-              onClick={event => { event.stopPropagation(); if (p.data) onColourPreview?.(p.data); }}
-              aria-label={`Preview ${name} photos`}
-              style={{
-                padding: 0, cursor: "pointer", minHeight: 0,
-                display: "inline-block",
-                width: 14,
-                height: 14,
-                borderRadius: 3,
-                flexShrink: 0,
-                border: swatch.isMissing ? "1px dashed #94a3b8" : "1px solid #d1d5db",
-                background: swatch.background,
-              }}
-            />
+            {p.data ? <MaterialColourPreview material={p.data} kind="exterior" name={name} background={swatch.background} scope={photoTools?.scope ?? ""} loadCatalog={photoTools?.loadCatalog} /> : null}
             <span style={{ fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
           </span>
         );
@@ -361,13 +360,13 @@ export function buildOrderGeniusColumnDefs(
       field: "interiorColorName",
       initialWidth: 130,
       editable: false,
-      cellRenderer: (p: any) => {
+      cellRenderer: (p: ICellRendererParams<OrderGeniusGridRow, string>) => {
         const name = p.value || "";
-        const ed = p.data?.editionTag;
-        if (!name && !ed) return null;
+        const edition = p.data?.editionTag;
+        if (!name && !edition) return null;
         return (
-          <span style={{ fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {name}{ed ? ` · ${ed}` : ''}
+          <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
+            {p.data && name ? <MaterialColourPreview material={p.data} kind="interior" name={name} scope={photoTools?.scope ?? ""} loadCatalog={photoTools?.loadCatalog} /> : null}{name}{edition ? ` · ${edition}` : ""}
           </span>
         );
       },
@@ -446,7 +445,6 @@ export function buildOrderGeniusColumnDefs(
           && params.data != null
           && params.data.__type !== "groupHeader"
           && params.data.editable !== false
-          && !params.data._saving.has(field)
           && params.data._months?.[String(m)]?.isEditable !== false,
         tooltipValueGetter: (params) => params.data?._errors?.[field]
           || params.data?._months?.[String(m)]?.reason || "",
@@ -612,7 +610,10 @@ export function OrderGeniusGrid({
   onGridReady,
   onToggleGroup,
   onTogglePiRow,
-  onColourPreview,
+  photoScope,
+  loadPhotoCatalog,
+  comparisonMaterials,
+  onToggleComparison,
   columnWidthStorageScope,
 }: OrderGeniusGridProps) {
   const localGridApiRef = useRef<any>(null);
@@ -620,23 +621,33 @@ export function OrderGeniusGrid({
   const gridWrapperRef = useRef<HTMLDivElement | null>(null);
   const selectedRowIdsRef = useRef(selectedRowIds);
   selectedRowIdsRef.current = selectedRowIds;
+  const live = useRef({ selectableRowIds, piSelectionSummary, onTogglePiRow });
+  live.current = { selectableRowIds, piSelectionSummary, onTogglePiRow };
+  const togglePi = useCallback((row: OrderGeniusGridRow, selected: boolean) => live.current.onTogglePiRow?.(row, selected), []);
+  const selectablePi = useCallback((row: OrderGeniusGridRow): boolean => live.current.selectableRowIds?.has(getOrderGeniusRowId(row)) === true, []);
+  const hasPiSelection = Boolean(onTogglePiRow);
   const isPiRowSelected = useCallback(
     (row: OrderGeniusGridRow): boolean => selectedRowIdsRef.current?.has(getOrderGeniusRowId(row)) ?? false,
     [],
   );
   const columnDefs = useMemo(
-    () => buildOrderGeniusColumnDefs(
+    () => {
+      const definitions = buildOrderGeniusColumnDefs(
       showCountry,
       selectedMonth,
       visibleColumns,
       canEditQuantities,
-      piSelectionSummary,
+      undefined,
       isPiRowSelected,
-      onTogglePiRow,
-      (row) => selectableRowIds?.has(getOrderGeniusRowId(row)) === true,
-      onColourPreview,
-    ),
-    [canEditQuantities, showCountry, selectedMonth, visibleColumns, piSelectionSummary, isPiRowSelected, onTogglePiRow, selectableRowIds, onColourPreview],
+      hasPiSelection ? togglePi : undefined,
+      selectablePi,
+      { scope: photoScope ?? "", loadCatalog: loadPhotoCatalog },
+    );
+      const piColumn = definitions.find(column => column.colId === "piSelect");
+      if (piColumn) piColumn.headerComponent = () => <PiSelectHeader summary={live.current.piSelectionSummary} />;
+      return definitions;
+    },
+    [canEditQuantities, showCountry, selectedMonth, visibleColumns, hasPiSelection, isPiRowSelected, togglePi, selectablePi, photoScope, loadPhotoCatalog],
   );
   const columnIdsSignature = useMemo(
     () => columnDefs.map(getOrderGeniusColumnDefId).filter(Boolean).join("|"),
@@ -765,11 +776,14 @@ export function OrderGeniusGrid({
   useEffect(() => {
     if (!localGridApiRef.current) return;
     localGridApiRef.current.refreshCells({ force: true, columns: ["piSelect"] });
-  }, [selectedRowIds, selectableRowIds]);
+    localGridApiRef.current.refreshHeader();
+  }, [selectedRowIds, selectableRowIds, piSelectionSummary]);
+
+  useEffect(() => { localGridApiRef.current?.refreshCells({ force: true, columns: ["modelName"] }); }, [rows, comparisonMaterials]);
 
   const gridContext = useMemo<OrderGeniusGridContext>(
-    () => ({ onToggleGroup }),
-    [onToggleGroup],
+    () => ({ onToggleGroup, comparisonMaterials, onToggleComparison }),
+    [onToggleGroup, comparisonMaterials, onToggleComparison],
   );
 
   useEffect(() => {
@@ -778,6 +792,7 @@ export function OrderGeniusGrid({
     const handleGroupMouseDown = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      if (target.closest("[data-og-compare-action]")) return;
       const trigger = target.closest<HTMLElement>("[data-og-group-key]");
       if (!trigger || !root.contains(trigger)) return;
       const groupKey = trigger.dataset.ogGroupKey;
@@ -798,6 +813,8 @@ export function OrderGeniusGrid({
       const groupKey = props.data?.__groupKey || "";
       const level = props.data?.__groupLevel ?? 0;
       const kind = props.data?.__groupKind ?? "trim";
+      const material: MaterialIdentity | null = props.data?.brand && props.data.bomTemplate ? { brand: props.data.brand, modelName: props.data.__materialModel ?? props.data.modelName, bomTemplate: props.data.bomTemplate } : null;
+      const index = material ? comparisonIndex(material, props.context?.comparisonMaterials ?? []) : -1;
       const expanded = props.data?.__expanded ?? false;
       const isSubgroup = level > 0;
       const toggleGroup = () => {
@@ -847,7 +864,10 @@ export function OrderGeniusGrid({
             {expanded ? "-" : "+"}
           </button>
           <div style={{ width: isSubgroup ? 3 : 4, height: isSubgroup ? 16 : 20, borderRadius: 2, flexShrink: 0, backgroundColor: color }} />
-          <span title={label} style={{ color, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+          <span title={label} style={{ color, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{kind === "bom" ? <MaterialCompareLabel index={index}>{label}</MaterialCompareLabel> : label}</span>
+          {material && kind !== "bom" ? <MaterialCompareLabel index={index}>{material.bomTemplate}</MaterialCompareLabel> : null}
+          {material && props.context?.onToggleComparison ? <button type="button" className="og-add-compare" data-og-compare-action aria-pressed={index >= 0} disabled={index < 0 && (props.context.comparisonMaterials?.length ?? 0) >= 8}
+            aria-label={`Compare ${material.bomTemplate}`} onMouseDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); props.context?.onToggleComparison?.(material); }}>Compare</button> : null}
           {meta ? <span className="og-group-header-meta" title={meta} style={{ minWidth: 0 }}>{meta}</span> : null}
         </div>
       );

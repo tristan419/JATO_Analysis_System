@@ -1,18 +1,25 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client";
 import { MaterialTimelineBoard, monthIndex, monthIso, replacementChains, timelineBar } from "../../components/orderGenius/MaterialTimelineBoard";
 import type { MaterialSkuMatrixRow, MaterialTimelineNode, MaterialTimelineResponse } from "../../types/orderGenius";
+import type { MaterialIdentity } from "../../types/materialAssets";
 const node = (base: string, values: Partial<MaterialTimelineNode> = {}): MaterialTimelineNode => ({
   bomTemplate: base, brand: "JAECOO", modelName: "J7", version: "FWD", powertrain: "PHEV", materialCodes: [base + "-CL"],
   lifecycleStatus: "active", effectiveFrom: "2026-10-15", effectiveTo: "2026-10-30", notes: [], issues: [], quoteDate: "2026-10-15", quotedSkuCount: 1, quoteReasons: [], ...values,
 });
 const data = (countryCode = "CH", nodes = [node("NEW**")]): MaterialTimelineResponse => ({ countryCode, today: "2026-10-12", windowFrom: "2026-09-12", windowTo: "2026-11-11", nodes, links: [], events: [] });
-const props = { countries: ["CH"], authorizationKey: "account1", selectionRows: [], selectionComplete: true, onViewModel: vi.fn(), onOpenAssets: vi.fn() };
-function view(override: Partial<Parameters<typeof MaterialTimelineBoard>[0]> = {}) { return <MemoryRouter><MaterialTimelineBoard {...props} {...override} /></MemoryRouter>; }
-beforeEach(() => { localStorage.clear(); props.onOpenAssets.mockReset(); vi.spyOn(api, "getMaterialNotices").mockImplementation(async country => ({ countryCode: country, notices: [] })); });
+const props = { countries: ["CH"], authorizationKey: "account1", selectionRows: [], selectionComplete: true, onViewModel: vi.fn(), onOpenAssets: vi.fn(), onCompare: vi.fn() };
+function Fixture({ override }: { override: Partial<Parameters<typeof MaterialTimelineBoard>[0]> }) {
+  const [selected, setSelected] = useState<MaterialIdentity[]>([]);
+  return <MaterialTimelineBoard {...props} comparisonMaterials={selected} onToggleComparison={({ brand, modelName, bomTemplate }) => setSelected(previous => previous.some(item => item.brand === brand && item.modelName === modelName && item.bomTemplate === bomTemplate)
+    ? previous.filter(item => item.brand !== brand || item.modelName !== modelName || item.bomTemplate !== bomTemplate) : [...previous, { brand, modelName, bomTemplate }])} {...override} />;
+}
+function view(override: Partial<Parameters<typeof MaterialTimelineBoard>[0]> = {}) { return <MemoryRouter><Fixture override={override} /></MemoryRouter>; }
+beforeEach(() => { localStorage.clear(); props.onOpenAssets.mockReset(); props.onCompare.mockReset(); vi.spyOn(api, "getMaterialNotices").mockImplementation(async country => ({ countryCode: country, notices: [] })); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe("Lightweight Notice Board", () => {
   it("uses one shared four-month window and groups Model, Trim, base", async () => {
@@ -27,7 +34,7 @@ describe("Lightweight Notice Board", () => {
   it("retains overlapping bars, unknown dates, and metadata conflicts without invented windows", async () => {
     vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data("CH", [node("A**"), node("B**"), node("MISSING**", { effectiveFrom: null, effectiveTo: null }), node("CONFLICT**", { issues: ["Conflicting dates"] })]));
     render(view()); await screen.findByText("MISSING**");
-    expect(document.querySelectorAll(".mw-bar")).toHaveLength(2); expect(screen.getAllByText("Dates to review")).toHaveLength(2);
+    expect(document.querySelectorAll(".mw-bar")).toHaveLength(2); expect(screen.getAllByText(/ · Dates to review$/)).toHaveLength(2);
     expect(timelineBar(node("ENDONLY", { effectiveFrom: null }), monthIndex("2026-07"), monthIndex("2026-10"))).toBeNull();
   });
   it("uses day boundaries and open periods, without inventing an end date", () => {
@@ -45,7 +52,7 @@ describe("Lightweight Notice Board", () => {
     vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(source);
     const row: MaterialSkuMatrixRow & { _countryCode: string } = { materialCode: "B**-CL", bomTemplate: "B**", brand: "JAECOO", modelName: "J7", version: "FWD", colour: "Black", colourCode: "CL", powertrain: "PHEV", fobEur: 20000, lifecycleStatus: "active", months: {}, _countryCode: "CH", editable: true, displayStyle: null, remark: null, ttl: 0 };
     render(view({ selectionRows: [row] })); await screen.findByText("OTHER**"); fireEvent.click(screen.getByLabelText("Selection"));
-    expect(screen.queryByText("OTHER**")).toBeNull(); expect(document.querySelectorAll(".mw-calendar-row")).toHaveLength(3);
+    expect(screen.queryByText("OTHER**")).toBeNull(); expect(document.querySelectorAll(".mw-calendar-row")).toHaveLength(1);
   });
   it("disables incomplete selection and leaves it without showing stale rows", async () => {
     vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data()); const rendered = render(view()); await screen.findByText("NEW**");
@@ -83,7 +90,7 @@ describe("Lightweight Notice Board", () => {
     vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data("CH", [node("A**"), node("B**", { modelName: "J8" })]));
     render(view()); await screen.findByText("A**"); fireEvent.click(screen.getByLabelText("Compare A** CH")); fireEvent.click(screen.getByLabelText("Compare B** CH"));
     fireEvent.click(screen.getByRole("button", { name: "Compare 2" }));
-    expect(props.onOpenAssets).toHaveBeenCalledWith({ materials: [{ brand: "JAECOO", modelName: "J7", bomTemplate: "A**" }, { brand: "JAECOO", modelName: "J8", bomTemplate: "B**" }], compare: true });
+    expect(props.onCompare).toHaveBeenCalledWith([{ brand: "JAECOO", modelName: "J7", bomTemplate: "A**" }, { brand: "JAECOO", modelName: "J8", bomTemplate: "B**" }]);
     fireEvent.click(screen.getByRole("button", { name: "中文" })); expect(screen.getByRole("region", { name: "物料公告" })).toBeTruthy(); expect(localStorage.getItem("jato:material-language")).toBe("zh");
   });
   it("folds calendar and reminder details into one compact row", async () => {
@@ -103,10 +110,24 @@ describe("Lightweight Notice Board", () => {
     response.links = [{ from: "A**", to: "B**" }, { from: "B**", to: "C**" }];
     vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(response);
     render(view()); const chain = await screen.findByLabelText("Replacement chain");
-    expect(chain.textContent).toBe("CHA**→B**→C**");
+    expect(Array.from(chain.querySelectorAll(".mw-material-code")).map(item => item.textContent)).toEqual(["A**", "B**", "C**"]);
+    expect(document.querySelectorAll(".mw-calendar-row")).toHaveLength(1);
     expect(document.querySelectorAll(".mw-bar")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Compare B** → C**" }));
+    expect(props.onCompare).toHaveBeenCalledWith([expect.objectContaining({ bomTemplate: "B**" }), expect.objectContaining({ bomTemplate: "C**" })]);
     fireEvent.click(screen.getByRole("button", { name: "B**" }));
     expect(props.onOpenAssets).toHaveBeenCalledWith({ materials: [{ brand: "JAECOO", modelName: "J7", bomTemplate: "B**" }], compare: false });
+  });
+  it("shares a lane only for saved replacement links and stacks real overlapping periods", async () => {
+    const response = data("CH", [node("A**", { effectiveFrom: "2026-07-01", effectiveTo: "2026-08-31" }), node("B**", { effectiveFrom: "2026-08-15", effectiveTo: null }), node("PARALLEL**")]);
+    response.links = [{ from: "A**", to: "B**" }];
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(response);
+    render(view()); await screen.findByText("PARALLEL**");
+    expect(document.querySelectorAll(".mw-calendar-row")).toHaveLength(2);
+    const bars = document.querySelectorAll<HTMLButtonElement>(".mw-calendar-row .mw-bar");
+    expect(bars[0].style.top).not.toBe(bars[1].style.top);
+    expect(bars[0].title).toContain("2026-08-31");
+    expect(bars[1].title).toContain("2026-08-15 → ∞");
   });
   it("never stitches links from different countries/models, or infers links from dates", () => {
     const ch = data("CH", [node("A"), node("B"), node("C"), node("OTHER", { modelName: "J8" })]);

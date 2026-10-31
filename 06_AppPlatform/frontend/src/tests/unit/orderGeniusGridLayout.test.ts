@@ -69,9 +69,13 @@ describe("Order Genius grid layout", () => {
     const augustAmount = columns.find((column) => column.colId === "_amount_8")!;
     const septemberAmount = columns.find((column) => column.colId === "_amount_9")!;
     const december = columns.find((column) => column.colId === "month_12")!;
+    const august = columns.find((column) => column.colId === "month_8")!;
     if (typeof september.editable !== "function" || typeof augustAmount.valueGetter !== "function" || typeof septemberAmount.valueGetter !== "function" || typeof december.valueSetter !== "function") throw new Error("Expected grid callbacks");
     const params = { data: row } as EditableCallbackParams<OrderGeniusGridRow>;
     expect(september.editable(params)).toBe(false);
+    row._saving.add("month_8");
+    if (typeof august.editable !== "function") throw new Error("Expected editable callback");
+    expect(august.editable(params)).toBe(true);
     expect(september.tooltipValueGetter?.({ ...params, location: "cell" })).toBe("No country FOB");
     expect(augustAmount.valueGetter({ data: row } as ValueGetterParams<OrderGeniusGridRow>)).toBe(3000);
     expect(septemberAmount.valueGetter({ data: row } as ValueGetterParams<OrderGeniusGridRow>)).toBe(0);
