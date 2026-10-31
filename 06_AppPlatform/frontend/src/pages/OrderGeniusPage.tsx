@@ -1,5 +1,7 @@
 import {
   Fragment,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -19,6 +21,8 @@ import { BomCountryColumns } from "../components/orderGenius/BomCountryColumns";
 import { MaterialTimelineBoard } from "../components/orderGenius/MaterialTimelineBoard";
 import { MaterialReplacementEditor } from "../components/orderGenius/MaterialReplacementEditor";
 import { MaterialColourPreview } from "../components/orderGenius/MaterialColourPreview";
+import { OrderGeniusWorkspacePanel } from "../components/orderGenius/OrderGeniusWorkspacePanel";
+import type { MaterialAssetRequest } from "../types/materialAssets";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PiInvoiceExportDialog } from "../components/PiInvoiceExportDialog";
 import { PiInvoiceTemplateManager } from "../components/PiInvoiceTemplateManager";
@@ -94,6 +98,7 @@ import type {
   VehicleAllocationPlanLine,
 } from "../types/orderGeniusVehicle";
 
+const MaterialAssetsPanel = lazy(() => import("./MaterialAssetsPage").then(module => ({ default: module.MaterialAssetsPage })));
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -688,6 +693,7 @@ export function OrderGeniusPage() {
   const [expandedProductGroups, setExpandedProductGroups] = useState<Set<string>>(() => new Set());
   const [showPtAdmin, setShowPtAdmin] = useState(false);
   const [showBomAdmin, setShowBomAdmin] = useState(false);
+  const [assetRequest, setAssetRequest] = useState<MaterialAssetRequest | null>(null);
   const [showDeck, setShowDeck] = useState(true);
   const [controlTab, setControlTab] = useState<OrderGeniusControlTab>("filters");
   const [consolidatedView, setConsolidatedView] = useState(false);
@@ -2330,10 +2336,18 @@ export function OrderGeniusPage() {
     if (!canMaintainBom) return;
     const targetCountry = missingFobCountryCodes[0] ?? null;
     setBomAdminCopyTargetCountry(targetCountry);
-    setShowDeck(true);
+    setAssetRequest(null);
+    setShowDeck(false);
     setControlTab("bom");
     setShowPtAdmin(false);
     setShowBomAdmin(true);
+  };
+  const openMaterialAssets = (request: MaterialAssetRequest = { materials: [], compare: false }): void => {
+    setShowBomAdmin(false);
+    setShowPtAdmin(false);
+    setShowDeck(false);
+    setControlTab("bom");
+    setAssetRequest(request);
   };
   const openBomAdminForMissingFob = () => {
     openBomAdminPanel();
@@ -2358,8 +2372,8 @@ export function OrderGeniusPage() {
     { id: "filters", label: ORDER_GENIUS_CONTROL_TAB_LABELS.filters, meta: activeFilterSummary },
     {
       id: "bom",
-      label: "BOM Admin",
-      meta: `${showBomAdmin ? "BOM open" : "BOM closed"} · ${showPtAdmin ? "PT open" : selectedPaymentTerm || "Payment terms"}`,
+      label: canMaintainBom ? "BOM / Assets" : "Material Assets",
+      meta: canMaintainBom ? "Materials · Photos · Configuration" : "Photos · Configuration · Compare",
     },
     {
       id: "exports",
@@ -2376,21 +2390,9 @@ export function OrderGeniusPage() {
   return (
     <section className="crud-shell">
       <OrderingBrandNotice user={user} />
-      <header className="crud-hero">
+      <header className="crud-hero og-order-heading">
         <h1>Order Genius</h1>
-        <p>
-          Country order matrix with FOB pricing, monthly quantity editing, and
-          Excel export.
-        </p>
-      </header>
-      <div className="order-genius-summary-strip" aria-label="Current Order Genius filters">
-        <span>{selectedCountries.length === 1 ? selectedCountries[0] : `${selectedCountries.length} countries`}</span>
-        <span>{selectedYear}</span>
-        <span>{selectedMonthLabel}</span>
-        <span>{brandFilter || "All brands"}</span>
-        <span>{modelFilter || "All models"}</span>
-        <span>{powertrainFilter || "All powertrains"}</span>
-        {canFillOrders ? <label><input type="checkbox" aria-label="Enter new batch" checked={newBatchEntry} disabled={selectedMonth == null || quantitySaving}
+        {canFillOrders ? <label className="og-new-batch"><input type="checkbox" aria-label="Enter new batch" checked={newBatchEntry} disabled={selectedMonth == null || quantitySaving}
           onChange={(event) => setNewBatchEntry(event.target.checked)} />填写新批次 / Enter new batch</label> : null}
         {selectedMonth != null ? (
           <div className={`og-pi-readiness ${quantityError || piPlanError || error ? "is-error" : piReady ? "is-ready" : "is-pending"}`} role="status" aria-live="polite">
@@ -2398,7 +2400,7 @@ export function OrderGeniusPage() {
             {quantityError || piPlanError || error ? <button type="button" onClick={retryPiAvailability}>Retry</button> : null}
           </div>
         ) : null}
-      </div>
+      </header>
       {newBatchEntry && selectedMonth != null ? <p role="note">Pending quantity only / 仅填待入批余量 · Already in PI / 已入批 {piPlanLoading ? "—" : piPlanTotals.generatedQuantity}
         {" · "}Month total / 月总量 {piPlanLoading ? "—" : piPlanTotals.selectedQuantity} · Zero pending is blank; saved PIs remain / 余量0显示空白，历史PI保留。</p> : null}
       {quantityIssue ? <div role="alert" className="alert alert-error">{quantityIssue.message} {quantityIssue.suggestion}
@@ -2442,7 +2444,7 @@ export function OrderGeniusPage() {
         open={showDeck}
         onOpenChange={setShowDeck}
         triggerPrimary="Filters & Actions"
-        triggerSecondaryOpen={ORDER_GENIUS_CONTROL_TAB_LABELS[controlTab]}
+        triggerSecondaryOpen={controlTab === "bom" ? canMaintainBom ? "BOM / Assets" : "Material Assets" : ORDER_GENIUS_CONTROL_TAB_LABELS[controlTab]}
         triggerSecondaryClosed={activeFilterSummary}
         eyebrow="Order Genius"
         title="Filters & Actions"
@@ -2468,20 +2470,14 @@ export function OrderGeniusPage() {
       ) : null}
 
       <div className="deck-control-tabs order-genius-control-tabs" role="tablist" aria-label="Order Genius control sections">
-        {orderGeniusControlTabs.filter((tab) => tab.id !== "bom" || canMaintainBom).map((tab) => (
+        {orderGeniusControlTabs.filter((tab) => tab.id !== "bom" || canFillOrders).map((tab) => (
           <button
             key={tab.id}
             type="button"
             role="tab"
             aria-selected={controlTab === tab.id}
             className={`deck-control-tab${controlTab === tab.id ? " is-active" : ""}`}
-            onClick={() => {
-              if (tab.id === "bom") {
-                openBomAdminPanel();
-                return;
-              }
-              setControlTab(tab.id);
-            }}
+            onClick={() => setControlTab(tab.id)}
           >
             <span>{tab.label}</span>
             <small>{tab.meta}</small>
@@ -2684,9 +2680,7 @@ export function OrderGeniusPage() {
             {showBomAdmin ? "Hide BOM Admin" : "BOM Admin"}
           </button>
         )}
-        {!canMaintainBom ? (
-          <div className="order-genius-muted-note">Admin tools are available to admin users only.</div>
-        ) : null}
+        {canFillOrders ? <button type="button" className="btn btn-sm btn-ghost" onClick={() => openMaterialAssets()}>Material Assets</button> : null}
         {canFillOrders && user?.role !== "order_filler" ? (
           <a className="btn btn-sm btn-ghost" href="/product/order-genius/cbu">CBU Finance</a>
         ) : null}
@@ -3292,6 +3286,7 @@ export function OrderGeniusPage() {
         bomEditing={showBomAdmin}
         canMaintainRelations={canMaintainBom}
         canManageReference={isAdmin}
+        onOpenAssets={openMaterialAssets}
         onViewModel={(brand, model, noticeCountry) => {
           if (noticeCountry) setSelectedCountries([noticeCountry]);
           setBrandFilter(brand); setModelFilter(model); setPowertrainFilter("");
@@ -3350,37 +3345,25 @@ export function OrderGeniusPage() {
 
       {/* ── Payment Terms Admin ────────────────────────────────────── */}
       {showPtAdmin && <PaymentTermAdminPanel />}
-      {showBomAdmin && (
-        <div style={{
-          position: "fixed", inset: 0, zIndex: 1000,
-          display: "flex", alignItems: "flex-start", justifyContent: "center",
-          padding: "3vh 2vw",
-        }}>
-          <div style={{
-            position: "absolute", inset: 0,
-            background: "rgba(15,23,42,0.35)",
-          }} onClick={() => setShowBomAdmin(false)} />
-          <div style={{
-            position: "relative", width: "96vw", maxWidth: 1600, maxHeight: "94vh",
-            overflow: "hidden", borderRadius: 0,
-            background: "#fff",
-            boxShadow: "0 25px 80px rgba(15,23,42,0.3)",
-            WebkitOverflowScrolling: "touch",
-          }}>
+      {showBomAdmin && !assetRequest && (
+        <OrderGeniusWorkspacePanel label="BOM Admin" onClose={() => setShowBomAdmin(false)}>
             <BomAdminPanel
               key={authorizationKey}
               isAdmin={isAdmin}
               initialCopyTargetCountry={bomAdminCopyTargetCountry}
               initialSearch={bomIssueSearch}
+              onClose={() => setShowBomAdmin(false)}
               onFobCountriesChanged={loadFobCountries}
               onFobChanged={async () => {
                 const [, refreshed] = await Promise.all([loadFobCountries(), loadMatrices()]);
                 if (!refreshed) throw new Error("Saved, but the selection table refresh failed. Refresh to verify.");
               }}
             />
-          </div>
-        </div>
+        </OrderGeniusWorkspacePanel>
       )}
+      {assetRequest && canFillOrders ? <OrderGeniusWorkspacePanel label="Material Assets" onClose={() => setAssetRequest(null)}>
+        <Suspense fallback={<p role="status">Loading…</p>}><MaterialAssetsPanel key={authorizationKey} request={assetRequest} onClose={() => setAssetRequest(null)} /></Suspense>
+      </OrderGeniusWorkspacePanel> : null}
     </section>
   );
 }
@@ -3761,6 +3744,7 @@ interface BomFinanceDrawerScope {
 }
 
 interface BomAdminPanelProps {
+  onClose?: () => void;
   initialSearch?: string;
   isAdmin: boolean;
   initialCopyTargetCountry?: string | null;
@@ -3827,6 +3811,7 @@ function formatBomSourceLabel(
 // ── BOM Admin Panel ──────────────────────────────────────────────────
 
 export function BomAdminPanel({
+  onClose,
   isAdmin,
   initialSearch,
   initialCopyTargetCountry = null,
@@ -6772,6 +6757,7 @@ export function BomAdminPanel({
             <span><i className="bom-fob-legend-remark-dot" /> remark</span>
           </div>
           <span style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>{skus.length} SKUs · {modelGroups.size} models · {sortedCountries.length} countries</span>
+          {onClose ? <button type="button" className="btn btn-sm btn-ghost" aria-label="Close BOM Admin" onClick={onClose}>Close</button> : null}
         </div>
       </div>
       <div className={`bom-admin-toolbar${toolsFlipped ? " is-tools-open" : ""}`} style={{ marginBottom: toolsRowMarginBottom }}>

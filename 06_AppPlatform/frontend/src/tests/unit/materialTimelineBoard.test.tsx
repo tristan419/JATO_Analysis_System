@@ -3,16 +3,16 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client";
-import { MaterialTimelineBoard, monthIndex, monthIso, timelineBar } from "../../components/orderGenius/MaterialTimelineBoard";
+import { MaterialTimelineBoard, monthIndex, monthIso, replacementChains, timelineBar } from "../../components/orderGenius/MaterialTimelineBoard";
 import type { MaterialSkuMatrixRow, MaterialTimelineNode, MaterialTimelineResponse } from "../../types/orderGenius";
 const node = (base: string, values: Partial<MaterialTimelineNode> = {}): MaterialTimelineNode => ({
   bomTemplate: base, brand: "JAECOO", modelName: "J7", version: "FWD", powertrain: "PHEV", materialCodes: [base + "-CL"],
   lifecycleStatus: "active", effectiveFrom: "2026-10-15", effectiveTo: "2026-10-30", notes: [], issues: [], quoteDate: "2026-10-15", quotedSkuCount: 1, quoteReasons: [], ...values,
 });
 const data = (countryCode = "CH", nodes = [node("NEW**")]): MaterialTimelineResponse => ({ countryCode, today: "2026-10-12", windowFrom: "2026-09-12", windowTo: "2026-11-11", nodes, links: [], events: [] });
-const props = { countries: ["CH"], authorizationKey: "account1", selectionRows: [], selectionComplete: true, onViewModel: vi.fn() };
+const props = { countries: ["CH"], authorizationKey: "account1", selectionRows: [], selectionComplete: true, onViewModel: vi.fn(), onOpenAssets: vi.fn() };
 function view(override: Partial<Parameters<typeof MaterialTimelineBoard>[0]> = {}) { return <MemoryRouter><MaterialTimelineBoard {...props} {...override} /></MemoryRouter>; }
-beforeEach(() => { localStorage.clear(); vi.spyOn(api, "getMaterialNotices").mockImplementation(async country => ({ countryCode: country, notices: [] })); });
+beforeEach(() => { localStorage.clear(); props.onOpenAssets.mockReset(); vi.spyOn(api, "getMaterialNotices").mockImplementation(async country => ({ countryCode: country, notices: [] })); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe("Lightweight Notice Board", () => {
   it("uses one shared four-month window and groups Model, Trim, base", async () => {
@@ -82,7 +82,44 @@ describe("Lightweight Notice Board", () => {
   it("compares explicit bases across models and preserves EN/中文 preference", async () => {
     vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data("CH", [node("A**"), node("B**", { modelName: "J8" })]));
     render(view()); await screen.findByText("A**"); fireEvent.click(screen.getByLabelText("Compare A** CH")); fireEvent.click(screen.getByLabelText("Compare B** CH"));
-    expect(screen.getByRole("link", { name: "Compare 2" }).getAttribute("href")).toContain("materials=");
+    fireEvent.click(screen.getByRole("button", { name: "Compare 2" }));
+    expect(props.onOpenAssets).toHaveBeenCalledWith({ materials: [{ brand: "JAECOO", modelName: "J7", bomTemplate: "A**" }, { brand: "JAECOO", modelName: "J8", bomTemplate: "B**" }], compare: true });
     fireEvent.click(screen.getByRole("button", { name: "中文" })); expect(screen.getByRole("region", { name: "物料公告" })).toBeTruthy(); expect(localStorage.getItem("jato:material-language")).toBe("zh");
+  });
+  it("folds calendar and reminder details into one compact row", async () => {
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data());
+    render(view()); await screen.findByText("NEW**");
+    fireEvent.click(screen.getByRole("button", { name: "▾ Notice Board" }));
+    expect(document.querySelector(".mw-board.is-collapsed")).toBeTruthy();
+    expect(screen.queryByLabelText("Window start")).toBeNull();
+    expect(document.querySelector("details.mw-notices")).toBeNull();
+    expect(document.querySelector(".mw-notices-compact")?.textContent).toContain("Reminders 0");
+    expect(screen.queryByRole("link", { name: "Material Assets" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "▸ Notice Board" }));
+    expect(screen.getByLabelText("Window start")).toBeTruthy();
+  });
+  it("shows saved A → B → C replacements without changing their actual dates", async () => {
+    const response = data("CH", [node("A**"), node("B**"), node("C**")]);
+    response.links = [{ from: "A**", to: "B**" }, { from: "B**", to: "C**" }];
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(response);
+    render(view()); const chain = await screen.findByLabelText("Replacement chain");
+    expect(chain.textContent).toBe("CHA**→B**→C**");
+    expect(document.querySelectorAll(".mw-bar")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "B**", exact: true }));
+    expect(props.onOpenAssets).toHaveBeenCalledWith({ materials: [{ brand: "JAECOO", modelName: "J7", bomTemplate: "B**" }], compare: false });
+  });
+  it("never stitches links from different countries/models, or infers links from dates", () => {
+    const ch = data("CH", [node("A"), node("B"), node("C"), node("OTHER", { modelName: "J8" })]);
+    ch.links = [{ from: "A", to: "B" }, { from: "C", to: "OTHER" }];
+    const se = data("SE", [node("A"), node("B"), node("C")]); se.links = [{ from: "B", to: "C" }];
+    expect(replacementChains([ch, se]).map(chain => [chain.countries, chain.materials])).toEqual([[["CH"], ["A", "B"]], [["SE"], ["B", "C"]]]);
+    expect(replacementChains([data("CH", [node("A"), node("B")])])).toEqual([]);
+  });
+  it("keeps branches separate and invalid cycles finite", () => {
+    const response = data("CH", [node("A"), node("B"), node("C")]);
+    response.links = [{ from: "A", to: "B" }, { from: "A", to: "C" }];
+    expect(replacementChains([response]).map(chain => chain.materials)).toEqual([["A", "B"], ["A", "C"]]);
+    response.links = [{ from: "A", to: "B" }, { from: "B", to: "A" }];
+    expect(replacementChains([response]).map(chain => chain.materials)).toEqual([["A", "B"], ["B", "A"]]);
   });
 });

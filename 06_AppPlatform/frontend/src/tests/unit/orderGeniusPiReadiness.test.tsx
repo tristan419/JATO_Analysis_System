@@ -8,6 +8,7 @@ import type { OrderGeniusGridProps, OrderGeniusGridRow } from "../../components/
 import type { VehicleAllocationPlan } from "../../types/orderGeniusVehicle";
 import type { QuantityCellResponse } from "../../types/orderGenius";
 import { api } from "../../api/client";
+import { materialAssets } from "../../api/materialAssets";
 import { OrderGeniusPage } from "../../pages/OrderGeniusPage";
 
 const render = (ui: ReactElement) => baseRender(<MemoryRouter>{ui}</MemoryRouter>);
@@ -15,7 +16,7 @@ const render = (ui: ReactElement) => baseRender(<MemoryRouter>{ui}</MemoryRouter
 const authState = vi.hoisted(() => ({ user: { role: "admin", primaryCountry: "CH", secondaryCountries: [] as string[], brands: [] as string[] }, refreshUser: vi.fn<() => Promise<boolean>>() }));
 vi.mock("../../contexts/AuthContext", async (original) => ({
   ...await original<typeof import("../../contexts/AuthContext")>(),
-  useAuth: () => ({ user: authState.user, refreshUser: authState.refreshUser }),
+  useAuth: () => ({ user: authState.user, refreshUser: authState.refreshUser, profileLoaded: true }),
 }));
 vi.mock("../../components/OrderGeniusGrid", async (original) => ({
   ...await original<typeof import("../../components/OrderGeniusGrid")>(),
@@ -286,8 +287,29 @@ describe("quantity save → PI readiness", () => {
   });
   it("exposes the existing CBU route in the BOM tools", async () => {
     await openOctober();
-    fireEvent.click(screen.getByRole("tab", { name: /BOM Admin/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /BOM \/ Assets/i }));
     expect(screen.getByRole("link", { name: "CBU Finance" }).getAttribute("href")).toBe("/product/order-genius/cbu");
+  });
+  it("keeps the new-batch toggle alongside the title without duplicate filters or subtitle", async () => {
+    await openOctober();
+    const header = screen.getByRole("heading", { name: "Order Genius" }).closest("header");
+    expect(header?.contains(screen.getByLabelText("Enter new batch"))).toBe(true);
+    expect(screen.queryByLabelText("Current Order Genius filters")).toBeNull();
+    expect(screen.queryByText(/Country order matrix with FOB pricing/)).toBeNull();
+    expect(screen.getByRole("tab", { name: /Filters/i })).toBeTruthy();
+  });
+  it("opens Assets in place and preserves the month, new-batch mode and quantity on close", async () => {
+    vi.spyOn(materialAssets, "catalog").mockResolvedValue({ today: "2026-10-31", materials: [], bindings: [], groups: [], versions: [] });
+    await openOctober(); fireEvent.click(screen.getByLabelText("Enter new batch"));
+    const quantity = screen.getByTestId("display-quantity").textContent;
+    fireEvent.click(screen.getByRole("tab", { name: /BOM \/ Assets/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Material Assets", exact: true }));
+    await screen.findByRole("dialog", { name: "Material Assets" });
+    fireEvent.click(await screen.findByRole("button", { name: "Close Material Assets" }));
+    expect(screen.queryByRole("dialog", { name: "Material Assets" })).toBeNull();
+    expect(screen.getByLabelText<HTMLInputElement>("Enter new batch").checked).toBe(true);
+    expect(screen.getByTestId("display-quantity").textContent).toBe(quantity);
+    expect(screen.getByText("PI ready · 0 units available")).toBeTruthy();
   });
 
   it("keeps common toggles outside More filters and applies them without reopening advanced filters", async () => {

@@ -16,6 +16,13 @@ function catalog(): AssetCatalog {
 beforeEach(() => { auth.role = "editor"; localStorage.clear(); vi.spyOn(materialAssets, "catalog").mockResolvedValue(catalog()); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe("Material Assets", () => {
+  it("opens the requested material inside the selection page and exposes Close", async () => {
+    const close = vi.fn();
+    render(<MemoryRouter><MaterialAssetsPage request={{ materials: [{ brand: "JAECOO", modelName: "J8", bomTemplate: "T7150D**C" }], compare: false }} onClose={close} /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "T7150D**C" });
+    expect(document.querySelector(".mw-workspace.is-embedded")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close Material Assets" })); expect(close).toHaveBeenCalledOnce();
+  });
   it("defaults EN, groups bases by model, keeps historical collapsed and has no BOM edit jump", async () => {
     render(<MemoryRouter><MaterialAssetsPage /></MemoryRouter>); await screen.findByRole("heading", { name: "T7150D**A" });
     expect(document.querySelector<HTMLDetailsElement>(".mw-historical")?.open).toBe(false);

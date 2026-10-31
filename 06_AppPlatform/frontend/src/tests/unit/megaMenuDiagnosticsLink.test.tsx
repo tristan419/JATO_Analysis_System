@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MegaMenu } from "../../components/MegaMenu";
+import { MEGA_MENU_ITEMS } from "../../utils/pageNavigation";
 
 const logoutMock = vi.fn();
 
@@ -24,6 +25,9 @@ vi.mock("../../contexts/AuthContext", () => ({
 }));
 
 describe("MegaMenu route diagnostics entry", () => {
+  it("keeps Material Assets out of Mega Menu", () => {
+    expect(JSON.stringify(MEGA_MENU_ITEMS)).not.toContain("/product/order-genius/material-assets");
+  });
   beforeEach(() => {
     Object.defineProperty(window, "matchMedia", {
       configurable: true,

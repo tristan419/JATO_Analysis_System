@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { materialAssets, saveAssetBlob } from "../api/materialAssets";
-import type { AssetCatalog, AssetMaterial, ConfigComparison } from "../types/materialAssets";
+import type { AssetCatalog, AssetMaterial, ConfigComparison, MaterialAssetRequest } from "../types/materialAssets";
 import { MaterialAssetInspector } from "../components/orderGenius/MaterialAssetInspector";
 import { errorMessage, useAssetLanguage } from "../components/orderGenius/materialAssetUi";
 import { orderGeniusPowertrainColor } from "../utils/orderGeniusBomAdmin";
@@ -15,16 +15,19 @@ function requestedMaterials(value: string | null): string[][] {
     return Array.isArray(parsed) ? parsed.filter((item): item is string[] => Array.isArray(item) && item.length === 3 && item.every(part => typeof part === "string")) : [];
   } catch { return []; }
 }
-export function MaterialAssetsPage() {
+interface Props { request?: MaterialAssetRequest; onClose?: () => void }
+export function MaterialAssetsPage({ request, onClose }: Props) {
   const { user, token, profileLoaded } = useAuth();
   const scope = JSON.stringify([token, user?.username, user?.role, user?.primaryCountry, user?.secondaryCountries, user?.brands]);
   if (!profileLoaded || !user) return <div role="status">Loading…</div>;
   if (!["order_filler", "editor", "admin", "developer"].includes(user.role)) return <div role="alert">403 · Not authorized / 无访问权限</div>;
-  return <MaterialAssetsWorkspace key={scope} scope={scope} editor={user.role !== "order_filler"} />;
+  return <MaterialAssetsWorkspace key={scope} scope={scope} editor={user.role !== "order_filler"} request={request} onClose={onClose} />;
 }
-function MaterialAssetsWorkspace({ scope, editor }: { scope: string; editor: boolean }) {
+function MaterialAssetsWorkspace({ scope, editor, request, onClose }: Props & { scope: string; editor: boolean }) {
   const { language, setLanguage, t } = useAssetLanguage();
   const [params] = useSearchParams();
+  const requested = request ? JSON.stringify(request.materials.map(m => [m.brand, m.modelName, m.bomTemplate])) : params.get("materials");
+  const compareRequested = request ? request.compare : params.get("compare") === "1";
   const [catalog, setCatalog] = useState<AssetCatalog | null>(null), [error, setError] = useState("");
   const [selected, setSelected] = useState<string[]>([]), [focus, setFocus] = useState<string | null>(null);
   const [query, setQuery] = useState(""), [historical, setHistorical] = useState(false), [revision, setRevision] = useState(0);
@@ -35,19 +38,19 @@ function MaterialAssetsWorkspace({ scope, editor }: { scope: string; editor: boo
     void materialAssets.catalog(abort.signal).then(data => {
       if (abort.signal.aborted) return;
       setCatalog(data);
-      const requested = requestedMaterials(params.get("materials"));
-      const keys = data.materials.filter(m => requested.some(parts => parts[0] === m.brand && parts[1] === m.modelName && parts[2] === m.bomTemplate)).map(m => m.key);
-      setSelected(previous => requested.length ? keys.slice(0, 8) : previous.filter(key => data.materials.some(m => m.key === key)));
+      const identities = requestedMaterials(requested);
+      const keys = data.materials.filter(m => identities.some(parts => parts[0] === m.brand && parts[1] === m.modelName && parts[2] === m.bomTemplate)).map(m => m.key);
+      setSelected(previous => identities.length ? keys.slice(0, 8) : previous.filter(key => data.materials.some(m => m.key === key)));
       setFocus(previous => keys[0] ?? (data.materials.some(m => m.key === previous) ? previous : data.materials.find(m => !m.historical)?.key ?? data.materials[0]?.key ?? null));
       if (keys.some(key => data.materials.find(m => m.key === key)?.historical)) setHistorical(true);
-      if (params.get("compare") === "1" && keys.length >= 2) {
+      if (compareRequested && keys.length >= 2) {
         setComparing(true);
         void materialAssets.compare(keys.slice(0, 8), abort.signal).then(result => { if (!abort.signal.aborted) setComparison(result); })
           .catch(e => { if (!abort.signal.aborted) setError(errorMessage(e)); }).finally(() => { if (!abort.signal.aborted) setComparing(false); });
       }
     }).catch(e => { if (!abort.signal.aborted) setError(errorMessage(e)); });
     return () => abort.abort();
-  }, [params, revision]);
+  }, [requested, compareRequested, revision]);
   const material = catalog?.materials.find(m => m.key === focus);
   const visible = catalog?.materials.filter(m => `${m.brand} ${m.modelName} ${m.bomTemplate} ${m.version} ${m.powertrain ?? ""}`.toLowerCase().includes(query.toLowerCase().trim())) ?? [];
   const renderModels = (items: AssetMaterial[]) => {
@@ -63,8 +66,8 @@ function MaterialAssetsWorkspace({ scope, editor }: { scope: string; editor: boo
     setComparing(true); setError(""); setComparison(null);
     try { setComparison(await materialAssets.compare(selected)); } catch (e) { setError(errorMessage(e)); } finally { setComparing(false); }
   };
-  return <main className="mw-workspace">
-    <header className="mw-page-header"><div><span className="mw-eyebrow">ORDER GENIUS</span><h1>{t("Material Assets", "物料资料")}</h1></div><span className="mw-spacer" /><button type="button" onClick={() => setRevision(v => v + 1)}>{t("Reload", "重读")}</button><button type="button" onClick={() => setLanguage(language === "en" ? "zh" : "en")}>{language === "en" ? "中文" : "EN"}</button></header>
+  return <section className={`mw-workspace${onClose ? " is-embedded" : ""}`}>
+    <header className="mw-page-header"><h1>{t("Material Assets", "物料资料")}</h1><span className="mw-spacer" /><button type="button" onClick={() => setRevision(v => v + 1)}>{t("Reload", "重读")}</button><button type="button" onClick={() => setLanguage(language === "en" ? "zh" : "en")}>{language === "en" ? "中文" : "EN"}</button>{onClose ? <button type="button" aria-label={t("Close Material Assets", "关闭物料资料")} onClick={onClose}>{t("Close", "关闭")}</button> : null}</header>
     {error ? <p role="alert">{error}</p> : null}
     {!catalog ? <div role="status">{error ? "—" : t("Loading…", "读取中…")}</div> : <div className="mw-assets-layout">
       <nav className="mw-material-list" aria-label={t("Materials", "物料")}><div className="mw-toolbar"><input type="search" aria-label={t("Find material", "搜索物料")} placeholder={t("Model, material…", "车型、物料号…")} value={query} onChange={e => setQuery(e.target.value)} /></div>
@@ -78,5 +81,5 @@ function MaterialAssetsWorkspace({ scope, editor }: { scope: string; editor: boo
         </tbody></table></div>
       </section> : material ? <MaterialAssetInspector key={material.key} material={material} catalog={catalog} editor={editor} t={t} scope={scope} onReload={reload} /> : <div className="mw-empty">{t("No authorized materials", "暂无获授权物料")}</div>}
     </div>}
-  </main>;
+  </section>;
 }
