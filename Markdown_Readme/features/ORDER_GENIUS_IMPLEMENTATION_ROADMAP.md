@@ -1,5 +1,15 @@
 # Order Genius — 当前状态与待办
 
+## 2026-10-31 资料面板与选品页精简（#314 后续）
+
+- 业务规则仍以 V2 Spec 顶部当前契约为准；基线 `main@5662a215`，分支 `codex/material-assets-layout`。
+- [x] Material Assets 放进选品页工具区，与 BOM Admin 共用98%屏宽面板，移除 Mega Menu 入口，保留原资料/权限/确认流程。
+- [x] 移除标题说明与重复筛选标签，新批次与标题齐平；Notice Board 折叠态压为38px单行（含窄屏未读数）。
+- [x] 显式展示已保存的国家/Model更替链，不根据日期推断，不拼接跨国家的关系。
+- [x] 本地类型检查、657项前端全量回归、生产构建、路由回归通过；补充键盘焦点测试3项通过。1920px/390px浏览器布局、嵌套确认、折叠、关闭返回及Order Filler入口验证通过。浏览器使用本地API fixtures，仅验证本轮前端，不冒充线上资料/上传验收。
+- 发布回执：[PR #315](https://github.com/tristan419/JATO_Analysis_System/pull/315) 集中记录CI与Candidate实际版本/部署身份；无成功部署回执前不视为已交付。Active/intl 不动。
+- 后端、数据库和迁移无变动；不重复实现资料、日期或关系保存能力。
+
 ## 2026-10-31 Notice Board / Material Assets
 
 - 业务规则：`ORDER_GENIUS_V2_SPEC.md` 顶部当前契约；旧阶段说明不能覆盖本节。
@@ -9,7 +19,7 @@
 - [x] 替换现有 Notice Board 为轻量日历、四月默认窗口/双柄/三年范围、Model分组和个人通知。
 - [x] 独立 Material Assets、基准配置版本、同Model图片复用、选品HEX预览、跨Model来源对比及下载。
 - [x] 必要迁移、前后端权限/引用与并发校验、自动测试、浏览器真实文件验证（本地隔离库）。
-- [ ] PR、CI、Candidate部署及真实验收（不得把本地Demo当作已上线）。
+- [x] PR #314、CI及Candidate部署：`5662a215`，release run `41154016628`；用户已提交实际页面反馈，进入上方布局收口。登录后完整业务验收仍待用户确认。
 - Active / intl：本轮未授权推广，保持不动。
 - 后续任务：有来源的AI差异解释仍需另行落实；不以确定性字段表冒充大模型结果。
 - 验证证据：前端全量647项；后端相关362项通过/1项跳过；新资料与迁移链28项通过；TypeScript与生产构建通过。独立本地PostgreSQL已从空库执行完整Alembic到0062；浏览器走真实API完成XLSX解析/UUID保存、原图上传/下载/同Model复用、跨Model单元格来源对比、390px窄屏。均未使用生产业务数据，Candidate尚待下方发布步骤。

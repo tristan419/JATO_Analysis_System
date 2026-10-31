@@ -3,7 +3,7 @@ import { api } from "../../api/client";
 import type { MaterialNotice } from "../../types/orderGenius";
 import type { AssetLanguage } from "./materialAssetUi";
 interface Props {
-  countries: string[]; authorizationKey: string; revision: number; defaultExpanded?: boolean; language?: AssetLanguage;
+  countries: string[]; authorizationKey: string; revision: number; defaultExpanded?: boolean; language?: AssetLanguage; compact?: boolean;
   onViewModel: (brand: string, model: string, country?: string, base?: string) => void;
 }
 interface EventGroup { key: string; notices: MaterialNotice[] }
@@ -16,7 +16,7 @@ function groupEvents(notices: MaterialNotice[]): EventGroup[] {
   }
   return [...groups.values()];
 }
-export function MaterialNotices({ countries, authorizationKey, revision, defaultExpanded = false, language = "en", onViewModel }: Props) {
+export function MaterialNotices({ countries, authorizationKey, revision, defaultExpanded = false, language = "en", compact = false, onViewModel }: Props) {
   const t = (en: string, zh: string): string => language === "en" ? en : zh;
   const countryKey = [...new Set(countries)].sort().join(","), scope = `${authorizationKey}|${countryKey}`;
   const currentScope = useRef(scope); currentScope.current = scope;
@@ -40,6 +40,7 @@ export function MaterialNotices({ countries, authorizationKey, revision, default
     if (results.some(r => r.status === "rejected")) setError(t("Some updates failed. Current state reloaded.", "部分记录更新失败，已重读当前状态。"));
     setBusy(false); setRetry(v => v + 1);
   };
+  if (compact) return <span className="mw-notices-compact" role="status">{t("Reminders", "提醒")} <span className="mw-count">{events.filter(g => g.notices.some(n => !n.read)).length}</span>{load.scope !== scope ? " …" : load.status === "error" ? ` · ${t("Unavailable", "读取失败")}` : ""}</span>;
   return <details className="mw-notices" open={defaultExpanded || undefined}>
     <summary title={t("Personal reminders · ±30 days · independent of the order month", "个人提醒 · 前后30天 · 不随选品月份")}>{t("Reminders", "提醒")} <span className="mw-count">{events.filter(g => g.notices.some(n => !n.read)).length}</span>{load.scope !== scope ? " …" : load.status === "error" ? ` · ${t("Unavailable", "读取失败")}` : ""}</summary>
     {load.status === "error" ? <button type="button" onClick={() => setRetry(v => v + 1)}>{t("Retry", "重试")}</button> : null}
