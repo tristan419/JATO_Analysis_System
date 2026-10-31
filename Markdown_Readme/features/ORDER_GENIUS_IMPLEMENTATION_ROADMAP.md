@@ -7,7 +7,7 @@
 - [x] 移除标题说明与重复筛选标签，新批次与标题齐平；Notice Board 折叠态压为38px单行（含窄屏未读数）。
 - [x] 显式展示已保存的国家/Model更替链，不根据日期推断，不拼接跨国家的关系。
 - [x] 本地类型检查、657项前端全量回归、生产构建、路由回归通过；补充键盘焦点测试3项通过。1920px/390px浏览器布局、嵌套确认、折叠、关闭返回及Order Filler入口验证通过。浏览器使用本地API fixtures，仅验证本轮前端，不冒充线上资料/上传验收。
-- [ ] PR/CI → Candidate，记录版本和部署身份；Active/intl 不动。
+- 发布回执：[PR #315](https://github.com/tristan419/JATO_Analysis_System/pull/315) 集中记录CI与Candidate实际版本/部署身份；无成功部署回执前不视为已交付。Active/intl 不动。
 - 后端、数据库和迁移无变动；不重复实现资料、日期或关系保存能力。
 
 ## 2026-10-31 Notice Board / Material Assets
