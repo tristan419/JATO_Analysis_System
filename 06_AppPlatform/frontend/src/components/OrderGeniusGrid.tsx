@@ -813,7 +813,7 @@ export function OrderGeniusGrid({
       const groupKey = props.data?.__groupKey || "";
       const level = props.data?.__groupLevel ?? 0;
       const kind = props.data?.__groupKind ?? "trim";
-      const material: MaterialIdentity | null = props.data?.brand && props.data.bomTemplate ? { brand: props.data.brand, modelName: props.data.__materialModel ?? props.data.modelName, bomTemplate: props.data.bomTemplate } : null;
+      const material: MaterialIdentity | null = props.data?.brand && props.data.bomTemplate?.includes("**") ? { brand: props.data.brand, modelName: props.data.__materialModel ?? props.data.modelName, bomTemplate: props.data.bomTemplate } : null;
       const index = material ? comparisonIndex(material, props.context?.comparisonMaterials ?? []) : -1;
       const expanded = props.data?.__expanded ?? false;
       const isSubgroup = level > 0;

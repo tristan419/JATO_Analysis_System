@@ -7,7 +7,8 @@
 - [x] 显式更替日期演进线；国家/Model隔离、并行型号和真实重叠不改写。
 - [x] 外/内饰首图hover与聚焦预览，点击复用现有图库。
 - [x] 数量局部保存、同格请求顺序、连续输入、列宽/滚动/展开稳定；Create PI保留保存/余量门禁。
-- [ ] 类型/自动回归/浏览器验证 → PR/CI → Candidate回执；Active不动。
+- [x] 类型/自动回归/本地Chrome交互验证通过。
+- 交付回执：[PR #316](https://github.com/tristan419/JATO_Analysis_System/pull/316) 集中记录最终CI与Candidate版本/部署身份；无成功部署回执前不视为已交付，Active不动。
 - 本地验证：类型检查、669项前端测试、生产构建、路由回归通过。Chrome156使用本地隔离API夹具验证旧→新和跨Model对比顺序/关闭保留、外内饰hover首图/多角度图库、连续输入时焦点/滚动/列宽不变、同格快速改写版本串行、窄屏横向表格与Escape；未改生产数量，未冒称Candidate登录后的真实资料CRUD已验收。
 - 后端继续复用FastAPI＋SQLAlchemy/PostgreSQL的原资料、数量及PI核验接口，不增加表或迁移，不改变报价、订单快照和关联规则。
 
