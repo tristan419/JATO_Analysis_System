@@ -228,12 +228,13 @@ describe("quantity save → PI readiness", () => {
     localStorage.setItem("jato_auth_token", "failed-session");
     await openOctober();
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ detail: "Forbidden" }, { status: 403 })));
-    fireEvent.click(screen.getByText("Save 15"));
+    await act(async () => { fireEvent.click(screen.getByText("Save 15")); });
     await screen.findByRole("link", { name: "Re-login / 重新登录" });
+    await screen.findByText("Quantity not saved: 403 Forbidden");
     if (result === false) authState.refreshUser.mockResolvedValue(false);
     else authState.refreshUser.mockRejectedValue(new Error("Offline"));
     localStorage.setItem("jato_auth_token", "renewed-session");
-    fireEvent(window, new Event("focus"));
+    await act(async () => { fireEvent(window, new Event("focus")); });
     await waitFor(() => expect(authState.refreshUser).toHaveBeenCalledTimes(1));
     if (result === "network") await screen.findByText(/无法核验登录状态/);
     expect(screen.getByRole("link", { name: "Re-login / 重新登录" })).toBeTruthy();
