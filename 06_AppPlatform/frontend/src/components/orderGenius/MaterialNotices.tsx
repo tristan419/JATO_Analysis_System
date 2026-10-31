@@ -1,91 +1,58 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { MaterialNotice } from "../../types/orderGenius";
-
-interface Props { countries: string[]; authorizationKey: string; revision: number; defaultExpanded?: boolean; onViewModel: (brand: string, model: string, country?: string, base?: string) => void }
-interface Load { scope: string; status: "loading" | "ready" | "error"; notices: MaterialNotice[] }
-interface EventGroup { key: string; brand: string; model: string; date: string; kind: MaterialNotice["kind"]; items: MaterialNotice[] }
-const LABELS = { start: "First order date / 开始下单", end: "Final order date / 最后下单日", relation: "Relation updated / 更替关系更新" };
-
+import type { AssetLanguage } from "./materialAssetUi";
+interface Props {
+  countries: string[]; authorizationKey: string; revision: number; defaultExpanded?: boolean; language?: AssetLanguage;
+  onViewModel: (brand: string, model: string, country?: string, base?: string) => void;
+}
+interface EventGroup { key: string; notices: MaterialNotice[] }
 function groupEvents(notices: MaterialNotice[]): EventGroup[] {
   const groups = new Map<string, EventGroup>();
   for (const notice of notices) {
     const key = JSON.stringify([notice.brand, notice.modelName, notice.date, notice.kind,
       ...(notice.kind === "relation" ? [notice.bomTemplate, notice.target, notice.previousTarget, notice.note, notice.changedBy] : [])]);
-    const group = groups.get(key) ?? { key, brand: notice.brand, model: notice.modelName, date: notice.date, kind: notice.kind, items: [] };
-    group.items.push(notice); groups.set(key, group);
+    const group = groups.get(key) ?? { key, notices: [] }; group.notices.push(notice); groups.set(key, group);
   }
   return [...groups.values()];
 }
-
-export function MaterialNotices({ countries, authorizationKey, revision, defaultExpanded = false, onViewModel }: Props) {
-  const countryKey = [...new Set(countries)].sort().join(",");
-  const scope = `${authorizationKey}|${countryKey}`;
-  const currentScope = useRef(scope);
-  currentScope.current = scope;
-  const [load, setLoad] = useState<Load>({ scope, status: "loading", notices: [] });
-  const [retry, setRetry] = useState(0);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const [openModels, setOpenModels] = useState<string[]>([]);
-  const [viewCountries, setViewCountries] = useState<Record<string, string>>({});
-  useEffect(() => { setExpanded(defaultExpanded); setOpenModels([]); setViewCountries({}); setError(""); setBusy(null); }, [scope, defaultExpanded]);
+export function MaterialNotices({ countries, authorizationKey, revision, defaultExpanded = false, language = "en", onViewModel }: Props) {
+  const t = (en: string, zh: string): string => language === "en" ? en : zh;
+  const countryKey = [...new Set(countries)].sort().join(","), scope = `${authorizationKey}|${countryKey}`;
+  const currentScope = useRef(scope); currentScope.current = scope;
+  const [load, setLoad] = useState<{ scope: string; status: "ready" | "error" | "loading"; notices: MaterialNotice[] }>({ scope: "", status: "loading", notices: [] });
+  const [retry, setRetry] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState("");
   useEffect(() => {
-    let current = true;
-    setLoad({ scope, status: "loading", notices: [] });
+    let current = true; setError(""); setBusy(false);
     const requested = countryKey ? countryKey.split(",") : [];
-    void Promise.all(requested.map((country) => api.getMaterialNotices(country))).then((items) => {
+    void Promise.all(requested.map(country => api.getMaterialNotices(country))).then(items => {
       if (!current) return;
-      if (items.some((item, index) => item.countryCode !== requested[index])) throw new Error("Scope changed");
-      setLoad({ scope, status: "ready", notices: items.flatMap((item) => item.notices) });
+      if (items.some((item, i) => item.countryCode !== requested[i])) throw new Error("Scope changed");
+      setLoad({ scope, status: "ready", notices: items.flatMap(item => item.notices) });
     }).catch(() => { if (current) setLoad({ scope, status: "error", notices: [] }); });
     return () => { current = false; };
   }, [scope, countryKey, revision, retry]);
   const events = groupEvents(load.scope === scope && load.status === "ready" ? load.notices : []);
-  const mark = async (event: EventGroup): Promise<void> => {
-    setBusy(event.key); setError("");
-    const read = event.items.some((notice) => !notice.read);
-    const results = await Promise.allSettled(event.items.filter((notice) => notice.read !== read)
-      .map((notice) => api.readMaterialNotice(notice.key, notice.countryCode, read)));
+  const mark = async (group: EventGroup): Promise<void> => {
+    setBusy(true); setError(""); const read = group.notices.some(n => !n.read);
+    const results = await Promise.allSettled(group.notices.filter(n => n.read !== read).map(n => api.readMaterialNotice(n.key, n.countryCode, read)));
     if (currentScope.current !== scope) return;
-    const failed = results.filter((result) => result.status === "rejected").length;
-    if (failed) setError(`${failed} records could not be updated. Reloaded current status / ${failed}条记录未能更新，已重读当前状态；未将整组标为成功。`);
-    setRetry((value) => value + 1); setBusy(null);
+    if (results.some(r => r.status === "rejected")) setError(t("Some updates failed. Current state reloaded.", "部分记录更新失败，已重读当前状态。"));
+    setBusy(false); setRetry(v => v + 1);
   };
-  const models = new Map<string, EventGroup[]>();
-  for (const event of events) {
-    const key = `${event.brand}|${event.model}`;
-    models.set(key, [...(models.get(key) ?? []), event]);
-  }
-  return <details className="og-material-notices" open={expanded}>
-    <summary onClick={(event) => { event.preventDefault(); setExpanded(!expanded); }}>My material reminders / 我的物料提醒 · {load.scope !== scope || load.status === "loading" ? "Loading / 加载中" : load.status === "error" ? "Unavailable / 读取失败" : `${events.filter((event) => event.items.some((notice) => !notice.read)).length} unread changes / 未读变化`}</summary>
-    <p>Saved account scope and actual country quotes. Past/future 30 days, not the selected order month. / 当前授权国家品牌及报价范围，过去/未来30日，不随选品月份；已读不代表切换完成。</p>
-    {load.status === "error" ? <button type="button" className="btn btn-sm" onClick={() => setRetry((value) => value + 1)}>Retry / 重读</button> : null}
-    {[...models].map(([key, items]) => <details key={key} open={openModels.includes(key)}><summary onClick={(event) => {
-      event.preventDefault(); setOpenModels((values) => values.includes(key) ? values.filter((value) => value !== key) : [...values, key]);
-    }}>{items[0].brand} · {items[0].model} · {items.length} changes / 变化 · {items.filter((event) => event.items.some((notice) => !notice.read)).length} unread / 未读</summary>
-      {items.map((event) => {
-        const countries = [...new Set(event.items.map((notice) => notice.countryCode))].sort();
-        const bases = [...new Set(event.items.map((notice) => notice.bomTemplate))];
-        const country = countries.length === 1 ? countries[0] : viewCountries[event.key] ?? "";
-        const read = event.items.every((notice) => notice.read);
-        return <div className={`og-material-notice${read ? " is-read" : ""}`} key={event.key}>
-          <div className="og-material-notice-summary"><strong>{event.date} · {LABELS[event.kind]}</strong>
-            <span>{bases.length} bases / 基准物料 · {countries.length} countries / 国家</span>
-            {countries.length > 1 ? <label>View country / 查看国家<select aria-label={`View country ${event.date} ${event.kind}`} value={country} onChange={(change) => setViewCountries((values) => ({ ...values, [event.key]: change.target.value }))}>
-              <option value="">Choose country / 选择国家</option>{countries.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select></label> : <span>{country}</span>}
-            <button type="button" className="btn btn-sm btn-ghost" disabled={!country} onClick={() => onViewModel(event.brand, event.model, country, event.items.find((item) => item.countryCode === country)?.bomTemplate)}>View model / 查看泳道</button>
-            <button type="button" className="btn btn-sm btn-ghost" disabled={busy !== null} onClick={() => void mark(event)}>{busy === event.key ? "Saving / 保存中…" : read ? "Mark unread / 标为未读" : "Mark read / 标为已读"}</button>
-          </div>
-          <details><summary>Materials and countries / 物料及国家</summary>
-            {event.items.map((notice) => <p key={notice.key}><button type="button" onClick={() => onViewModel(event.brand, event.model, notice.countryCode, notice.bomTemplate)}>{notice.countryCode} · {notice.bomTemplate}</button>{notice.kind === "relation" ? ` → ${notice.target ?? "Disconnected / 已断开"}` : ""}{notice.note ? ` · ${notice.note}` : ""} · {notice.read ? "Read / 已读" : "Unread / 未读"}</p>)}
-          </details>
-        </div>;
-      })}
-    </details>)}
-    {load.status === "ready" && events.length === 0 ? <p>No material reminders in this scope / 当前范围暂无物料提醒，不代表BOM日期已完整维护。</p> : null}
+  return <details className="mw-notices" open={defaultExpanded || undefined}>
+    <summary title={t("Personal reminders · ±30 days · independent of the order month", "个人提醒 · 前后30天 · 不随选品月份")}>{t("Reminders", "提醒")} <span className="mw-count">{events.filter(g => g.notices.some(n => !n.read)).length}</span>{load.scope !== scope ? " …" : load.status === "error" ? ` · ${t("Unavailable", "读取失败")}` : ""}</summary>
+    {load.status === "error" ? <button type="button" onClick={() => setRetry(v => v + 1)}>{t("Retry", "重试")}</button> : null}
+    {events.map(group => {
+      const n = group.notices[0], read = group.notices.every(item => item.read);
+      return <div key={group.key} className={`mw-notice${read ? " is-read" : ""}`}><span className="mw-notice-dot" />
+        <time>{n.date}</time><button type="button" className="mw-link" onClick={() => onViewModel(n.brand, n.modelName, n.countryCode, n.bomTemplate)}>{n.modelName}</button>
+        <span>{n.kind === "start" ? t("Starts", "生效") : n.kind === "end" ? t("Ends", "截止") : t("Replaced", "更替")}</span>
+        <span title={group.notices.map(item => `${item.countryCode} · ${item.bomTemplate}${item.target ? ` → ${item.target}` : ""}`).join("\n")}>{group.notices.length} {t("records", "条")}</span>
+        <button type="button" disabled={busy} onClick={() => void mark(group)}>{read ? t("Mark unread", "标未读") : t("Mark read", "标已读")}</button>
+      </div>;
+    })}
+    {load.scope === scope && load.status === "ready" && !events.length ? <span className="mw-muted">{t("No reminders", "暂无提醒")}</span> : null}
     {error ? <p role="alert">{error}</p> : null}
   </details>;
 }

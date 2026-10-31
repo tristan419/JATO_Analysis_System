@@ -18,6 +18,7 @@ import { BomTemplateLifecycleEditor } from "../components/orderGenius/BomTemplat
 import { BomCountryColumns } from "../components/orderGenius/BomCountryColumns";
 import { MaterialTimelineBoard } from "../components/orderGenius/MaterialTimelineBoard";
 import { MaterialReplacementEditor } from "../components/orderGenius/MaterialReplacementEditor";
+import { MaterialColourPreview } from "../components/orderGenius/MaterialColourPreview";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PiInvoiceExportDialog } from "../components/PiInvoiceExportDialog";
 import { PiInvoiceTemplateManager } from "../components/PiInvoiceTemplateManager";
@@ -620,6 +621,7 @@ function buildMaterialDrafts(form: AddMaterialFormState): {
 }
 
 export function OrderGeniusPage() {
+  const [photoMaterial, setPhotoMaterial] = useState<{ scope: string; row: MaterialSkuMatrixRow } | null>(null);
   const { user, refreshUser } = useAuth();
   const { allCountriesISO } = useResolvedCountry("iso");
   const userCountries = (() => {
@@ -3297,6 +3299,8 @@ export function OrderGeniusPage() {
         }}
       /> : null}
 
+      {photoMaterial?.scope === authorizationKey ? <MaterialColourPreview key={`${authorizationKey}|${photoMaterial.row.materialCode}`} material={photoMaterial.row} scope={authorizationKey} onClose={() => setPhotoMaterial(null)} /> : null}
+
       {/* ── Matrix grid (AG Grid) ─────────────────────────────────── */}
       {loading ? (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
@@ -3316,6 +3320,7 @@ export function OrderGeniusPage() {
           onGridReady={(api) => { gridApiRef.current = api; }}
           onToggleGroup={toggleProductGroup}
           onTogglePiRow={togglePiBatchRow}
+          onColourPreview={row => { const source = combinedMatrix.rows.find(item => item.materialCode === row.materialCode && item.bomTemplate === row.bomTemplate); if (source) setPhotoMaterial({ scope: authorizationKey, row: source }); }}
           columnWidthStorageScope={user?.username}
         />
       ) : (

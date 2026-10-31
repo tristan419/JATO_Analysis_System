@@ -26,6 +26,7 @@ from app.api.routes.msrp_dryrun_dashboard import router as msrp_dryrun_dashboard
 from app.api.routes.coc_match import router as coc_match_router
 from app.api.routes.advanced_analysis import router as advanced_analysis_router
 from app.api.routes.order_genius import router as order_genius_router
+from app.api.routes.material_assets import router as material_assets_router
 from app.api.routes.lease_comparison import router as lease_comparison_router
 from app.api.routes.order_genius_vehicle_allocation import router as order_genius_vehicle_allocation_router
 from app.core.config import (
@@ -111,6 +112,7 @@ app.include_router(auth_router, prefix=API_PREFIX)
 app.include_router(presence_router, prefix=API_PREFIX)
 app.include_router(coc_match_router, prefix=API_PREFIX)
 app.include_router(order_genius_router, prefix=API_PREFIX)
+app.include_router(material_assets_router, prefix=API_PREFIX)
 app.include_router(order_genius_vehicle_allocation_router, prefix=API_PREFIX)
 app.include_router(lease_comparison_router, prefix=API_PREFIX)
 app.include_router(advanced_analysis_router, prefix=API_PREFIX)

@@ -55,12 +55,11 @@ describe("Explicit material relationship maintenance", () => {
     const request = vi.spyOn(api, "getMaterialNotices").mockImplementation(async () => ({ countryCode: "SE", notices: [{ ...notice }] }));
     const mark = vi.spyOn(api, "readMaterialNotice").mockImplementation(async () => { notice.read = true; return { read: true }; });
     render(<MaterialNotices countries={["SE"]} authorizationKey="filler" revision={0} defaultExpanded onViewModel={vi.fn()} />);
-    await screen.findByText(/^My material reminders.*1 unread changes/);
-    fireEvent.click(screen.getByText(/^JAECOO · JAECOO5 BEV · 1 changes/));
+    await screen.findByRole("button", { name: "JAECOO5 BEV" });
     fireEvent.click(screen.getByRole("button", { name: /Mark read/ }));
-    await screen.findByText(/^My material reminders.*0 unread changes/);
+    await screen.findByRole("button", { name: /Mark unread/ });
     expect(mark).toHaveBeenCalledWith("key", "SE", true);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/NEW/)).toBeTruthy();
+    expect(screen.getByTitle("SE · NEW")).toBeTruthy();
   });
 });

@@ -1,287 +1,88 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client";
-import { MaterialTimelineBoard } from "../../components/orderGenius/MaterialTimelineBoard";
-import type { MaterialTimelineNode, MaterialTimelineResponse } from "../../types/orderGenius";
-
-const node = (bomTemplate: string, values: Partial<MaterialTimelineNode> = {}): MaterialTimelineNode => ({
-  bomTemplate, brand: "JAECOO", modelName: "JAECOO5 BEV", version: "Select-FWD", powertrain: "BEV",
-  materialCodes: [`${bomTemplate}-BW`, `${bomTemplate}-CL`], lifecycleStatus: "active",
-  effectiveFrom: "2026-10-15", effectiveTo: "2026-10-30", notes: ["Tyre upgrade"], issues: [],
-  quoteDate: "2026-10-15", quotedSkuCount: 2, quoteReasons: [], ...values,
+import { MaterialTimelineBoard, monthIndex, monthIso, timelineBar } from "../../components/orderGenius/MaterialTimelineBoard";
+import type { MaterialSkuMatrixRow, MaterialTimelineNode, MaterialTimelineResponse } from "../../types/orderGenius";
+const node = (base: string, values: Partial<MaterialTimelineNode> = {}): MaterialTimelineNode => ({
+  bomTemplate: base, brand: "JAECOO", modelName: "J7", version: "FWD", powertrain: "PHEV", materialCodes: [base + "-CL"],
+  lifecycleStatus: "active", effectiveFrom: "2026-10-15", effectiveTo: "2026-10-30", notes: [], issues: [], quoteDate: "2026-10-15", quotedSkuCount: 1, quoteReasons: [], ...values,
 });
-const dataset = (countryCode = "SE", nodes = [node("NEW")]): MaterialTimelineResponse => ({
-  countryCode, today: "2026-10-12", windowFrom: "2026-09-12", windowTo: "2026-11-11", nodes, links: [],
-  events: nodes.flatMap((value) => value.effectiveFrom ? [{ bomTemplate: value.bomTemplate, kind: "start" as const, date: value.effectiveFrom }] : []),
-});
-const props = { countries: ["SE"], authorizationKey: "filler-SE-JAECOO", selectionRows: [], selectionComplete: true, onViewModel: vi.fn() };
-beforeEach(() => { vi.spyOn(api, "getMaterialNotices").mockImplementation(async (country) => ({ countryCode: country, notices: [] })); });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); props.onViewModel.mockClear(); });
-async function expand() {
-  await waitFor(() => expect(screen.getByRole("status").textContent).not.toContain("Loading"));
-  fireEvent.click(screen.getByRole("button", { name: "View timeline / 查看时间轴" }));
-}
-
-describe("Model material changes board", () => {
-  it("groups parallel bases under saved trims without requiring replacement links", async () => {
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset("SE", [node("A"), node("B"), node("C", { version: "Premium" })]));
-    render(<MaterialTimelineBoard {...props} />); await expand();
-    expect(document.querySelectorAll(".og-swimlane-trim")).toHaveLength(2);
-    expect(document.querySelectorAll(".og-swimlane-track")).toHaveLength(3);
-    expect(document.querySelectorAll(".og-lineage-links path")).toHaveLength(0);
+const data = (countryCode = "CH", nodes = [node("NEW**")]): MaterialTimelineResponse => ({ countryCode, today: "2026-10-12", windowFrom: "2026-09-12", windowTo: "2026-11-11", nodes, links: [], events: [] });
+const props = { countries: ["CH"], authorizationKey: "account1", selectionRows: [], selectionComplete: true, onViewModel: vi.fn() };
+function view(override: Partial<Parameters<typeof MaterialTimelineBoard>[0]> = {}) { return <MemoryRouter><MaterialTimelineBoard {...props} {...override} /></MemoryRouter>; }
+beforeEach(() => { localStorage.clear(); vi.spyOn(api, "getMaterialNotices").mockImplementation(async country => ({ countryCode: country, notices: [] })); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+describe("Lightweight Notice Board", () => {
+  it("uses one shared four-month window and groups Model, Trim, base", async () => {
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data("CH", [node("A**"), node("B**"), node("C**", { version: "AWD" })]));
+    render(view()); await screen.findByText("A**");
+    expect(document.querySelectorAll(".mw-trim-line")).toHaveLength(2); expect(document.querySelectorAll(".mw-calendar-row")).toHaveLength(3);
+    expect(document.querySelectorAll(".mw-range")).toHaveLength(1);
+    const start = screen.getByLabelText<HTMLInputElement>("Window start"), end = screen.getByLabelText<HTMLInputElement>("Window end");
+    expect(start.value).toBe("2026-07"); expect(end.value).toBe("2026-10"); expect(start.min).toBe("2023-10"); expect(end.max).toBe("2029-10");
+    expect(screen.queryByText(/Edit.*BOM/)).toBeNull();
   });
-
-  it("opens the model swimlane and exact base from a personal reminder without acknowledging it", async () => {
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset());
-    vi.mocked(api.getMaterialNotices).mockResolvedValue({ countryCode: "SE", notices: [{
-      key: "notice-key", brand: "JAECOO", modelName: "JAECOO5 BEV", bomTemplate: "NEW", countryCode: "SE",
-      kind: "start", date: "2026-10-15", target: null, note: "", read: false,
-    }] });
-    const mark = vi.spyOn(api, "readMaterialNotice");
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
-    render(<MaterialTimelineBoard {...props} />);
-    await screen.findByText(/^My material reminders.*1 unread/);
-    fireEvent.click(screen.getByText(/^JAECOO · JAECOO5 BEV · 1 changes/));
-    fireEvent.click(screen.getByRole("button", { name: /View model \/ 查看泳道/ }));
-    await screen.findByRole("region", { name: "Material change detail" });
-    expect(screen.getByRole("region", { name: "Material change detail" }).textContent).toContain("NEW-BW");
-    expect(document.querySelector(".og-timeline-model")?.hasAttribute("open")).toBe(true);
-    expect(mark).not.toHaveBeenCalled();
+  it("retains overlapping bars, unknown dates, and metadata conflicts without invented windows", async () => {
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data("CH", [node("A**"), node("B**"), node("MISSING**", { effectiveFrom: null, effectiveTo: null }), node("CONFLICT**", { issues: ["Conflicting dates"] })]));
+    render(view()); await screen.findByText("MISSING**");
+    expect(document.querySelectorAll(".mw-bar")).toHaveLength(2); expect(screen.getAllByText("Dates to review")).toHaveLength(2);
+    expect(timelineBar(node("ENDONLY", { effectiveFrom: null }), monthIndex("2026-07"), monthIndex("2026-10"))).toBeNull();
   });
-
-  it("uses one model ruler and one fixed lane per base including unlinked materials", async () => {
-    const data = dataset("SE", [node("A1"), node("A2"), node("B1"), node("B2"), node("UNLINKED")]);
-    data.links = [{ from: "A1", to: "A2", note: "Battery upgrade" }, { from: "B1", to: "B2" }];
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
-    render(<MaterialTimelineBoard {...props} />); await expand();
-    expect(document.querySelectorAll(".og-swimlane-axis")).toHaveLength(1);
-    expect(document.querySelectorAll(".og-swimlane-track")).toHaveLength(5);
-    expect(document.querySelector(".og-lineage-pending")).toBeNull();
-    expect(document.querySelectorAll(".og-timeline-version-details")).toHaveLength(0);
-    fireEvent.click(screen.getByText(/^SE · JAECOO · JAECOO5 BEV · 5 bases/));
-    expect(screen.getByRole("button", { name: /^UNLINKED · Select-FWD/ })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "→ A2 · Note / 备注" }));
-    expect(screen.getByRole("region", { name: "Material change detail" }).textContent).toContain("Battery upgrade");
-    fireEvent.change(screen.getByRole("combobox", { name: "Time zoom" }), { target: { value: "2" } });
-    expect((document.querySelector(".og-swimlane-map") as HTMLElement).style.minWidth).toBe("1700px");
+  it("uses day boundaries and open periods, without inventing an end date", () => {
+    const bar = timelineBar(node("A", { effectiveFrom: "2026-10-16", effectiveTo: null }), monthIndex("2026-10"), monthIndex("2026-10"));
+    expect(Number.parseFloat(String(bar?.left))).toBeCloseTo(15 / 31 * 100);
+    expect(Number.parseFloat(String(bar?.width))).toBeCloseTo(16 / 31 * 100);
+    expect(monthIso(monthIndex("2026-01"))).toBe("2026-01");
   });
-
-  it("retains overlapping windows and does not stretch missing dates into an invented period", async () => {
-    const data = dataset("SE", [node("OLD"), node("NEW"), node("FUTURE", { effectiveFrom: null, effectiveTo: null })]);
-    data.links = [{ from: "OLD", to: "NEW" }, { from: "NEW", to: "FUTURE" }];
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
-    render(<MaterialTimelineBoard {...props} />); await expand();
-    const versions = [...document.querySelectorAll<HTMLElement>(".og-swimlane-track")];
-    expect(versions).toHaveLength(3);
-    expect(new Set(versions.map((version) => version.style.top)).size).toBe(3);
-    expect(screen.getByText("Dates not maintained / 日期待维护")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "FUTURE starts" })).toBeNull();
+  it("merges identical country lanes but not conflicting dates", async () => {
+    vi.spyOn(api, "getMaterialTimeline").mockImplementation(async country => data(country, [node("A**", country === "SE" ? { effectiveFrom: "2026-09-01" } : {})]));
+    render(view({ countries: ["CH", "SE"] })); await waitFor(() => expect(document.querySelectorAll(".mw-calendar-row")).toHaveLength(2));
   });
-
-  it("does not link a colliding base code from another brand", async () => {
-    const data = dataset("SE", [node("A"), node("B", { brand: "OMODA", modelName: "OMODA5 BEV" })]);
-    data.links = [{ from: "A", to: "B" }];
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
-    render(<MaterialTimelineBoard {...props} />); await expand();
-    expect(document.querySelectorAll(".og-lineage-branch")).toHaveLength(0);
+  it("selection-only keeps an explicit replacement chain, not all same-model bases", async () => {
+    const source = data("CH", [node("A**"), node("B**"), node("C**"), node("OTHER**")]); source.links = [{ from: "A**", to: "B**" }, { from: "B**", to: "C**" }];
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(source);
+    const row: MaterialSkuMatrixRow & { _countryCode: string } = { materialCode: "B**-CL", bomTemplate: "B**", brand: "JAECOO", modelName: "J7", version: "FWD", colour: "Black", colourCode: "CL", powertrain: "PHEV", fobEur: 20000, lifecycleStatus: "active", months: {}, _countryCode: "CH", editable: true, displayStyle: null, remark: null, ttl: 0 };
+    render(view({ selectionRows: [row] })); await screen.findByText("OTHER**"); fireEvent.click(screen.getByLabelText("Selection"));
+    expect(screen.queryByText("OTHER**")).toBeNull(); expect(document.querySelectorAll(".mw-calendar-row")).toHaveLength(3);
   });
-
-  it("shows only a known boundary pin for an open BOM window", async () => {
-    const data = dataset("SE", [node("OLD"), node("OPEN", { effectiveFrom: "2026-10-01", effectiveTo: null })]);
-    data.links = [{ from: "OLD", to: "OPEN" }];
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
-    render(<MaterialTimelineBoard {...props} />); await expand();
-    expect(screen.getByRole("button", { name: "OPEN starts 2026-10-01" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^OPEN ends/ })).toBeNull();
-    expect(document.querySelectorAll(".og-swimlane-period")).toHaveLength(1);
-    expect(screen.getByText(/2026-10-01 → End not set/)).toBeTruthy();
+  it("disables incomplete selection and leaves it without showing stale rows", async () => {
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data()); const rendered = render(view()); await screen.findByText("NEW**");
+    fireEvent.click(screen.getByLabelText("Selection")); rendered.rerender(view({ selectionComplete: false }));
+    expect(screen.queryByText("NEW**")).toBeNull(); fireEvent.click(screen.getByLabelText("Selection")); expect(screen.getByText("NEW**")).toBeTruthy();
   });
-
-  it("keeps personal reminder countries independent of the temporary timeline filter", async () => {
-    const timeline = vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country) => dataset(country));
-    render(<MaterialTimelineBoard {...props} countries={["CH"]} noticeCountries={["CH", "SE"]} />);
-    await waitFor(() => expect(api.getMaterialNotices).toHaveBeenCalledWith("SE"));
-    expect(timeline).toHaveBeenCalledWith("CH", false);
-    expect(timeline).not.toHaveBeenCalledWith("SE", false);
+  it("clears old countries immediately and ignores late responses", async () => {
+    let resolveOld: (value: MaterialTimelineResponse) => void = () => undefined;
+    vi.spyOn(api, "getMaterialTimeline").mockImplementation(country => country === "CH" ? new Promise(resolve => { resolveOld = resolve; }) : Promise.resolve(data("SE", [node("SWEDEN**")])));
+    const rendered = render(view()); rendered.rerender(view({ countries: ["SE"], authorizationKey: "changed" })); await screen.findByText("SWEDEN**");
+    await act(async () => resolveOld(data("CH", [node("OLDCH**")]))); expect(screen.queryByText("OLDCH**")).toBeNull();
   });
-  it("loads certificate segments only after opt-in, without changing BOM windows or reminders", async () => {
-    const record = { materialGroup: "NEW", wvtaNo: "e4*2018/858*00273*02", cocNo: "00273-02&COC002",
-      validFrom: "2026-03-11", validTo: "2026-04-14", comments: "Certificate note", pageNumber: 3, tableRowNumber: 40,
-      sourceStatus: "recorded" as const, reviewReason: null };
-    const source: MaterialTimelineResponse["wvtaReference"] = { status: "ready", filename: "reference.pdf", sha256: "a".repeat(64), updatedAt: "2026-10-12", records: [
-      record, { ...record, wvtaNo: "e4*2018/858*00273*03", validFrom: "2026-04-15", validTo: null },
-      { ...record, sourceStatus: "cancelled", reviewReason: "Red strike-through" },
-    ] };
-    const request = vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country, include) => ({ ...dataset(country), ...(include ? { wvtaReference: source } : {}) }));
-    const write = vi.spyOn(api, "updateSkuLifecycle");
-    render(<MaterialTimelineBoard {...props} />); await expand();
-    expect(request).toHaveBeenLastCalledWith("SE", false);
-    const summary = screen.getByRole("status").textContent;
-    const checkbox = screen.getByRole("checkbox", { name: /Show WVTA/ });
-    fireEvent.click(checkbox);
-    await waitFor(() => expect(screen.getByText(/Reference \/ 参考：reference.pdf/)).toBeTruthy());
-    expect(request).toHaveBeenLastCalledWith("SE", true);
-    expect(screen.getByRole("status").textContent).toBe(summary);
-    expect(document.querySelectorAll(".og-swimlane-wvta > i").length).toBe(2);
-    expect(document.querySelectorAll(".og-swimlane-wvta").length).toBe(3);
-    fireEvent.click(screen.getAllByRole("button", { name: /WVTA · e4.*00273\*02/ })[0]);
-    expect(screen.getByRole("region", { name: "Material change detail" }).textContent).toContain("2026-10-15");
-    expect(screen.getByRole("region", { name: "Material change detail" }).textContent).toContain("P3 · row / 行 40");
-    fireEvent.click(checkbox);
-    await waitFor(() => expect(document.querySelector(".og-swimlane-wvta")).toBeNull());
-    expect(write).not.toHaveBeenCalled();
+  it("does not present partial country success and supports retry", async () => {
+    const get = vi.spyOn(api, "getMaterialTimeline").mockImplementation(country => country === "CH" ? Promise.resolve(data()) : Promise.reject(new Error("network")));
+    render(view({ countries: ["CH", "SE"] })); await screen.findByRole("alert"); expect(screen.queryByText("NEW**")).toBeNull();
+    get.mockImplementation(async country => data(country)); fireEvent.click(screen.getByLabelText("Reload")); await screen.findByText("NEW**");
   });
-
-  it("allows unchecking WVTA after read failure and reports a missing source separately", async () => {
-    const request = vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country, include) => {
-      if (include) throw new Error("Reference unreadable"); return dataset(country);
-    });
-    render(<MaterialTimelineBoard {...props} />); await expand();
-    const checkbox = screen.getByRole("checkbox", { name: /Show WVTA/ }); fireEvent.click(checkbox);
-    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
-    fireEvent.click(checkbox);
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    request.mockImplementation(async (country) => ({ ...dataset(country), wvtaReference: { status: "missing", filename: null, sha256: null, updatedAt: null, records: [] } }));
-    fireEvent.click(checkbox);
-    await waitFor(() => expect(screen.getByText(/尚未配置WVTA参考/)).toBeTruthy());
+  it("keeps reminder country scope independent and never marks read on calendar navigation", async () => {
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data()); const read = vi.spyOn(api, "readMaterialNotice");
+    render(view({ noticeCountries: ["CH", "SE"] })); await screen.findByText("NEW**"); expect(api.getMaterialNotices).toHaveBeenCalledWith("SE"); expect(read).not.toHaveBeenCalled();
   });
-
-  it("does not mix different country reference snapshots", async () => {
-    vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country, include) => ({ ...dataset(country), ...(include ? {
-      wvtaReference: { status: "ready" as const, filename: "reference.pdf", sha256: country, updatedAt: "2026-10-12", records: [] },
-    } : {}) }));
-    render(<MaterialTimelineBoard {...props} countries={["CH", "SE"]} />); await expand();
-    fireEvent.click(screen.getByRole("checkbox", { name: /Show WVTA/ }));
-    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
-    expect(screen.queryByText("NEW")).toBeNull();
+  it("loads WVTA only after opt-in and rejects mixed reference snapshots", async () => {
+    const get = vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country, reference) => ({ ...data(country), ...(reference ? { wvtaReference: { status: "ready", filename: "ref.pdf", sha256: country, updatedAt: null, records: [] } } : {}) }));
+    render(view({ countries: ["CH", "SE"] })); await screen.findByText("NEW**"); expect(get).toHaveBeenCalledWith("CH", false);
+    fireEvent.click(screen.getByLabelText("Show reference")); await screen.findByRole("alert"); expect(screen.queryByText("NEW**")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Show reference")); await screen.findByText("NEW**");
   });
-
-  it("shows the admin-only upload confirmation and saves via the existing upload helper", async () => {
-    vi.stubGlobal("crypto", { subtle: { digest: vi.fn().mockResolvedValue(new Uint8Array(32).fill(170).buffer) } });
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset());
-    const upload = vi.spyOn(api, "cocFillUploadFile").mockResolvedValue("upload-id");
-    const save = vi.spyOn(api, "setWvtaReference").mockResolvedValue({ filename: "new.pdf", sha256: "a".repeat(64), recordCount: 2, reviewCount: 0, cancelledCount: 1 });
-    const view = render(<MaterialTimelineBoard {...props} />); await expand();
-    expect(screen.queryByLabelText(/Replace WVTA reference PDF/)).toBeNull();
-    view.rerender(<MaterialTimelineBoard {...props} canManageReference />);
-    const file = new File(["pdf"], "new.pdf", { type: "application/pdf" });
-    Object.defineProperty(file, "arrayBuffer", { value: async () => new ArrayBuffer(3) });
-    fireEvent.change(screen.getByLabelText(/Replace WVTA reference PDF/), { target: { files: [file] } });
-    expect(screen.getByRole("dialog").textContent).toContain("BOM dates, links, prices and PI remain unchanged");
-    expect(upload).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Upload reference / 上传参考" }));
-    await waitFor(() => expect(screen.getByText(/Reference saved/)).toBeTruthy());
-    expect(upload).toHaveBeenCalledWith(file, `wvta-reference-${"aa".repeat(32)}`);
-    expect(save).toHaveBeenCalledWith("upload-id", "aa".repeat(32));
+  it("reloads after BOM maintenance and permission changes", async () => {
+    const get = vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data()); const rendered = render(view()); await screen.findByText("NEW**");
+    rendered.rerender(view({ bomEditing: true })); expect(screen.queryByText("NEW**")).toBeNull();
+    rendered.rerender(view()); await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    rendered.rerender(view({ authorizationKey: "newRole" })); await waitFor(() => expect(get).toHaveBeenCalledTimes(3));
   });
-
-  it("aggregates colors and countries by model and opens its dated detail without writing", async () => {
-    vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country) => dataset(country));
-    const write = vi.spyOn(api, "updateSkuLifecycle");
-    render(<MaterialTimelineBoard {...props} countries={["CH", "SE"]} />);
-    await expand();
-    expect(screen.getByRole("status").textContent).toContain("1 models");
-    fireEvent.click(screen.getByRole("button", { name: /CH \/ SE · JAECOO · JAECOO5 BEV/ }));
-    expect(screen.getByText(/As of.*2026-10-12/).textContent).toContain("Not the selected order month");
-    fireEvent.click(screen.getAllByRole("button", { name: /NEW · Select-FWD/ })[0]);
-    const detail = screen.getByRole("region", { name: "Material change detail" });
-    expect(detail.textContent).toContain("Tyre upgrade");
-    expect(detail.textContent).toContain("NEW-BW · NEW-CL");
-    fireEvent.click(screen.getByRole("button", { name: "View model selection / 查看车型选品" }));
-    expect(props.onViewModel).toHaveBeenCalledWith("JAECOO", "JAECOO5 BEV");
-    expect(write).not.toHaveBeenCalled();
-  });
-
-  it("keeps missing dates and relations explicit rather than inventing an upgrade", async () => {
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset("SE", [node("UNKNOWN", { effectiveFrom: null, effectiveTo: null })]));
-    render(<MaterialTimelineBoard {...props} />);
-    await expand();
-    expect(screen.getByText(/Relation not maintained \/ 关联未维护/)).toBeTruthy();
-    expect(screen.getByText("Dates not maintained / 日期待维护")).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toContain("0 models");
-    expect(screen.queryByRole("button", { name: /UNKNOWN starts/ })).toBeNull();
-  });
-
-  it("only-selection retains a saved whole chain, not unrelated same-model bases", async () => {
-    const data = dataset("SE", [node("OLD"), node("MID"), node("NEW"), node("UNRELATED")]);
-    data.links = [{ from: "OLD", to: "MID" }, { from: "MID", to: "NEW" }];
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data);
-    render(<MaterialTimelineBoard {...props} selectionRows={[{
-      _countryCode: "SE", materialCode: "NEW-BW", bomTemplate: "NEW", brand: "JAECOO", modelName: "JAECOO5 BEV",
-      version: "Select-FWD", powertrain: "BEV", colour: "White", colourCode: "BW", fobEur: 1000,
-      lifecycleStatus: "active", editable: true, displayStyle: null, months: {}, ttl: 0, remark: null,
-    }]} />);
-    await expand();
-    fireEvent.click(screen.getByRole("checkbox", { name: /Only current selection/ }));
-    expect(document.querySelectorAll(".og-swimlane-track")).toHaveLength(3);
-    expect(screen.getByText("→ MID")).toBeTruthy();
-    expect(screen.getByText("→ NEW")).toBeTruthy();
-    expect(screen.queryByText("UNRELATED")).toBeNull();
-    expect(screen.getAllByText("OLD").length).toBeGreaterThan(0);
-    expect(document.querySelectorAll(".og-swimlane-axis").length).toBe(1);
-  });
-
-  it("disables selection filtering until the full selection has loaded", async () => {
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset());
-    render(<MaterialTimelineBoard {...props} selectionComplete={false} />);
-    await expand();
-    expect((screen.getByRole("checkbox", { name: /Only current selection/ }) as HTMLInputElement).disabled).toBe(true);
-  });
-
-  it("does not call an incomplete selection empty and allows leaving that filter", async () => {
-    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset());
-    const view = render(<MaterialTimelineBoard {...props} />);
-    await expand();
-    fireEvent.click(screen.getByRole("checkbox", { name: /Only current selection/ }));
-    view.rerender(<MaterialTimelineBoard {...props} selectionComplete={false} />);
-    expect(screen.getByRole("status").textContent).toContain("Selection loading");
-    expect(screen.queryByText("No eligible products in this scope / 当前范围没有符合条件的产品。")).toBeNull();
-    expect((screen.getByRole("checkbox", { name: /Only current selection/ }) as HTMLInputElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole("checkbox", { name: /Only current selection/ }));
-    expect(screen.getByText("NEW")).toBeTruthy();
-  });
-
-  it("clears old countries immediately and ignores their late response", async () => {
-    let resolveOld: (value: MaterialTimelineResponse) => void = () => {};
-    vi.spyOn(api, "getMaterialTimeline").mockImplementation((country) => country === "CH"
-      ? new Promise((resolve) => { resolveOld = resolve; }) : Promise.resolve(dataset("SE", [node("SWEDEN")])));
-    const view = render(<MaterialTimelineBoard {...props} countries={["CH"]} />);
-    view.rerender(<MaterialTimelineBoard {...props} countries={["SE"]} />);
-    await expand();
-    await act(async () => { resolveOld(dataset("CH", [node("SECRET-OLD-COUNTRY")])); });
-    expect(screen.getByText("SWEDEN")).toBeTruthy();
-    expect(screen.queryByText("SECRET-OLD-COUNTRY")).toBeNull();
-  });
-
-  it("does not present partial country success and reloads after failure", async () => {
-    const request = vi.spyOn(api, "getMaterialTimeline").mockImplementation(async (country) => {
-      if (country === "CH") throw new Error("private backend detail");
-      return dataset(country);
-    });
-    render(<MaterialTimelineBoard {...props} countries={["CH", "SE"]} />);
-    await expand();
-    expect(screen.getByRole("alert").textContent).toContain("Unable to read");
-    expect(screen.queryByText("NEW")).toBeNull();
-    expect(screen.queryByText("private backend detail")).toBeNull();
-    request.mockImplementation(async (country) => dataset(country));
-    fireEvent.click(screen.getByRole("button", { name: "Reload / 重读" }));
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    expect(screen.getByRole("status").textContent).toContain("1 models");
-  });
-
-  it("rereads after closing BOM maintenance and after authorization changes", async () => {
-    const request = vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(dataset());
-    const view = render(<MaterialTimelineBoard {...props} />);
-    await expand();
-    view.rerender(<MaterialTimelineBoard {...props} bomEditing />);
-    expect(screen.queryByText("NEW")).toBeNull();
-    request.mockResolvedValue(dataset("SE", [node("UPDATED")]));
-    view.rerender(<MaterialTimelineBoard {...props} />);
-    await waitFor(() => expect(screen.getByText("UPDATED")).toBeTruthy());
-    request.mockResolvedValue(dataset("SE", []));
-    view.rerender(<MaterialTimelineBoard {...props} authorizationKey="revoked-brand" />);
-    expect(screen.queryByText("UPDATED")).toBeNull();
-    await waitFor(() => expect(screen.getByText("No eligible products in this scope / 当前范围没有符合条件的产品。")).toBeTruthy());
+  it("compares explicit bases across models and preserves EN/中文 preference", async () => {
+    vi.spyOn(api, "getMaterialTimeline").mockResolvedValue(data("CH", [node("A**"), node("B**", { modelName: "J8" })]));
+    render(view()); await screen.findByText("A**"); fireEvent.click(screen.getByLabelText("Compare A** CH")); fireEvent.click(screen.getByLabelText("Compare B** CH"));
+    expect(screen.getByRole("link", { name: "Compare 2" }).getAttribute("href")).toContain("materials=");
+    fireEvent.click(screen.getByRole("button", { name: "中文" })); expect(screen.getByRole("region", { name: "物料公告" })).toBeTruthy(); expect(localStorage.getItem("jato:material-language")).toBe("zh");
   });
 });
