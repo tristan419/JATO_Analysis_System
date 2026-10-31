@@ -20,9 +20,11 @@ import { BomTemplateLifecycleEditor } from "../components/orderGenius/BomTemplat
 import { BomCountryColumns } from "../components/orderGenius/BomCountryColumns";
 import { MaterialTimelineBoard } from "../components/orderGenius/MaterialTimelineBoard";
 import { MaterialReplacementEditor } from "../components/orderGenius/MaterialReplacementEditor";
-import { MaterialColourPreview } from "../components/orderGenius/MaterialColourPreview";
+import { MaterialComparisonPanel } from "../components/orderGenius/MaterialConfigurationComparison";
+import { MaterialCompareLabel, comparisonIndex, materialIdentityKey } from "../components/orderGenius/materialComparison";
+import { materialAssets } from "../api/materialAssets";
 import { OrderGeniusWorkspacePanel } from "../components/orderGenius/OrderGeniusWorkspacePanel";
-import type { MaterialAssetRequest } from "../types/materialAssets";
+import type { AssetCatalog, MaterialAssetRequest, MaterialIdentity } from "../types/materialAssets";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PiInvoiceExportDialog } from "../components/PiInvoiceExportDialog";
 import { PiInvoiceTemplateManager } from "../components/PiInvoiceTemplateManager";
@@ -99,6 +101,7 @@ import type {
 } from "../types/orderGeniusVehicle";
 
 const MaterialAssetsPanel = lazy(() => import("./MaterialAssetsPage").then(module => ({ default: module.MaterialAssetsPage })));
+const EMPTY_COMPARISON: MaterialIdentity[] = [];
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -626,7 +629,6 @@ function buildMaterialDrafts(form: AddMaterialFormState): {
 }
 
 export function OrderGeniusPage() {
-  const [photoMaterial, setPhotoMaterial] = useState<{ scope: string; row: MaterialSkuMatrixRow } | null>(null);
   const { user, refreshUser } = useAuth();
   const { allCountriesISO } = useResolvedCountry("iso");
   const userCountries = (() => {
@@ -694,6 +696,25 @@ export function OrderGeniusPage() {
   const [showPtAdmin, setShowPtAdmin] = useState(false);
   const [showBomAdmin, setShowBomAdmin] = useState(false);
   const [assetRequest, setAssetRequest] = useState<MaterialAssetRequest | null>(null);
+  const [comparisonSelection, setComparisonSelection] = useState<{ scope: string; materials: MaterialIdentity[] }>({ scope: "", materials: [] });
+  const [comparisonRequest, setComparisonRequest] = useState<{ scope: string; materials: MaterialIdentity[] } | null>(null);
+  const comparisonMaterials = comparisonSelection.scope === authorizationKey ? comparisonSelection.materials : EMPTY_COMPARISON;
+  const photoCatalog = useRef<{ scope: string; promise: Promise<AssetCatalog> } | null>(null);
+  const loadPhotoCatalog = useCallback((): Promise<AssetCatalog> => {
+    if (photoCatalog.current?.scope === authorizationKey) return photoCatalog.current.promise;
+    const promise = materialAssets.catalog().catch(failure => { if (photoCatalog.current?.promise === promise) photoCatalog.current = null; throw failure; });
+    photoCatalog.current = { scope: authorizationKey, promise }; return promise;
+  }, [authorizationKey]);
+  const toggleComparison = useCallback((material: MaterialIdentity): void => setComparisonSelection(previous => {
+    material = { brand: material.brand, modelName: material.modelName, bomTemplate: material.bomTemplate };
+    const selected = previous.scope === authorizationKey ? previous.materials : [];
+    const index = comparisonIndex(material, selected);
+    return { scope: authorizationKey, materials: index >= 0 ? selected.filter(item => materialIdentityKey(item) !== materialIdentityKey(material)) : selected.length < 8 ? [...selected, material] : selected };
+  }), [authorizationKey]);
+  const openComparison = (materials: MaterialIdentity[]): void => {
+    materials = materials.map(({ brand, modelName, bomTemplate }) => ({ brand, modelName, bomTemplate }));
+    setComparisonSelection({ scope: authorizationKey, materials }); setComparisonRequest({ scope: authorizationKey, materials });
+  };
   const [showDeck, setShowDeck] = useState(true);
   const [controlTab, setControlTab] = useState<OrderGeniusControlTab>("filters");
   const [consolidatedView, setConsolidatedView] = useState(false);
@@ -796,6 +817,7 @@ export function OrderGeniusPage() {
   const [quantityIssue, setQuantityIssue] = useState<OrderGeniusIssue | null>(null);
   const [locateTarget, setLocateTarget] = useState<OrderGeniusIssue | null>(null);
   const quantityVersionRef = useRef<Record<string, number>>({});
+  const quantitySavesRef = useRef(new Map<string, Promise<void>>());
   const gridApiRef = useRef<GridApi<OrderGeniusGridRow> | null>(null);
 
   // ── PI batch creation ─────────────────────────────────────────────
@@ -838,6 +860,7 @@ export function OrderGeniusPage() {
     setMatrices({});
     setOptions(null);
     setQuantityDrafts({});
+    setSavingCells(new Set()); setCellErrors({}); quantitySavesRef.current.clear();
     setQuantityDraftAllocations({}); setQuantityIssue(null); setPiBatchIssue(null); setLocateTarget(null);
     quantityVersionRef.current = {};
     setPiSelectedRowIds(new Set());
@@ -1072,6 +1095,7 @@ export function OrderGeniusPage() {
     const makeRow = (r: MatrixRowWithCountry, indent = false, includeParentRemark = true): OrderGeniusGridRow => {
       const row: OrderGeniusGridRow = {
         materialCode: r.materialCode,
+        brand: r.brand,
         bomTemplate: r.bomTemplate,
         modelName: r.modelName,
         version: r.version,
@@ -1080,6 +1104,7 @@ export function OrderGeniusPage() {
         colourTier: r.colourTier,
         colourHex: r.colourHex,
         interiorColorName: r.interiorColorName,
+        interiorColourCode: r.interiorColourCode,
         fobEur: matrixDisplayFob(r, selectedMonth),
         _months: r.months,
         lifecycleStatus: r.lifecycleStatus,
@@ -1163,6 +1188,9 @@ export function OrderGeniusPage() {
       const aggregate = aggregateRows(params.rows);
       const header: OrderGeniusGridRow = {
         materialCode: `__grp_${params.groupKey.replace(/[^a-zA-Z0-9]/g, "_")}`,
+        brand: params.rows[0]?.brand,
+        bomTemplate: params.kind === "bom" ? params.label : new Set(params.rows.map(row => row.bomTemplate)).size === 1 ? params.rows[0]?.bomTemplate : undefined,
+        __materialModel: params.rows[0]?.modelName,
         modelName: params.label,
         version: "",
         colour: "",
@@ -1357,6 +1385,7 @@ export function OrderGeniusPage() {
   const loadMatricesRef = useRef(loadMatrices); loadMatricesRef.current = loadMatrices;
   const batchEntryRef = useRef(newBatchEntry); batchEntryRef.current = newBatchEntry;
   const allocationPlansRef = useRef(piAllocationPlans); allocationPlansRef.current = piAllocationPlans;
+  const quantityAuthorizationRef = useRef(authorizationKey); quantityAuthorizationRef.current = authorizationKey;
 
   const toggleProductGroup = useCallback((groupKey: string) => {
     setExpandedProductGroups((prev) => {
@@ -1372,9 +1401,11 @@ export function OrderGeniusPage() {
       if (data.__type === "groupHeader") return;
       const monthField = `month_${month}` as `month_${number}`;
       const year = selYearRef.current;
+      const authorization = quantityAuthorizationRef.current;
       const countryCode = data._countryCode || selCountriesRef.current[0] || "SE";
       const key = quantityCellKey(countryCode, data.materialCode, month, year);
-      const oldRowVersion = data._versions[monthField] ?? quantityVersionRef.current[key] ?? 0;
+      const queueKey = `${authorization}|${key}`;
+      const oldRowVersion = quantityVersionRef.current[key] ?? data._versions[monthField] ?? 0;
       const oldQuantityRaw = Number(oldValue);
       const oldQuantity = oldValue != null && Number.isFinite(oldQuantityRaw) ? oldQuantityRaw : null;
       const nextQuantityRaw = Number(newValue);
@@ -1422,11 +1453,16 @@ export function OrderGeniusPage() {
         includeHistorical: data.historicalBackfill === true,
       };
 
+      const previousSave = quantitySavesRef.current.get(queueKey) ?? Promise.resolve();
+      const task = previousSave.then(async () => {
       try {
-        const result = await api.updateQuantityCell(payload);
+        if (authorization !== quantityAuthorizationRef.current) throw new Error("Authorization changed");
+        const result = await api.updateQuantityCell({ ...payload, rowVersion: quantityVersionRef.current[key] ?? payload.rowVersion });
+        if (authorization !== quantityAuthorizationRef.current) return;
+        quantityVersionRef.current[key] = result.rowVersion;
+        if (quantitySavesRef.current.get(queueKey) !== task) return;
         data[monthField] = batchEntry ? Math.max(0, result.quantity - allocated) : result.quantity;
         data._versions[monthField] = result.rowVersion;
-        quantityVersionRef.current[key] = result.rowVersion;
         if (selYearRef.current === year) setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
           quantity: result.quantity,
           isEditable: true,
@@ -1435,6 +1471,7 @@ export function OrderGeniusPage() {
         clearDraft();
         setQuantityIssue((current) => current?.materialCode === data.materialCode && current.country === countryCode ? null : current);
       } catch (err: unknown) {
+        if (authorization !== quantityAuthorizationRef.current) throw err;
         const msg = getErrorMessage(err);
         setQuantityIssue(orderGeniusIssue(err) ?? { code: "quantity_save", country: countryCode, materialCode: data.materialCode,
           month: `${year}-${String(month).padStart(2, "0")}`, message: msg,
@@ -1442,12 +1479,20 @@ export function OrderGeniusPage() {
         const authStatus = getErrorStatus(err);
         if (authStatus === 401 || authStatus === 403) {
           setCellErrors((prev) => ({ ...prev, [key]: msg }));
-          return;
+          throw err;
         }
         setCellErrors((prev) => ({ ...prev, [key]: msg }));
         // Re-read is safe; only the user's explicit Retry may submit the retained draft.
         if (authStatus === 409 || oldQuantity == null) loadMatricesRef.current();
-      } finally {
+        throw err;
+      }
+      });
+      quantitySavesRef.current.set(queueKey, task);
+      try { await task; } catch { /* The failed cell retains its draft; queued writes never retry it implicitly. */ }
+      finally {
+        if (quantitySavesRef.current.get(queueKey) !== task) return;
+        quantitySavesRef.current.delete(queueKey);
+        if (authorization !== quantityAuthorizationRef.current) return;
         setPiBatchRefreshKey((current) => current + 1);
         setSavingCells((prev) => {
           const next = new Set(prev);
@@ -1640,8 +1685,6 @@ export function OrderGeniusPage() {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setPiAllocationPlans({});
-          setPiExistingBatches([]);
           setPiPlanError(getErrorMessage(err));
         }
       })
@@ -3287,6 +3330,9 @@ export function OrderGeniusPage() {
         canMaintainRelations={canMaintainBom}
         canManageReference={isAdmin}
         onOpenAssets={openMaterialAssets}
+        comparisonMaterials={comparisonMaterials}
+        onToggleComparison={toggleComparison}
+        onCompare={openComparison}
         onViewModel={(brand, model, noticeCountry) => {
           if (noticeCountry) setSelectedCountries([noticeCountry]);
           setBrandFilter(brand); setModelFilter(model); setPowertrainFilter("");
@@ -3294,7 +3340,10 @@ export function OrderGeniusPage() {
         }}
       /> : null}
 
-      {photoMaterial?.scope === authorizationKey ? <MaterialColourPreview key={`${authorizationKey}|${photoMaterial.row.materialCode}`} material={photoMaterial.row} scope={authorizationKey} onClose={() => setPhotoMaterial(null)} /> : null}
+      {comparisonMaterials.length ? <div className="mw-compare-bar" aria-label="Material comparison selection">{comparisonMaterials.map((material, index) => <MaterialCompareLabel key={materialIdentityKey(material)} index={index}>{material.bomTemplate}</MaterialCompareLabel>)}
+        <button type="button" disabled={comparisonMaterials.length < 2} onClick={() => openComparison(comparisonMaterials)}>Compare {comparisonMaterials.length}</button>
+        <button type="button" onClick={() => setComparisonSelection({ scope: authorizationKey, materials: [] })}>Clear comparison</button>
+      </div> : null}
 
       {/* ── Matrix grid (AG Grid) ─────────────────────────────────── */}
       {loading ? (
@@ -3308,14 +3357,17 @@ export function OrderGeniusPage() {
           selectedRowIds={piSelectedRowIds}
           selectableRowIds={selectablePiRowIds}
           piSelectionSummary={piSelectionSummary}
-          canEditQuantities={canFillOrders && (!newBatchEntry || (!piPlanLoading && !piPlanError && selectedMonth != null))}
+          canEditQuantities={canFillOrders && (!newBatchEntry || (selectedMonth != null && selectedCountries.every(country => piAllocationPlans[country]?.year === selectedYear && piAllocationPlans[country]?.month === selectedMonth)))}
           visibleColumns={visibleColumns}
           showCountry={selectedCountries.length > 1}
           onCellValueChanged={handleCellValueChanged}
           onGridReady={(api) => { gridApiRef.current = api; }}
           onToggleGroup={toggleProductGroup}
           onTogglePiRow={togglePiBatchRow}
-          onColourPreview={row => { const source = combinedMatrix.rows.find(item => item.materialCode === row.materialCode && item.bomTemplate === row.bomTemplate); if (source) setPhotoMaterial({ scope: authorizationKey, row: source }); }}
+          photoScope={authorizationKey}
+          loadPhotoCatalog={loadPhotoCatalog}
+          comparisonMaterials={comparisonMaterials}
+          onToggleComparison={toggleComparison}
           columnWidthStorageScope={user?.username}
         />
       ) : (
@@ -3361,9 +3413,10 @@ export function OrderGeniusPage() {
             />
         </OrderGeniusWorkspacePanel>
       )}
-      {assetRequest && canFillOrders ? <OrderGeniusWorkspacePanel label="Material Assets" onClose={() => setAssetRequest(null)}>
-        <Suspense fallback={<p role="status">Loading…</p>}><MaterialAssetsPanel key={authorizationKey} request={assetRequest} onClose={() => setAssetRequest(null)} /></Suspense>
+      {assetRequest && canFillOrders ? <OrderGeniusWorkspacePanel label="Material Assets" onClose={() => { photoCatalog.current = null; setAssetRequest(null); }}>
+        <Suspense fallback={<p role="status">Loading…</p>}><MaterialAssetsPanel key={authorizationKey} request={assetRequest} onClose={() => { photoCatalog.current = null; setAssetRequest(null); }} /></Suspense>
       </OrderGeniusWorkspacePanel> : null}
+      {comparisonRequest?.scope === authorizationKey && canFillOrders ? <MaterialComparisonPanel key={authorizationKey} materials={comparisonRequest.materials} onClose={() => setComparisonRequest(null)} /> : null}
     </section>
   );
 }

@@ -100,6 +100,51 @@ async function openOctober() {
 }
 
 describe("quantity save → PI readiness", () => {
+  it("serializes same-cell saves, uses the latest version and never replaces the newer input with an older response", async () => {
+    await openOctober();
+    const first = deferred<QuantityCellResponse>(), second = deferred<QuantityCellResponse>();
+    const save = vi.spyOn(api, "updateQuantityCell").mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    fireEvent.click(screen.getByText("Save 15"));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByText("Save 80"));
+    expect(screen.getByTestId("display-quantity").textContent).toBe("80"); expect(save).toHaveBeenCalledTimes(1);
+    await act(async () => first.resolve(savedQuantity));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls[1][0]).toMatchObject({ quantity: 80, rowVersion: 2 });
+    expect(screen.getByTestId("display-quantity").textContent).toBe("80");
+    vi.mocked(api.getVehicleAllocationOrderMatrixPlan).mockResolvedValue(plan(80));
+    await act(async () => second.resolve({ ...savedQuantity, quantity: 80, rowVersion: 3 }));
+    await screen.findByText("PI ready · 78 units available");
+    expect(screen.getByTestId("display-quantity").textContent).toBe("80");
+  });
+
+  it("retains the newest draft and does not implicitly submit a queued edit after the earlier save failed", async () => {
+    await openOctober(); const first = deferred<QuantityCellResponse>();
+    const save = vi.spyOn(api, "updateQuantityCell").mockReturnValue(first.promise);
+    fireEvent.click(screen.getByText("Save 15")); await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByText("Save 80"));
+    await act(async () => first.reject(new Error("offline")));
+    await screen.findByText("Quantity not saved: offline");
+    expect(save).toHaveBeenCalledOnce(); expect(screen.getByTestId("display-quantity").textContent).toBe("80");
+    expect(screen.getByTestId("eligible-rows").textContent).toBe("0");
+  });
+
+  it("keeps new-batch inputs enabled during saves and availability refresh, while PI creation stays gated", async () => {
+    await openOctober(); fireEvent.click(screen.getByLabelText("Enter new batch"));
+    const first = deferred<QuantityCellResponse>(), refresh = deferred<VehicleAllocationPlan>();
+    vi.spyOn(api, "updateQuantityCell").mockReturnValue(first.promise);
+    vi.mocked(api.getVehicleAllocationOrderMatrixPlan).mockReturnValue(refresh.promise);
+    fireEvent.click(screen.getByText("Save 15"));
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Save 80" }).disabled).toBe(false);
+    expect(screen.getByTestId("eligible-rows").textContent).toBe("0");
+    await act(async () => first.resolve({ ...savedQuantity, quantity: 17 }));
+    await screen.findByText("Updating PI availability…");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Save 80" }).disabled).toBe(false);
+    await act(async () => refresh.reject(new Error("offline")));
+    await screen.findByText("PI availability failed: offline");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Save 80" }).disabled).toBe(false);
+    expect(screen.getByTestId("eligible-rows").textContent).toBe("0");
+  });
   it("loads the confirmed country scope once, without speculative matrix/options requests", async () => {
     const countries = deferred<Awaited<ReturnType<typeof api.getOrderGeniusCountries>>>();
     vi.mocked(api.getOrderGeniusCountries).mockReturnValue(countries.promise);
@@ -183,12 +228,13 @@ describe("quantity save → PI readiness", () => {
     localStorage.setItem("jato_auth_token", "failed-session");
     await openOctober();
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ detail: "Forbidden" }, { status: 403 })));
-    fireEvent.click(screen.getByText("Save 15"));
+    await act(async () => { fireEvent.click(screen.getByText("Save 15")); });
     await screen.findByRole("link", { name: "Re-login / 重新登录" });
+    await screen.findByText("Quantity not saved: 403 Forbidden");
     if (result === false) authState.refreshUser.mockResolvedValue(false);
     else authState.refreshUser.mockRejectedValue(new Error("Offline"));
     localStorage.setItem("jato_auth_token", "renewed-session");
-    fireEvent(window, new Event("focus"));
+    await act(async () => { fireEvent(window, new Event("focus")); });
     await waitFor(() => expect(authState.refreshUser).toHaveBeenCalledTimes(1));
     if (result === "network") await screen.findByText(/无法核验登录状态/);
     expect(screen.getByRole("link", { name: "Re-login / 重新登录" })).toBeTruthy();

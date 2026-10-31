@@ -1,6 +1,7 @@
 export type AssetKind = "config" | "exterior" | "interior";
+export interface MaterialIdentity { brand: string; modelName: string; bomTemplate: string }
 export interface MaterialAssetRequest {
-  materials: Array<{ brand: string; modelName: string; bomTemplate: string }>;
+  materials: MaterialIdentity[];
   compare: boolean;
 }
 export interface AssetColour { key: string; code: string | null; name: string | null; hex: string | null }

@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { api } from "../../api/client";
-import type { MaterialAssetRequest } from "../../types/materialAssets";
+import type { MaterialAssetRequest, MaterialIdentity } from "../../types/materialAssets";
+import { comparisonIndex, MaterialCompareLabel } from "./materialComparison";
 import type { MaterialSkuMatrixRow, MaterialTimelineNode, MaterialTimelineResponse } from "../../types/orderGenius";
 import { orderGeniusPowertrainColor } from "../../utils/orderGeniusBomAdmin";
 import { MaterialNotices } from "./MaterialNotices";
@@ -14,6 +15,9 @@ interface Props {
   bomEditing?: boolean; canManageReference?: boolean; canMaintainRelations?: boolean;
   onViewModel: (brand: string, model: string, country?: string) => void;
   onOpenAssets: (request: MaterialAssetRequest) => void;
+  comparisonMaterials: MaterialIdentity[];
+  onToggleComparison: (material: MaterialIdentity) => void;
+  onCompare: (materials: MaterialIdentity[]) => void;
 }
 interface TimelineRow { id: string; node: MaterialTimelineNode; countries: string[]; target?: string }
 interface ReplacementChain { brand: string; model: string; materials: string[]; countries: string[]; notes: string[] }
@@ -60,20 +64,19 @@ export function timelineBar(node: MaterialTimelineNode, from: number, to: number
   const end = Math.min(right, node.effectiveTo ? day(node.effectiveTo) + 86400000 : right);
   return end <= start ? null : { left: `${100 * (start - left) / (right - left)}%`, width: `${100 * (end - start) / (right - left)}%` };
 }
-export function MaterialTimelineBoard({ countries, noticeCountries = countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, canManageReference = false, onOpenAssets }: Props) {
+export function MaterialTimelineBoard({ countries, noticeCountries = countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, canManageReference = false, onOpenAssets, comparisonMaterials, onToggleComparison, onCompare }: Props) {
   const { language, setLanguage, t } = useAssetLanguage();
   const [expanded, setExpanded] = useState(true);
   const [onlySelection, setOnlySelection] = useState(false);
   const [showWvta, setShowWvta] = useState(false);
   const [revision, setRevision] = useState(0);
   const [range, setRange] = useState<{ anchor: string; from: number; to: number } | null>(null);
-  const [selected, setSelected] = useState<string[]>([]);
   const [focus, setFocus] = useState<string | null>(null);
   const countryKey = [...new Set(countries)].sort().join(",");
   const scope = `${authorizationKey}|${countryKey}|${showWvta}`;
   const [load, setLoad] = useState<{ scope: string; data: MaterialTimelineResponse[]; error: boolean }>({ scope: "", data: [], error: false });
   useEffect(() => {
-    let current = true; setSelected([]); setFocus(null);
+    let current = true; setFocus(null);
     if (bomEditing) return;
     const requested = countryKey ? countryKey.split(",") : [];
     void Promise.all(requested.map(country => api.getMaterialTimeline(country, showWvta))).then(data => {
@@ -106,8 +109,23 @@ export function MaterialTimelineBoard({ countries, noticeCountries = countries, 
     }
   }
   rows.sort((a, b) => a.node.brand.localeCompare(b.node.brand) || a.node.modelName.localeCompare(b.node.modelName) || a.node.version.localeCompare(b.node.version) || (a.node.effectiveFrom ?? "9999").localeCompare(b.node.effectiveFrom ?? "9999") || a.node.bomTemplate.localeCompare(b.node.bomTemplate));
-  const active = [...new Map(rows.filter(row => selected.includes(row.id)).map(row => [JSON.stringify([row.node.brand, row.node.modelName, row.node.bomTemplate]), row.node])).values()];
   const chains = replacementChains(data);
+  const lanes: Array<{ key: string; members: TimelineRow[]; countries: string[] }> = [];
+  const linked = new Set<string>();
+  for (const chain of chains) for (const country of chain.countries) {
+    const members = chain.materials.map(base => rows.find(row => row.node.brand === chain.brand && row.node.modelName === chain.model && row.node.bomTemplate === base && row.countries.includes(country)));
+    if (members.some(member => !member)) continue;
+    const present = members.filter((member): member is TimelineRow => Boolean(member));
+    const key = JSON.stringify(present.map(member => member.id));
+    const existing = lanes.find(lane => lane.key === key);
+    if (existing) existing.countries.push(country); else lanes.push({ key, members: present, countries: [country] });
+    present.forEach(member => linked.add(JSON.stringify([country, member.id])));
+  }
+  for (const row of rows) {
+    const unlinked = row.countries.filter(country => !linked.has(JSON.stringify([country, row.id])));
+    if (unlinked.length) lanes.push({ key: row.id, members: [row], countries: unlinked });
+  }
+  lanes.sort((a, b) => rows.indexOf(a.members[0]) - rows.indexOf(b.members[0]));
   const openAssets = (nodes: MaterialTimelineNode[], compare = false): void => onOpenAssets({ materials: nodes.map(({ brand, modelName, bomTemplate }) => ({ brand, modelName, bomTemplate })), compare });
   const months = Array.from({ length: to - from + 1 }, (_, i) => from + i);
   const pan = (direction: number): void => { const offset = Math.min(Math.max(direction * months.length, minimum - from), maximum - to); setWindow(from + offset, to + offset); };
@@ -127,24 +145,36 @@ export function MaterialTimelineBoard({ countries, noticeCountries = countries, 
         <button type="button" aria-label={t("Next window", "下一窗口")} disabled={to === maximum} onClick={() => pan(1)}>→</button><button type="button" onClick={() => setWindow(now - 3, now)}>{t("Today", "今天")}</button>
         <span className="mw-spacer" /><label><input type="checkbox" checked={onlySelection} disabled={!selectionComplete && !onlySelection} onChange={e => { setOnlySelection(e.target.checked); setFocus(null); }} /> {t("Selection", "当前选品")}</label>
         {focus ? <button type="button" onClick={() => setFocus(null)}>{t("All models", "全部车型")}</button> : null}
-        {active.length >= 2 ? <button type="button" className="mw-primary" onClick={() => openAssets(active, true)}>{t("Compare", "对比")} {active.length}</button> : null}
+        {comparisonMaterials.length >= 2 ? <button type="button" className="mw-primary" onClick={() => onCompare(comparisonMaterials)}>{t("Compare", "对比")} {comparisonMaterials.length}</button> : null}
       </div>
       <div className="mw-range"><input type="range" aria-label={t("Start handle", "开始滑柄")} min={minimum} max={maximum} value={from} onChange={e => setWindow(Math.min(Number(e.target.value), to), to)} /><input type="range" aria-label={t("End handle", "结束滑柄")} min={minimum} max={maximum} value={to} onChange={e => setWindow(from, Math.max(Number(e.target.value), from))} /></div>
       <div className="mw-calendar" style={{ "--mw-months": months.length } as CSSProperties}>
         <div className="mw-calendar-head"><span>{t("Model / Trim / Material", "车型 / 版本 / 基准物料")}</span><div>{months.map(m => <span key={m}>{new Date(`${monthIso(m)}-01T00:00:00Z`).toLocaleDateString(language === "en" ? "en-GB" : "zh-CN", { year: "2-digit", month: "short", timeZone: "UTC" })}</span>)}</div></div>
-        {rows.filter(row => !focus || `${row.node.brand}|${row.node.modelName}` === focus).map((row, index, visible) => {
-          const n = row.node, bar = timelineBar(n, from, to), previous = visible[index - 1]?.node;
-          return <div key={row.id}>
-            {previous?.modelName !== n.modelName || previous?.brand !== n.brand ? <div className="mw-model-line">{n.brand} · {n.modelName}
-              {chains.filter(chain => chain.brand === n.brand && chain.model === n.modelName && chain.materials.some(base => visible.some(item => item.node.bomTemplate === base && item.node.brand === chain.brand && item.node.modelName === chain.model))).map(chain => <div className="mw-replacement-chain" key={JSON.stringify(chain)} aria-label={t("Replacement chain", "物料替换链")} title={chain.notes.join("\n")}>
-                <small>{chain.countries.join(" · ")}</small>{chain.materials.map((base, i) => <span key={`${i}|${base}`}>{i ? <span className="mw-chain-arrow" aria-hidden="true">→</span> : null}<code>{base}</code></span>)}
-              </div>)}
-            </div> : null}
+        {lanes.filter(lane => !focus || `${lane.members[0].node.brand}|${lane.members[0].node.modelName}` === focus).map((lane, index, visible) => {
+          const n = lane.members[0].node, previous = visible[index - 1]?.members[0].node;
+          const ends: number[] = [];
+          const bars = lane.members.map(row => {
+            const bar = timelineBar(row.node, from, to);
+            if (!bar) return { row, bar, level: 0 };
+            const start = day(row.node.effectiveFrom ?? ""), end = row.node.effectiveTo ? day(row.node.effectiveTo) + 86400000 : Infinity;
+            let level = ends.findIndex(last => last <= start); if (level < 0) level = ends.length;
+            ends[level] = end; return { row, bar, level };
+          });
+          return <div key={lane.key}>
+            {previous?.modelName !== n.modelName || previous?.brand !== n.brand ? <div className="mw-model-line">{n.brand} · {n.modelName}</div> : null}
             {previous?.version !== n.version || previous?.modelName !== n.modelName ? <div className="mw-trim-line">{n.version}</div> : null}
-            <div className="mw-calendar-row"><div className="mw-material-label"><input type="checkbox" aria-label={`${t("Compare", "对比")} ${n.bomTemplate} ${row.countries.join(",")}`} checked={selected.includes(row.id)} disabled={!selected.includes(row.id) && selected.length >= 8} onChange={e => setSelected(s => e.target.checked ? [...s, row.id] : s.filter(id => id !== row.id))} />
-              <button type="button" className="mw-link mw-material-code" onClick={() => openAssets([n])}>{n.bomTemplate}</button><small title={row.countries.join(", ")}>{row.countries.length > 1 ? `${row.countries.length} ${t("markets", "国家")}` : row.countries[0]}</small>{n.issues.length ? <span title={n.issues.join("\n")} aria-label={t("Review required", "待核对")}>⚠</span> : null}
-            </div><div className="mw-lane" title={`${n.effectiveFrom ?? "?"} → ${n.effectiveTo ?? "∞"}${row.target ? ` · → ${row.target}` : ""}`}>
-              {bar ? <button type="button" onClick={() => openAssets([n])} className="mw-bar" style={{ ...bar, background: orderGeniusPowertrainColor(n.powertrain) }} aria-label={`${n.bomTemplate} ${n.effectiveFrom} → ${n.effectiveTo ?? t("Open", "无截止")}`}><span>{n.effectiveFrom} → {n.effectiveTo ?? "∞"}</span></button> : !n.effectiveFrom || n.issues.length ? <small>{t("Dates to review", "日期待核对")}</small> : null}
+            <div className="mw-calendar-row" style={{ minHeight: Math.max(40, ends.length * 24 + 12) }}><div className="mw-material-label mw-chain-materials" aria-label={lane.members.length > 1 ? t("Replacement chain", "物料替换链") : undefined}>
+              {lane.members.map((row, memberIndex) => {
+                const material = row.node, selectedIndex = comparisonIndex(material, comparisonMaterials);
+                return <span className="mw-chain-member" key={row.id}>{memberIndex ? <span aria-hidden="true">→</span> : null}
+                  <input type="checkbox" aria-label={`${t("Compare", "对比")} ${material.bomTemplate} ${lane.countries.join(",")}`} checked={selectedIndex >= 0} disabled={selectedIndex < 0 && comparisonMaterials.length >= 8} onChange={() => onToggleComparison(material)} />
+                  <button type="button" className="mw-link mw-material-code" onClick={() => openAssets([material])}><MaterialCompareLabel index={selectedIndex}>{material.bomTemplate}</MaterialCompareLabel></button>
+                  {memberIndex ? <button type="button" className="mw-pair-compare" aria-label={`${t("Compare", "对比")} ${lane.members[memberIndex - 1].node.bomTemplate} → ${material.bomTemplate}`} onClick={() => onCompare([lane.members[memberIndex - 1].node, material])}>Compare</button> : null}
+                  {material.issues.length ? <span title={material.issues.join("\n")} aria-label={t("Review required", "待核对")}>⚠</span> : null}
+                </span>;
+              })}<small title={lane.countries.join(", ")}>{lane.countries.join(" · ")}</small>
+            </div><div className="mw-lane">
+              {bars.map(({ row, bar, level }) => bar ? <button key={row.id} type="button" onClick={() => openAssets([row.node])} className="mw-bar" title={`${row.node.bomTemplate} · ${row.node.effectiveFrom} → ${row.node.effectiveTo ?? "∞"}`} style={{ ...bar, top: `calc(50% + ${(level - (ends.length - 1) / 2) * 24}px)`, transform: "translateY(-50%)", background: orderGeniusPowertrainColor(row.node.powertrain) }} aria-label={`${row.node.bomTemplate} ${row.node.effectiveFrom} → ${row.node.effectiveTo ?? t("Open", "无截止")}`}><span>{lane.members.length > 1 ? row.node.bomTemplate : `${row.node.effectiveFrom} → ${row.node.effectiveTo ?? "∞"}`}</span></button> : !row.node.effectiveFrom || row.node.issues.length ? <small key={row.id}>{row.node.bomTemplate} · {t("Dates to review", "日期待核对")}</small> : null)}
             </div></div>
           </div>;
         })}
