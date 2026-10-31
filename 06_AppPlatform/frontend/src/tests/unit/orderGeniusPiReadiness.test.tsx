@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as baseRender, screen, waitFor, within } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CellValueChangedEvent } from "ag-grid-community";
 import type { OrderGeniusGridProps, OrderGeniusGridRow } from "../../components/OrderGeniusGrid";
@@ -7,6 +9,8 @@ import type { VehicleAllocationPlan } from "../../types/orderGeniusVehicle";
 import type { QuantityCellResponse } from "../../types/orderGenius";
 import { api } from "../../api/client";
 import { OrderGeniusPage } from "../../pages/OrderGeniusPage";
+
+const render = (ui: ReactElement) => baseRender(<MemoryRouter>{ui}</MemoryRouter>);
 
 const authState = vi.hoisted(() => ({ user: { role: "admin", primaryCountry: "CH", secondaryCountries: [] as string[], brands: [] as string[] }, refreshUser: vi.fn<() => Promise<boolean>>() }));
 vi.mock("../../contexts/AuthContext", async (original) => ({

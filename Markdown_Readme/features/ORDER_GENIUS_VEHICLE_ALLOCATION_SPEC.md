@@ -1,5 +1,7 @@
 # Order Genius — PI Vehicle Allocation & Delivery Tracker 历史基础规格
 
+> 2026-10-31 Notice Board与Material Assets规则唯一见 `ORDER_GENIUS_V2_SPEC.md` 顶部当前契约；实现/发布只记 `ORDER_GENIUS_IMPLEMENTATION_ROADMAP.md`。不据本文旧泳道说明恢复冗余控制或编辑BOM跳转，分车业务不在本批修改。
+
 > 2026-10-29 用户覆盖旧“明细旁列设置”布局：右上角 PI Tools 改名 Status，首次打开默认状态页；列设置完整收进同一抽屉 View / 列设置与导出，主表不再另设按钮或展开区。复用原列组件、个人显示/排序、Engine ID默认隐藏、共享自定义列及创建者/Admin删除权限；抽屉正文统一滚动，不挤占主表高度。搜索、跨PI勾选/状态/运保费、VIN与Engine ID预览补录、透视和勾选/所见导出均保持原流程；不改接口、表结构、FOB/BOM/价格日期或业务数据。本批只送Candidate，不推广Active。
 
 > 2026-10-28加载优化：唯一业务范围见交接Goal1。原选品matrix及BOM列表同次请求批量读取期间/颜色规则，继续复用原单物料解析、冲突及权限，不跨请求缓存报价；国家范围确认后再加载，PI占用和批次列表并行，未就绪仍不能建批。完整返回语义、价格/日期/颜色释放/新批数量及三格式导出不变，无新表/迁移/依赖，仅Candidate。测量数据和真实浏览器边界只见Progress。

@@ -68,7 +68,21 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20261028_0061"]
+    assert sorted(revisions - parent_revisions) == ["20261031_0062"]
+
+
+def test_material_assets_migration_matches_frozen_model_columns() -> None:
+    spec = importlib.util.spec_from_file_location("material_assets_0062", VERSIONS_DIR / "20261031_0062_material_assets.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = StringIO()
+    module.op = Operations(MigrationContext.configure(dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output}))
+    module.upgrade()
+    sql = output.getvalue().upper()
+    assert sql.count("CREATE TABLE ORDERING.MATERIAL_ASSET_") == 3
+    assert sql.count("CREATED_AT_UTC") == 3 and sql.count("UPDATED_AT_UTC") == 3
+    assert "VALUES_SNAPSHOT_JSON JSONB" in sql and "CONTENT BYTEA" in sql
+    assert all(word not in sql for word in ("UPDATE ", "DELETE FROM", "INSERT INTO", "DROP TABLE"))
 
 
 def test_country_column_trash_revision_only_extends_existing_constraints() -> None:

@@ -116,6 +116,7 @@ export interface OrderGeniusGridProps {
   onGridReady?: (api: GridApi<OrderGeniusGridRow>) => void;
   onToggleGroup?: (groupKey: string) => void;
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void;
+  onColourPreview?: (row: OrderGeniusGridRow) => void;
   /** Stable user/account scope used for local column-width preferences. */
   columnWidthStorageScope?: string;
 }
@@ -256,6 +257,7 @@ export function buildOrderGeniusColumnDefs(
   isPiRowSelected?: (row: OrderGeniusGridRow) => boolean,
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void,
   isPiRowSelectable?: (row: OrderGeniusGridRow) => boolean,
+  onColourPreview?: (row: OrderGeniusGridRow) => void,
 ): ColDef<OrderGeniusGridRow>[] {
   const cols: ColDef<OrderGeniusGridRow>[] = [];
 
@@ -334,9 +336,11 @@ export function buildOrderGeniusColumnDefs(
           : `${name}${code ? ` (${code})` : ""}`;
         return (
           <span style={{ display: "flex", alignItems: "center", gap: 5 }} title={title}>
-            <span
-              aria-label={swatch.isMissing ? "Missing swatch" : `${name} swatch`}
+            <button type="button" disabled={!onColourPreview || !p.data?.bomTemplate}
+              onClick={event => { event.stopPropagation(); if (p.data) onColourPreview?.(p.data); }}
+              aria-label={`Preview ${name} photos`}
               style={{
+                padding: 0, cursor: "pointer", minHeight: 0,
                 display: "inline-block",
                 width: 14,
                 height: 14,
@@ -608,6 +612,7 @@ export function OrderGeniusGrid({
   onGridReady,
   onToggleGroup,
   onTogglePiRow,
+  onColourPreview,
   columnWidthStorageScope,
 }: OrderGeniusGridProps) {
   const localGridApiRef = useRef<any>(null);
@@ -629,8 +634,9 @@ export function OrderGeniusGrid({
       isPiRowSelected,
       onTogglePiRow,
       (row) => selectableRowIds?.has(getOrderGeniusRowId(row)) === true,
+      onColourPreview,
     ),
-    [canEditQuantities, showCountry, selectedMonth, visibleColumns, piSelectionSummary, isPiRowSelected, onTogglePiRow, selectableRowIds],
+    [canEditQuantities, showCountry, selectedMonth, visibleColumns, piSelectionSummary, isPiRowSelected, onTogglePiRow, selectableRowIds, onColourPreview],
   );
   const columnIdsSignature = useMemo(
     () => columnDefs.map(getOrderGeniusColumnDefId).filter(Boolean).join("|"),

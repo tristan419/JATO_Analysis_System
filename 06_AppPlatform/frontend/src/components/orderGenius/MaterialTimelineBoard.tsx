@@ -1,209 +1,119 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../../api/client";
-import type { MaterialSkuMatrixRow, MaterialTimelineNode, MaterialTimelineResponse, WvtaReferenceRecord } from "../../types/orderGenius";
-import { compareProductModels } from "../../utils/orderGeniusProductSort";
-import "./MaterialTimelineBoard.css";
-import { WvtaReferenceUpload } from "./WvtaReferenceUpload";
-import { MaterialReplacementEditor } from "./MaterialReplacementEditor";
+import type { MaterialSkuMatrixRow, MaterialTimelineNode, MaterialTimelineResponse } from "../../types/orderGenius";
+import { orderGeniusPowertrainColor } from "../../utils/orderGeniusBomAdmin";
 import { MaterialNotices } from "./MaterialNotices";
-import { MaterialTimelineModel } from "./MaterialTimelineModel";
+import { WvtaReferenceUpload } from "./WvtaReferenceUpload";
+import { useAssetLanguage } from "./materialAssetUi";
+import "./MaterialWorkspace.css";
 
 interface Props {
-  countries: string[];
-  noticeCountries?: string[];
-  authorizationKey: string;
-  selectionRows: Array<MaterialSkuMatrixRow & { _countryCode?: string }>;
-  selectionComplete: boolean;
-  bomEditing?: boolean;
-  canManageReference?: boolean;
-  canMaintainRelations?: boolean;
+  countries: string[]; noticeCountries?: string[]; authorizationKey: string;
+  selectionRows: Array<MaterialSkuMatrixRow & { _countryCode?: string }>; selectionComplete: boolean;
+  bomEditing?: boolean; canManageReference?: boolean; canMaintainRelations?: boolean;
   onViewModel: (brand: string, model: string, country?: string) => void;
 }
-type LoadState = { scope: string; status: "loading" | "error" | "ready"; data: MaterialTimelineResponse[] };
-type NodeRef = { country: string; node: MaterialTimelineNode; certificate?: WvtaReferenceRecord; relationship?: MaterialTimelineResponse["links"][number] };
-interface ModelGroup { key: string; country: string; brand: string; model: string; nodes: MaterialTimelineNode[]; events: MaterialTimelineResponse["events"] }
-const STATUS: Record<string, string> = {
-  active: "Active / 生效", phase_out: "Phase out / 即将结束",
-  not_yet_active: "Not yet active / 尚未生效", historical: "Historical / 历史", review: "Review / 待核对",
-};
-const dayNumber = (day: string): number => Date.parse(`${day}T00:00:00Z`) / 86400000;
-
-export function MaterialTimelineBoard({ countries, noticeCountries = countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, canManageReference = false, canMaintainRelations = false, onViewModel }: Props) {
+interface TimelineRow { id: string; node: MaterialTimelineNode; countries: string[]; target?: string }
+export const monthIndex = (iso: string): number => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1;
+export const monthIso = (index: number): string => `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, "0")}`;
+const day = (value: string): number => Date.parse(`${value}T00:00:00Z`);
+export function timelineBar(node: MaterialTimelineNode, from: number, to: number): CSSProperties | null {
+  if (node.issues.length || !node.effectiveFrom) return null;
+  const left = day(`${monthIso(from)}-01`), right = day(`${monthIso(to + 1)}-01`);
+  const start = Math.max(left, day(node.effectiveFrom));
+  const end = Math.min(right, node.effectiveTo ? day(node.effectiveTo) + 86400000 : right);
+  return end <= start ? null : { left: `${100 * (start - left) / (right - left)}%`, width: `${100 * (end - start) / (right - left)}%` };
+}
+function assetHref(nodes: MaterialTimelineNode[], compare = false): string {
+  return `/product/order-genius/material-assets?${new URLSearchParams({ materials: JSON.stringify(nodes.map(n => [n.brand, n.modelName, n.bomTemplate])), ...(compare ? { compare: "1" } : {}) })}`;
+}
+export function MaterialTimelineBoard({ countries, noticeCountries = countries, authorizationKey, selectionRows, selectionComplete, bomEditing = false, canManageReference = false }: Props) {
+  const { language, setLanguage, t } = useAssetLanguage();
+  const [expanded, setExpanded] = useState(true);
+  const [onlySelection, setOnlySelection] = useState(false);
   const [showWvta, setShowWvta] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [expandedModels, setExpandedModels] = useState<string[]>([]);
+  const [revision, setRevision] = useState(0);
+  const [range, setRange] = useState<{ anchor: string; from: number; to: number } | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [focus, setFocus] = useState<string | null>(null);
   const countryKey = [...new Set(countries)].sort().join(",");
   const scope = `${authorizationKey}|${countryKey}|${showWvta}`;
-  const [load, setLoad] = useState<LoadState>({ scope, status: "loading", data: [] });
-  const [revision, setRevision] = useState(0);
-  const [expanded, setExpanded] = useState(false);
-  const [onlySelection, setOnlySelection] = useState(false);
-  const [focusModel, setFocusModel] = useState<string | null>(null);
-  const [selected, setSelected] = useState<NodeRef | null>(null);
-  const [noticeFocus, setNoticeFocus] = useState<{ brand: string; model: string; country: string; base?: string } | null>(null);
-  useEffect(() => { setExpandedModels([]); }, [authorizationKey, countryKey]);
+  const [load, setLoad] = useState<{ scope: string; data: MaterialTimelineResponse[]; error: boolean }>({ scope: "", data: [], error: false });
   useEffect(() => {
-    let current = true;
-    setLoad({ scope, status: "loading", data: [] });
-    setSelected(null); setFocusModel(null);
-    if (bomEditing) return () => { current = false; };
+    let current = true; setSelected([]); setFocus(null);
+    if (bomEditing) return;
     const requested = countryKey ? countryKey.split(",") : [];
-    void Promise.all(requested.map((country) => api.getMaterialTimeline(country, showWvta))).then((data) => {
+    void Promise.all(requested.map(country => api.getMaterialTimeline(country, showWvta))).then(data => {
       if (!current) return;
-      if (data.some((item, index) => item.countryCode !== requested[index] || item.today !== data[0].today
-        || (showWvta && item.wvtaReference?.sha256 !== data[0].wvtaReference?.sha256))) {
-        setLoad({ scope, status: "error", data: [] });
-        return;
-      }
-      setLoad({ scope, status: "ready", data });
-    }).catch(() => { if (current) setLoad({ scope, status: "error", data: [] }); });
+      if (data.some((item, index) => item.countryCode !== requested[index] || item.today !== data[0]?.today || (showWvta && item.wvtaReference?.sha256 !== data[0]?.wvtaReference?.sha256))) throw new Error("Scope changed");
+      setLoad({ scope, data, error: false });
+    }).catch(() => { if (current) setLoad({ scope, data: [], error: true }); });
     return () => { current = false; };
-  }, [scope, countryKey, revision, bomEditing, showWvta]);
-
-  // Never render a previous country's response during a new request.
-  const data = load.scope === scope && load.status === "ready" ? load.data : [];
-  useEffect(() => {
-    if (!noticeFocus || load.scope !== scope || load.status !== "ready") return;
-    const response = load.data.find((item) => item.countryCode === noticeFocus.country);
-    const node = response?.nodes.find((item) => item.brand === noticeFocus.brand && item.modelName === noticeFocus.model
-      && (!noticeFocus.base || item.bomTemplate === noticeFocus.base));
-    if (!node) return;
-    setFocusModel(`${node.brand}|${node.modelName}`); setSelected({ country: noticeFocus.country, node });
-    const frame = requestAnimationFrame(() => {
-      [...document.querySelectorAll<HTMLElement>(".og-timeline-model")].find((item) => item.dataset.model === node.modelName)?.scrollIntoView({ block: "nearest" });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [noticeFocus, load, scope]);
-  const grouped: ModelGroup[] = [];
-  for (const item of data) {
-    const visible = new Set<string>();
-    if (!onlySelection) item.nodes.forEach((node) => visible.add(node.bomTemplate));
-    else if (selectionComplete) {
-      for (const node of item.nodes) {
-        if (selectionRows.some((row) => row._countryCode === item.countryCode &&
-          (row.bomTemplate === node.bomTemplate || node.materialCodes.includes(row.materialCode)))) visible.add(node.bomTemplate);
-      }
+  }, [scope, countryKey, showWvta, revision, bomEditing]);
+  const ready = !bomEditing && load.scope === scope;
+  const data = ready ? load.data : [];
+  const today = data[0]?.today ?? new Date().toISOString().slice(0, 10);
+  const now = monthIndex(today), minimum = now - 36, maximum = now + 36;
+  const from = range?.anchor === today ? range.from : now - 3, to = range?.anchor === today ? range.to : now;
+  const setWindow = (left: number, right: number): void => setRange({ anchor: today, from: left, to: right });
+  const rows: TimelineRow[] = [];
+  for (const response of data) {
+    const visible = new Set(response.nodes.filter(n => !onlySelection || (selectionComplete && selectionRows.some(row => row._countryCode === response.countryCode && (row.bomTemplate === n.bomTemplate || n.materialCodes.includes(row.materialCode))))).map(n => n.bomTemplate));
+    if (onlySelection) {
       let changed = true;
-      while (changed) {
-        changed = false;
-        for (const link of item.links) {
-          if ((visible.has(link.from) || visible.has(link.to)) && (!visible.has(link.from) || !visible.has(link.to))) {
-            visible.add(link.from); visible.add(link.to); changed = true;
-          }
-        }
-      }
+      while (changed) { changed = false; for (const link of response.links) {
+        if ((visible.has(link.from) || visible.has(link.to)) && (!visible.has(link.from) || !visible.has(link.to))) { visible.add(link.from); visible.add(link.to); changed = true; }
+      } }
     }
-    const models = new Map<string, ModelGroup>();
-    for (const node of item.nodes.filter((value) => visible.has(value.bomTemplate))) {
-      const key = `${item.countryCode}|${node.brand}|${node.modelName}`;
-      let model = models.get(key);
-      if (!model) {
-        model = { key, country: item.countryCode, brand: node.brand, model: node.modelName, nodes: [], events: [] };
-        models.set(key, model);
-      }
-      model.nodes.push(node);
-      model.events.push(...item.events.filter((event) => event.bomTemplate === node.bomTemplate));
+    for (const node of response.nodes.filter(n => visible.has(n.bomTemplate))) {
+      const target = response.links.find(link => link.from === node.bomTemplate)?.to;
+      const id = JSON.stringify([node.brand, node.modelName, node.version, node.bomTemplate, node.effectiveFrom, node.effectiveTo, node.issues, target]);
+      const existing = rows.find(r => r.id === id);
+      if (existing) existing.countries.push(response.countryCode); else rows.push({ id, node, countries: [response.countryCode], target });
     }
-    grouped.push(...models.values());
   }
-  grouped.sort((a, b) => a.country.localeCompare(b.country) || compareProductModels(
-    a.brand, a.model, a.nodes[0].powertrain, b.brand, b.model, b.nodes[0].powertrain,
-  ));
-  const noticeMap = new Map<string, { key: string; brand: string; model: string; countries: Set<string>; starts: Set<string>; ends: Set<string> }>();
-  for (const group of grouped.filter((value) => value.events.length > 0)) {
-    const key = `${group.brand}|${group.model}`;
-    const notice = noticeMap.get(key) ?? { key, brand: group.brand, model: group.model, countries: new Set<string>(), starts: new Set<string>(), ends: new Set<string>() };
-    notice.countries.add(group.country);
-    for (const event of group.events) (event.kind === "start" ? notice.starts : notice.ends).add(`${event.bomTemplate}|${event.date}`);
-    noticeMap.set(key, notice);
-  }
-  const notices = [...noticeMap.values()];
-  const dated = data.flatMap((item) => [item.windowFrom, item.windowTo,
-    ...item.nodes.flatMap((node) => [node.effectiveFrom, node.effectiveTo].filter((value): value is string => value !== null)),
-    ...(showWvta ? (item.wvtaReference?.records ?? []).filter((record) => record.sourceStatus === "recorded")
-      .flatMap((record) => [record.validFrom, record.validTo].filter((value): value is string => value !== null)) : [])]);
-  const left = Math.min(...dated.map(dayNumber));
-  const right = Math.max(...dated.map(dayNumber));
-  const selectedNode = selected ? data.find((item) => item.countryCode === selected.country)?.nodes.find(
-    (node) => node.brand === selected.node.brand && node.bomTemplate === selected.node.bomTemplate) : undefined;
-  const busy = load.scope !== scope || load.status === "loading";
-  const selectionPending = onlySelection && !selectionComplete;
-  const undatedCount = new Set(grouped.flatMap((group) => group.nodes.filter((node) => !node.effectiveFrom && !node.effectiveTo)
-    .map((node) => `${node.brand}|${node.bomTemplate}`))).size;
-  return <section className="og-timeline-board" aria-label="Material changes / 物料变化">
-    <div className="og-timeline-summary">
-      <strong>Material changes / 物料变化</strong>
-      <span role="status">{busy ? "Loading / 读取中…" : load.status === "error" ? "Read failed / 读取失败" : selectionPending ? "Selection loading / 选品读取中…" : `${notices.length} models with recent changes / 近期变化车型 · ${undatedCount} bases undated / 基准日期待维护或核对`}</span>
-      <button type="button" className="btn btn-sm btn-ghost" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-        {expanded ? "Hide timeline / 收起" : "View timeline / 查看时间轴"}
-      </button>
-      <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setRevision(revision + 1)}>Reload / 重读</button>
-    </div>
-    {load.scope === scope && load.status === "error" ? <p role="alert">Unable to read this scope. Reload or sign in again to check current permissions / 当前范围读取失败，请重读或重新登录核对权限。</p> : null}
-    {expanded ? <div className="og-wvta-controls">
-      <label>Time zoom / 时间缩放<select aria-label="Time zoom" value={zoom} onChange={(event) => setZoom(Number(event.target.value))}><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
-      <label><input type="checkbox" checked={showWvta} onChange={(event) => setShowWvta(event.currentTarget.checked)} /> Show WVTA reference / 叠加WVTA参考（不改变BOM下单日期）</label>
-      {canManageReference ? <WvtaReferenceUpload onSaved={() => setRevision((value) => value + 1)} /> : null}
-    </div> : null}
-    {!bomEditing ? <MaterialNotices countries={noticeCountries} authorizationKey={authorizationKey} revision={revision} defaultExpanded={!canMaintainRelations}
-      onViewModel={(brand, model, country, base) => {
-        if (!country) return;
-        setExpanded(true); setOnlySelection(false); setNoticeFocus({ brand, model, country, base });
-        onViewModel(brand, model, country);
-      }} /> : null}
-    {expanded && !busy && load.status === "ready" ? <div className="og-timeline-content">
-      <p>As of / 按今天 {data[0]?.today} · {data[0]?.windowFrom} – {data[0]?.windowTo} · Not the selected order month / 不随选品月份</p>
-      {showWvta ? <p className="og-wvta-source">{data[0]?.wvtaReference?.status === "ready"
-        ? `Reference / 参考：${data[0].wvtaReference.filename} · SHA256 ${data[0].wvtaReference.sha256} · ${data[0].wvtaReference.updatedAt}`
-        : "No WVTA reference configured / 尚未配置WVTA参考，请联系管理员；BOM日期不变。"}</p> : null}
-      <label><input type="checkbox" checked={onlySelection} disabled={!selectionComplete && !onlySelection} onChange={(event) => {
-        setOnlySelection(event.currentTarget.checked); setFocusModel(null); setSelected(null);
-      }} /> Only current selection products, including linked history / 仅当前选品产品及已关联历史</label>
-      {!selectionComplete ? <p>Wait for the complete selection data / 请等待完整选品数据，暂不能限定选品产品。</p> : null}
-      {!selectionPending ? <><div className="og-timeline-notices">
-        {notices.map((notice) => <button key={notice.key} type="button" className="btn btn-sm btn-ghost" onClick={() => {
-          setFocusModel(notice.key); setSelected(null);
-        }}>
-          {[...notice.countries].join(" / ")} · {notice.brand} · {notice.model} · {notice.starts.size} starts / 生效
-          {" · "}{notice.ends.size} ends / 截止
-        </button>)}
-        {notices.length === 0 ? <span>No dated changes in this window / 本窗口无已维护日期的变化；不代表所有日期已维护。</span> : null}
+  rows.sort((a, b) => a.node.brand.localeCompare(b.node.brand) || a.node.modelName.localeCompare(b.node.modelName) || a.node.version.localeCompare(b.node.version) || (a.node.effectiveFrom ?? "9999").localeCompare(b.node.effectiveFrom ?? "9999") || a.node.bomTemplate.localeCompare(b.node.bomTemplate));
+  const active = rows.filter(row => selected.includes(row.id));
+  const months = Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  const pan = (direction: number): void => { const offset = Math.min(Math.max(direction * months.length, minimum - from), maximum - to); setWindow(from + offset, to + offset); };
+  return <section className="mw-board" aria-label={t("Notice Board", "物料公告")}>
+    <header className="mw-toolbar"><button type="button" className="mw-heading" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "▾" : "▸"} {t("Notice Board", "物料公告")}</button>
+      <span className="mw-muted" role="status">{!ready ? t("Loading…", "读取中…") : load.error ? t("Read failed", "读取失败") : `${rows.length} ${t("materials", "基准物料")}`}</span>
+      <span className="mw-spacer" /><Link to="/product/order-genius/material-assets" className="mw-button">{t("Material Assets", "物料资料")}</Link>
+      <button type="button" aria-label={t("Reload", "重读")} onClick={() => setRevision(v => v + 1)}>↻</button>
+      <button type="button" onClick={() => setLanguage(language === "en" ? "zh" : "en")}>{language === "en" ? "中文" : "EN"}</button>
+    </header>
+    {ready && load.error ? <p role="alert">{t("Unable to load this scope. Retry or sign in again.", "当前范围读取失败，请重试或重新登录。")}</p> : null}
+    {!bomEditing ? <MaterialNotices countries={noticeCountries} authorizationKey={authorizationKey} revision={revision} language={language} onViewModel={(brand, model) => { setExpanded(true); setOnlySelection(false); setFocus(`${brand}|${model}`); }} /> : null}
+    {expanded ? <>
+      <div className="mw-toolbar mw-calendar-tools"><button type="button" aria-label={t("Previous window", "上一窗口")} disabled={from === minimum} onClick={() => pan(-1)}>←</button>
+        <input type="month" aria-label={t("Window start", "窗口开始")} value={monthIso(from)} min={monthIso(minimum)} max={monthIso(to)} onChange={e => { if (e.target.value) setWindow(Math.max(minimum, Math.min(to, monthIndex(e.target.value))), to); }} />
+        <span>—</span><input type="month" aria-label={t("Window end", "窗口结束")} value={monthIso(to)} min={monthIso(from)} max={monthIso(maximum)} onChange={e => { if (e.target.value) setWindow(from, Math.min(maximum, Math.max(from, monthIndex(e.target.value)))); }} />
+        <button type="button" aria-label={t("Next window", "下一窗口")} disabled={to === maximum} onClick={() => pan(1)}>→</button><button type="button" onClick={() => setWindow(now - 3, now)}>{t("Today", "今天")}</button>
+        <span className="mw-spacer" /><label><input type="checkbox" checked={onlySelection} disabled={!selectionComplete && !onlySelection} onChange={e => { setOnlySelection(e.target.checked); setFocus(null); }} /> {t("Selection", "当前选品")}</label>
+        {focus ? <button type="button" onClick={() => setFocus(null)}>{t("All models", "全部车型")}</button> : null}
+        {active.length >= 2 ? <Link className="mw-button mw-primary" to={assetHref(active.map(r => r.node), true)}>{t("Compare", "对比")} {active.length}</Link> : null}
       </div>
-      {focusModel ? <button type="button" className="btn btn-sm btn-ghost" onClick={() => setFocusModel(null)}>All models / 全部车型</button> : null}
-      {grouped.length === 0 ? <p>No eligible products in this scope / 当前范围没有符合条件的产品。</p> : null}
-      <div className="og-timeline-scroll">
-        {grouped.filter((group) => !focusModel || `${group.brand}|${group.model}` === focusModel).map((group) => {
-          const response = data.find((value) => value.countryCode === group.country);
-          if (!response) return null;
-          return <MaterialTimelineModel key={group.key} country={group.country} brand={group.brand} model={group.model}
-            nodes={group.nodes} response={response} left={left} right={right} zoom={zoom} showWvta={showWvta}
-            open={focusModel === `${group.brand}|${group.model}` || expandedModels.includes(group.key)}
-            onToggle={() => setExpandedModels((values) => values.includes(group.key) ? values.filter((key) => key !== group.key) : [...values, group.key])}
-            onSelect={(node, certificate, relationship) => { setNoticeFocus(null); setSelected({ country: group.country, node, certificate, relationship }); }} />;
+      <div className="mw-range"><input type="range" aria-label={t("Start handle", "开始滑柄")} min={minimum} max={maximum} value={from} onChange={e => setWindow(Math.min(Number(e.target.value), to), to)} /><input type="range" aria-label={t("End handle", "结束滑柄")} min={minimum} max={maximum} value={to} onChange={e => setWindow(from, Math.max(Number(e.target.value), from))} /></div>
+      <div className="mw-calendar" style={{ "--mw-months": months.length } as CSSProperties}>
+        <div className="mw-calendar-head"><span>{t("Model / Trim / Material", "车型 / 版本 / 基准物料")}</span><div>{months.map(m => <span key={m}>{new Date(`${monthIso(m)}-01T00:00:00Z`).toLocaleDateString(language === "en" ? "en-GB" : "zh-CN", { year: "2-digit", month: "short", timeZone: "UTC" })}</span>)}</div></div>
+        {rows.filter(row => !focus || `${row.node.brand}|${row.node.modelName}` === focus).map((row, index, visible) => {
+          const n = row.node, bar = timelineBar(n, from, to), previous = visible[index - 1]?.node;
+          return <div key={row.id}>
+            {previous?.modelName !== n.modelName || previous?.brand !== n.brand ? <div className="mw-model-line">{n.brand} · {n.modelName}</div> : null}
+            {previous?.version !== n.version || previous?.modelName !== n.modelName ? <div className="mw-trim-line">{n.version}</div> : null}
+            <div className="mw-calendar-row"><div className="mw-material-label"><input type="checkbox" aria-label={`${t("Compare", "对比")} ${n.bomTemplate} ${row.countries.join(",")}`} checked={selected.includes(row.id)} disabled={!selected.includes(row.id) && selected.length >= 8} onChange={e => setSelected(s => e.target.checked ? [...s, row.id] : s.filter(id => id !== row.id))} />
+              <Link to={assetHref([n])}>{n.bomTemplate}</Link><small title={row.countries.join(", ")}>{row.countries.length > 1 ? `${row.countries.length} ${t("markets", "国家")}` : row.countries[0]}</small>{n.issues.length ? <span title={n.issues.join("\n")} aria-label={t("Review required", "待核对")}>⚠</span> : null}
+            </div><div className="mw-lane" title={`${n.effectiveFrom ?? "?"} → ${n.effectiveTo ?? "∞"}${row.target ? ` · → ${row.target}` : ""}`}>
+              {bar ? <Link to={assetHref([n])} className="mw-bar" style={{ ...bar, background: orderGeniusPowertrainColor(n.powertrain) }} aria-label={`${n.bomTemplate} ${n.effectiveFrom} → ${n.effectiveTo ?? t("Open", "无截止")}`}><span>{n.effectiveFrom} → {n.effectiveTo ?? "∞"}</span></Link> : !n.effectiveFrom || n.issues.length ? <small>{t("Dates to review", "日期待核对")}</small> : null}
+            </div></div>
+          </div>;
         })}
       </div>
-      {selectedNode && selected ? <div className="og-timeline-detail" role="region" aria-label="Material change detail">
-        <div><strong>{selected.country} · {selectedNode.bomTemplate}</strong><button type="button" className="btn btn-sm btn-ghost" onClick={() => setSelected(null)}>Close / 关闭</button></div>
-        <p>{selectedNode.brand} · {selectedNode.modelName} · {selectedNode.version} · {STATUS[selectedNode.lifecycleStatus]}</p>
-        <p>First / 开始：{selectedNode.effectiveFrom ?? "Not set / 未设"} · Final / 最后可下单日：{selectedNode.effectiveTo ?? "Not set / 未设"}</p>
-        <p>Quote reference / 报价参考日 {selectedNode.quoteDate}：{selectedNode.quotedSkuCount}/{selectedNode.materialCodes.length} SKUs ready / 报价就绪。PI still validates its order date / PI 仍须校验实际订单日。</p>
-        {selectedNode.issues.map((issue) => <p key={issue} role="alert">{issue}</p>)}
-        {selectedNode.quoteReasons.map((reason) => <p key={reason}>{reason}</p>)}
-        <p>Notes / 备注：{selectedNode.notes.join("；") || "Not maintained / 未维护"}</p>
-        {selected.relationship ? <p>Replacement / 更替：{selected.relationship.from} → {selected.relationship.to} · {selected.relationship.note || "Note not maintained / 说明未维护"}</p> : null}
-        <p className="og-timeline-codes">{selectedNode.materialCodes.join(" · ")}</p>
-        {canMaintainRelations && selectedNode.brand ? <MaterialReplacementEditor brand={selectedNode.brand} bomTemplate={selectedNode.bomTemplate} onSaved={() => setRevision((value) => value + 1)} /> : null}
-        {selected.certificate ? <div className="og-wvta-detail">
-          <strong>Certificate reference only / 仅证书参考：{selected.certificate.sourceStatus}</strong>
-          <p>{selected.certificate.wvtaNo} · {selected.certificate.cocNo}</p>
-          <p>{selected.certificate.validFrom ?? "Not recorded / 未记录"} → {selected.certificate.validTo ?? "End not recorded / 截止未记录"}</p>
-          <p>Source / 来源：{data.find((item) => item.countryCode === selected.country)?.wvtaReference?.filename} · P{selected.certificate.pageNumber} · row / 行 {selected.certificate.tableRowNumber}</p>
-          <p>{selected.certificate.comments} {selected.certificate.reviewReason}</p>
-        </div> : null}
-        <button type="button" className="btn btn-sm btn-primary" disabled={!selectedNode.brand} onClick={() => onViewModel(selectedNode.brand, selectedNode.modelName)}>View model selection / 查看车型选品</button>
-      </div> : null}
-      </> : null}
-      <p>Dashed line = today. Order windows are inclusive. Certificate periods are not order dates. / 虚线＝今天，下单起止日含当天，证书期不替代下单日。关联维护不改PI、物料号或价格，Order Filler只读。</p>
-    </div> : null}
+      <details className="mw-reference"><summary>{t("WVTA reference", "WVTA参考")}</summary><label><input type="checkbox" checked={showWvta} onChange={e => setShowWvta(e.target.checked)} />{t("Show reference", "查看参考")}</label>{canManageReference ? <WvtaReferenceUpload onSaved={() => setRevision(v => v + 1)} /> : null}
+        {showWvta ? <div>{data[0]?.wvtaReference?.filename ?? t("No reference", "暂无参考文件")}{data[0]?.wvtaReference?.records.map((record, i) => <p key={i}>{record.materialGroup} · {record.wvtaNo} · {record.validFrom ?? "—"} → {record.validTo ?? "—"}</p>)}</div> : null}
+      </details>
+    </> : null}
   </section>;
 }

@@ -208,6 +208,7 @@ const ROUTE_ROLE_OVERRIDES: Record<string, MenuRole> = {
   "/data/order-genius": "order_filler",
   "/product/order-genius/cbu": "editor",
   "/product/order-genius/vehicle-allocation": "order_filler",
+  "/product/order-genius/material-assets": "order_filler",
   "/engineering": "editor",
   "/review": "editor",
   "/crud": "viewer",
@@ -301,6 +302,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
         title: "Product Toolkit / 产品工具包",
         items: [
           { label: "Order Genius", sublabel: "订单矩阵", to: "/product/order-genius", minRole: "order_filler" },
+          { label: "Material Assets", sublabel: "物料资料", to: "/product/order-genius/material-assets", minRole: "order_filler" },
           { label: "Vehicle Allocation", sublabel: "PI 分车", to: "/product/order-genius/vehicle-allocation", minRole: "order_filler" },
           { label: "COC Match", sublabel: "COC 比对", to: "/product/coc-match", minRole: "editor" },
         ],

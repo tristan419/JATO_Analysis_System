@@ -1,5 +1,20 @@
 # Order Genius — 当前状态与待办
 
+## 2026-10-31 Notice Board / Material Assets
+
+- 业务规则：`ORDER_GENIUS_V2_SPEC.md` 顶部当前契约；旧阶段说明不能覆盖本节。
+- 分支：`codex/material-assets-notice-board`，基线 `main@ea8d7cf9`；使用独立 worktree，不改混合观察目录。
+- [x] UI Demo已获确认：删除“Edit in BOM Admin”跳转，其余按基准物料/HEX/共用图库与角色权限实现。
+- [x] 现有代码审计：复用原时间轴与通知接口；配置解析与版本元数据存在，但缺不可变值快照；图片及绑定未有持久化。
+- [x] 替换现有 Notice Board 为轻量日历、四月默认窗口/双柄/三年范围、Model分组和个人通知。
+- [x] 独立 Material Assets、基准配置版本、同Model图片复用、选品HEX预览、跨Model来源对比及下载。
+- [x] 必要迁移、前后端权限/引用与并发校验、自动测试、浏览器真实文件验证（本地隔离库）。
+- [ ] PR、CI、Candidate部署及真实验收（不得把本地Demo当作已上线）。
+- Active / intl：本轮未授权推广，保持不动。
+- 后续任务：有来源的AI差异解释仍需另行落实；不以确定性字段表冒充大模型结果。
+- 验证证据：前端全量647项；后端相关362项通过/1项跳过；新资料与迁移链28项通过；TypeScript与生产构建通过。独立本地PostgreSQL已从空库执行完整Alembic到0062；浏览器走真实API完成XLSX解析/UUID保存、原图上传/下载/同Model复用、跨Model单元格来源对比、390px窄屏。均未使用生产业务数据，Candidate尚待下方发布步骤。
+- 上传口径：本批复用现有“在售可控资源表”XLSX配置矩阵；须选择配置列。不支持的格式明确422，PDF/任意供应商表解析不计为完成。
+
 > 当前版本: V1.5 | 目标版本: V2 | V2 spec: [ORDER_GENIUS_V2_SPEC.md](./ORDER_GENIUS_V2_SPEC.md)
 > 更新: 2026-08-07
 

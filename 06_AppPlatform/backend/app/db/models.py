@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     ForeignKey,
     Integer,
+    LargeBinary,
     Index,
     Numeric,
     Text,
@@ -1717,6 +1718,61 @@ class ConfigVersion(Base):
     published_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    values_snapshot_json: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True, deferred=True)
+
+
+class MaterialAssetGroup(TimestampMixin, Base):
+    """Model-scoped reusable photo album; never creates BOM colours."""
+    __tablename__ = "material_asset_group"
+    __table_args__ = (
+        CheckConstraint("kind IN ('exterior', 'interior')", name="ck_material_asset_group_kind"),
+        Index("ix_material_asset_group_model", "brand", "model_name"),
+        {"schema": "ordering"},
+    )
+    asset_group_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_key: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class MaterialAssetFile(TimestampMixin, Base):
+    """Original bytes live with the DB snapshot; list queries defer the payload."""
+    __tablename__ = "material_asset_file"
+    __table_args__ = (
+        CheckConstraint("(asset_group_id IS NULL) <> (config_version_id IS NULL)", name="ck_material_asset_file_owner"),
+        {"schema": "ordering"},
+    )
+    asset_file_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    asset_group_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("ordering.material_asset_group.asset_group_id"), nullable=True)
+    config_version_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("engineering_config.config_versions.version_id"), nullable=True)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class MaterialAssetBinding(TimestampMixin, Base):
+    __tablename__ = "material_asset_binding"
+    __table_args__ = (
+        UniqueConstraint("brand", "model_name", "bom_template", "kind", "colour_key", name="uq_material_asset_binding"),
+        CheckConstraint("(kind = 'config' AND config_version_id IS NOT NULL AND asset_group_id IS NULL AND colour_key = '') OR (kind IN ('exterior', 'interior') AND asset_group_id IS NOT NULL AND config_version_id IS NULL)", name="ck_material_asset_binding_kind"),
+        {"schema": "ordering"},
+    )
+    binding_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(Text, nullable=False)
+    bom_template: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_key: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    asset_group_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("ordering.material_asset_group.asset_group_id"), nullable=True)
+    config_version_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("engineering_config.config_versions.version_id"), nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 # ── Auth ──

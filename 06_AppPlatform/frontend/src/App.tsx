@@ -60,6 +60,7 @@ const MsrpMonitorPage = lazy(() => import("./pages/MsrpMonitorPage").then(m => (
 const AdvancedAnalysisPage = lazy(() => import("./pages/AdvancedAnalysisPage").then(m => ({ default: m.AdvancedAnalysisPage })));
 const LeaseComparisonPage = lazy(() => import("./pages/LeaseComparisonPage").then(m => ({ default: m.LeaseComparisonPage })));
 const OrderGeniusPage = lazy(() => import("./pages/OrderGeniusPage").then(m => ({ default: m.OrderGeniusPage })));
+const MaterialAssetsPage = lazy(() => import("./pages/MaterialAssetsPage").then(m => ({ default: m.MaterialAssetsPage })));
 const OrderGeniusCbuPage = lazy(() => import("./pages/OrderGeniusCbuPage").then(m => ({ default: m.OrderGeniusCbuPage })));
 const OrderGeniusVehicleAllocationPage = lazy(() => import("./pages/OrderGeniusVehicleAllocationPage").then(m => ({ default: m.OrderGeniusVehicleAllocationPage })));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
@@ -273,6 +274,7 @@ const router = createBrowserRouter([
     { path: "market/advanced-analysis", element: withPageLoader(<AdvancedAnalysisPage />) },
     { path: "product/current-msrp", element: withPageLoader(<MsrpPage />) },
     { path: "product/order-genius", element: withPageLoader(<OrderGeniusPage />) },
+    { path: "product/order-genius/material-assets", element: withPageLoader(<MaterialAssetsPage />) },
     { path: "product/order-genius/cbu", element: withPageLoader(<OrderGeniusCbuPage />) },
     { path: "product/order-genius/vehicle-allocation", element: withPageLoader(<OrderGeniusVehicleAllocationPage />) },
     { path: "product/lease-comparison", element: withPageLoader(<LeaseComparisonPage />) },

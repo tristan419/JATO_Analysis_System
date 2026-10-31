@@ -123,3 +123,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   return promise;
 }
+
+export async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const response = await fetch(apiUrl(path), { ...init, headers: buildHeaders(init) });
+  if (!response.ok) throw new Error(`${response.status} ${await readErrorMessage(response)}`);
+  return response.blob();
+}

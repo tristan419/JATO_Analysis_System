@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from openpyxl.utils import get_column_letter
 
 from app.services.config_availability import classify_availability
 
@@ -237,7 +238,7 @@ def parse_config_matrix(
                     "availability": availability,
                     "unit": unit,
                     "source_row": excel_row,
-                    "source_column": chr(65 + col_idx),  # D, E, F, ...
+                    "source_column": get_column_letter(col_idx + 1),
                 }
             )
 
