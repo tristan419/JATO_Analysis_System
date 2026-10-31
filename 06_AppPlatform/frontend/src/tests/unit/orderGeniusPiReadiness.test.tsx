@@ -358,6 +358,45 @@ describe("quantity save → PI readiness", () => {
     expect(screen.getByText("PI ready · 0 units available")).toBeTruthy();
   });
 
+  it.each(["countries", "authorization"] as const)("does not leave an orphan Notice Board when %s changes with comparison open", async (scope) => {
+    const timeline = await api.getMaterialTimeline("CH");
+    vi.mocked(api.getMaterialTimeline).mockResolvedValue({ ...timeline, nodes: ["OLD**", "NEW**"].map(bomTemplate => ({
+      bomTemplate, brand: "JAECOO", modelName: "J7", version: "FWD", powertrain: "PHEV", materialCodes: [],
+      lifecycleStatus: "active", effectiveFrom: "2026-10-01", effectiveTo: null, notes: [], issues: [],
+      quoteDate: "2026-10-01", quotedSkuCount: 0, quoteReasons: [],
+    })) });
+    vi.spyOn(materialAssets, "catalog").mockResolvedValue({ today: "2026-10-31", materials: [], bindings: [], groups: [], versions: [] });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const page = render(<OrderGeniusPage />);
+    await screen.findByLabelText("Compare OLD** CH");
+    fireEvent.click(screen.getByLabelText("Compare OLD** CH"));
+    fireEvent.click(screen.getByLabelText("Compare NEW** CH"));
+    fireEvent.click(screen.getByRole("button", { name: /Notice Board/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Compare 2" }));
+    await screen.findByRole("dialog", { name: "Configuration comparison" });
+
+    if (scope === "countries") {
+      fireEvent.click(screen.getByRole("tab", { name: /Filters/i }));
+      fireEvent.focus(screen.getByPlaceholderText(/1 country selected/));
+      fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+      expect(screen.queryAllByRole("region", { name: "Notice Board" })).toHaveLength(0);
+      fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+      fireEvent.click(within(screen.getByRole("dialog", { name: "Configuration comparison" })).getByRole("button", { name: "Close" }));
+    } else {
+      authState.user.role = "viewer";
+      page.rerender(<OrderGeniusPage />);
+      expect(screen.queryAllByRole("region", { name: "Notice Board" })).toHaveLength(0);
+      expect(screen.queryByRole("dialog", { name: "Configuration comparison" })).toBeNull();
+      authState.user.role = "admin";
+      page.rerender(<OrderGeniusPage />);
+    }
+    await waitFor(() => expect(screen.getAllByRole("region", { name: "Notice Board" })).toHaveLength(1));
+    const toggle = screen.getByRole("button", { name: /Notice Board/ });
+    fireEvent.click(toggle); fireEvent.click(toggle);
+    expect(screen.getAllByRole("region", { name: "Notice Board" })).toHaveLength(1);
+    expect(consoleError.mock.calls.some(args => args.some(value => typeof value === "string" && value.includes("same key")))).toBe(false);
+  });
+
   it("keeps common toggles outside More filters and applies them without reopening advanced filters", async () => {
     const update = vi.spyOn(api, "updateQuantityCell");
     await openOctober();

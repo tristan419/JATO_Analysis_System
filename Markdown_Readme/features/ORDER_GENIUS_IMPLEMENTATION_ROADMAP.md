@@ -1,5 +1,14 @@
 # Order Genius — 当前状态与待办
 
+## 2026-11-01 Notice Board 重复节点与更替关联核对
+
+- 基线 `main@5c2f9435`，独立分支 `codex/notice-board-identity-fix`；原混合目录只读。
+- 根因：日历与配置对比弹层复用同一个兄弟节点 key，范围切换时 React 可残留旧日历；修复现有 key，不增加 CSS 隐藏或去重系统。
+- [x] 区分两个组件标识，补国家范围与授权变化两项页面组合回归；修复前两项失败，修复后通过，保留授权变化时的原重置行为。
+- [x] 只读事务核对 Active / Candidate：`ordering.material_replacement` 总行数/有效关联均为0，旧 `material_lifecycle.replaced_by_code` 关联亦为0。CH投影25个基准/0条连接，SE为24/0；无投影issue。未根据日期推断或写入关联，后续须确认真实旧→新对应再经原BOM关联入口维护。
+- [x] 类型、671项前端回归、生产构建及路由回归通过。Chrome156生产构建＋本地隔离API夹具验证对比反复开关、范围清空/恢复、折叠及390px/1920px布局，始终一个日历、无重复key告警；三个显式关联基准显示在同一条时间轴。无生产请求或业务数据写入，不冒充线上关联已补齐。
+- 交付回执：[PR #317](https://github.com/tristan419/JATO_Analysis_System/pull/317) 集中记录最终CI及Candidate实际版本/部署身份；未有成功部署回执前不视为已交付。本轮不推广 Active，不修改生产业务数据。
+
 ## 2026-10-31 选品对比与连续填量（#315 后续）
 
 - 基线 `main@b7cf227c`（GitHub main已核验），分支 `codex/order-material-compare-entry`；原混合目录只读。

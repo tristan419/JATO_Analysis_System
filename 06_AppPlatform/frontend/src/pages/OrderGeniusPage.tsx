@@ -3320,7 +3320,7 @@ export function OrderGeniusPage() {
       ) : null}
 
       {canFillOrders && timelineCountries.length > 0 ? <MaterialTimelineBoard
-        key={authorizationKey}
+        key={`notice-board:${authorizationKey}`}
         countries={timelineCountries}
         noticeCountries={isAdmin ? countries.map((item) => item.countryCode) : userCountries}
         selectionRows={combinedMatrix.rows}
@@ -3416,7 +3416,7 @@ export function OrderGeniusPage() {
       {assetRequest && canFillOrders ? <OrderGeniusWorkspacePanel label="Material Assets" onClose={() => { photoCatalog.current = null; setAssetRequest(null); }}>
         <Suspense fallback={<p role="status">Loading…</p>}><MaterialAssetsPanel key={authorizationKey} request={assetRequest} onClose={() => { photoCatalog.current = null; setAssetRequest(null); }} /></Suspense>
       </OrderGeniusWorkspacePanel> : null}
-      {comparisonRequest?.scope === authorizationKey && canFillOrders ? <MaterialComparisonPanel key={authorizationKey} materials={comparisonRequest.materials} onClose={() => setComparisonRequest(null)} /> : null}
+      {comparisonRequest?.scope === authorizationKey && canFillOrders ? <MaterialComparisonPanel key={`material-comparison:${authorizationKey}`} materials={comparisonRequest.materials} onClose={() => setComparisonRequest(null)} /> : null}
     </section>
   );
 }
