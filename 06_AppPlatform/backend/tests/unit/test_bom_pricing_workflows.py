@@ -204,6 +204,43 @@ def fob(db, code, value, base=None, surcharge=None, term="TT", country="CH", sou
     return row
 
 
+@pytest.mark.parametrize("keyword,brands,country,expected", [
+    ("T7000Z5**MY0019", {"JAECOO"}, None, ["T7000Z5BWMY0019", "T7000Z5CLMY0019"]),
+    ("t7000z5**my0019", {"JAECOO"}, None, ["T7000Z5BWMY0019", "T7000Z5CLMY0019"]),
+    ("T7000Z5**MY001", {"JAECOO"}, None, ["T7000Z5BWMY0019", "T7000Z5CLMY0019"]),
+    ("T7000Z5CLMY0019", {"JAECOO"}, None, ["T7000Z5CLMY0019"]),
+    ("T7000Z5", {"JAECOO"}, None, ["T7000Z5BWMY0019", "T7000Z5CLMY0019", "T7000Z5CLMY0031"]),
+    ("T7000Z5**MY0099", {"JAECOO"}, None, []),
+    ("T7000Z5**MY0019, T7000Z5CLMY0031", {"JAECOO"}, None, ["T7000Z5BWMY0019", "T7000Z5CLMY0019", "T7000Z5CLMY0031"]),
+    ("T7000Z5**MY001, T7000Z5CLMY0031", {"JAECOO"}, None, ["T7000Z5BWMY0019", "T7000Z5CLMY0019", "T7000Z5CLMY0031"]),
+    ("T7000Z5**MY0019 BEV", {"JAECOO"}, None, ["T7000Z5BWMY0019", "T7000Z5CLMY0019"]),
+    ("T7000Z5**MY0019 HEV", {"JAECOO"}, None, []),
+    ("T7000Z5**MY0019", {"OMODA"}, None, ["OMODA-CL"]),
+    ("T7000Z5**MY0019", set(), None, []),
+    ("T7000Z5**MY0019", {"JAECOO"}, "CH", ["T7000Z5CLMY0019"]),
+    ("T7000Z5*MY0019", {"JAECOO"}, None, []),
+    ("T7000Z5%MY0019", {"JAECOO"}, None, []),
+    (" ", {"JAECOO"}, None, ["T7000Z5BWMY0019", "T7000Z5CLMY0019", "T7000Z5CLMY0031"]),
+])
+def test_bom_admin_searches_base_and_sku_in_one_material_facet(db, keyword, brands, country, expected):
+    for code, base, brand in [
+        ("T7000Z5CLMY0019", "T7000Z5**MY0019", "JAECOO"),
+        ("T7000Z5BWMY0019", "T7000Z5**MY0019", "JAECOO"),
+        ("T7000Z5CLMY0031", "T7000Z5**MY0031", "JAECOO"),
+        ("OMODA-CL", "T7000Z5**MY0019", "OMODA"),
+    ]:
+        row = sku(db, code, "single", brand=brand, template=base)
+        row.powertrain = "BEV"
+        if base.endswith("0019"):
+            row.is_active, row.lifecycle_status = False, "historical"
+    fob(db, "T7000Z5CLMY0019", 13700)
+    fob(db, "T7000Z5CLMY0031", 13700)
+    db.commit()
+    result = repo.list_all_material_skus_for_admin(db, search=keyword,
+                allowed_brands=brands, country_code=country, limit=None)
+    assert sorted(row.material_code for row in result) == expected
+
+
 def test_list_loading_query_count_does_not_grow_with_materials(db):
     from sqlalchemy import event
     counts = []

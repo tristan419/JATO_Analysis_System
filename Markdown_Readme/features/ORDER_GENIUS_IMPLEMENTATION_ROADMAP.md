@@ -1,5 +1,15 @@
 # Order Genius — 当前状态与待办
 
+## 2026-11-01 BOM 基准物料号搜索
+
+- 基线 `main@45e3f8fa`，独立分支 `codex/bom-base-search-fix`；原混合目录只读。
+- 根因：`list_all_material_skus_for_admin` 的搜索字段缺少 `bom_template`，完整含 `**` 基准号无法匹配展开SKU。
+- [x] 在原物料条件组纳入基准号，不把星号转成通配符，不增加前端模式、接口、表、依赖或迁移。
+- [x] 16组真实SQL回归（旧逻辑8组失败、修复后全过），覆盖完整/片段、大小写、SKU并集、动力交集、历史物料、国家/品牌隔离及清空；复用现有CI数据库夹具。BOM工作流173项通过；CI同口径后端555通过/1跳过。
+- [x] Candidate现有PostgreSQL只读事务、独立进程核验：旧逻辑完整基准号0条，修复后5个准确颜色SKU；完整SKU1条，基准＋SKU组合6条，加CH后5条且只含CH报价，未知物料及字面通配符不扩大匹配。未修改运行服务或业务数据。
+- [ ] Candidate真实Chrome搜索验收。
+- [ ] PR / CI / Candidate 发布回执；本轮不推广 Active，不修改业务数据。
+
 ## 2026-11-01 Notice Board 重复节点与更替关联核对
 
 - 基线 `main@5c2f9435`，独立分支 `codex/notice-board-identity-fix`；原混合目录只读。
