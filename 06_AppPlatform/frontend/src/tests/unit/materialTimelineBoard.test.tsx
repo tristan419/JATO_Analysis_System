@@ -105,7 +105,7 @@ describe("Lightweight Notice Board", () => {
     render(view()); const chain = await screen.findByLabelText("Replacement chain");
     expect(chain.textContent).toBe("CHA**→B**→C**");
     expect(document.querySelectorAll(".mw-bar")).toHaveLength(3);
-    fireEvent.click(screen.getByRole("button", { name: "B**", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "B**" }));
     expect(props.onOpenAssets).toHaveBeenCalledWith({ materials: [{ brand: "JAECOO", modelName: "J7", bomTemplate: "B**" }], compare: false });
   });
   it("never stitches links from different countries/models, or infers links from dates", () => {

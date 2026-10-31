@@ -303,7 +303,7 @@ describe("quantity save → PI readiness", () => {
     await openOctober(); fireEvent.click(screen.getByLabelText("Enter new batch"));
     const quantity = screen.getByTestId("display-quantity").textContent;
     fireEvent.click(screen.getByRole("tab", { name: /BOM \/ Assets/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Material Assets", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Material Assets" }));
     await screen.findByRole("dialog", { name: "Material Assets" });
     fireEvent.click(await screen.findByRole("button", { name: "Close Material Assets" }));
     expect(screen.queryByRole("dialog", { name: "Material Assets" })).toBeNull();
