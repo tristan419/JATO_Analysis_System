@@ -44,3 +44,15 @@ export interface AssetUploadTarget { materialKey: string; kind: AssetKind; colou
 export interface AssetUploadState { uploadId: string; chunkSize: number; totalChunks: number; receivedChunks: number[]; uploadedBytes: number }
 export interface AssetTrashEntry extends AssetFile { folder: "photos" | "configurations"; modelName: string; label: string; bytes: number; deletedAt: string; deletedBy: string }
 export interface AssetTrash { usedBytes: number; maxBytes: number; entries: AssetTrashEntry[] }
+export interface AssetDownloadGroup {
+  key: string; kind: AssetKind; label: string; colourKey: string; bindingVersion: number; sourceId: string | null;
+  files: Array<AssetFile & { path: string; bytes: number }>;
+}
+export interface AssetDownloadMaterial extends MaterialIdentity {
+  key: string; version: string; effectiveFrom: string | null; effectiveTo: string | null;
+  issues: string[]; groups: AssetDownloadGroup[];
+}
+export interface AssetDownloadPreview {
+  referenceMonth: string; signature: string; materials: AssetDownloadMaterial[];
+  totalFiles: number; totalBytes: number; maxBytes: number;
+}

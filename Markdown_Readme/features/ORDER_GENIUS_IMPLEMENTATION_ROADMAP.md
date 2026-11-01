@@ -1,6 +1,18 @@
 # Order Genius — 当前状态与待办
 
-## 2026-11-01 Material Assets 上传/图片内存/回收站（进行中）
+## 2026-11-01 Material Assets 按月批量下载（进行中）
+
+- 基线main@36abd3a6；独立分支codex/material-assets-monthly-download，原混合目录只读。
+- 已确认：按月筛有效BOM，取当前关联资料；ZIP为Model → Trim → 基准物料 → 配置/外饰/内饰，每物料完整；零勾选为本月预览全部。
+- [x] 唯一业务规则及进度文档同步。
+- [x] 原目录/生命周期与下载流程扩展，服务端月份/权限/选择/变更核验、临时文件归档和索引；512MiB按实际重复文件计数，不静默截断，原单组下载也取消50文件门禁但保留原体积限制。
+- [x] 紧凑下载入口、月份预览、物料/资料勾选及动态下载计数，不复用Compare选择；修正实际二进制POST客户端的JSON请求头并加回归。
+- [x] 类型检查、生产构建、路由回归；相关SQLite 46通过/1跳过，真实PostgreSQL 47通过；CI同口径后端合计590通过/2跳过。前端全量及最终CI回执见本PR。
+- [x] Chrome156＋隔离真实API/数据库：10月旧/新2物料、8文件完整ZIP和单物料4文件ZIP均实际下载并解包核验；共享源只存一份但包内独立完整，**原号在索引保留；9月仅旧物料，空月不回退；390px下载弹层无横溢出，Filler无维护入口且写入403。均为隔离夹具，不冒充Candidate真实资料写入。
+- [ ] PR / CI / Candidate交付与验收记录。
+- 本轮不新增迁移，不做历史文件关联回放，不更新Active/intl。
+
+## 2026-11-01 Material Assets 上传/图片内存/回收站（Candidate已交付）
 
 - 基线 `main@a73cb597`；独立分支 `codex/material-assets-upload-trash`，混合观察目录只读。
 - 缺口：资料直传未接入已有upload_toolkit；图片仅4格式、原图直接预览、删除直接移除数据库记录，无回收站。
@@ -10,8 +22,8 @@
 - [x] 同Model两个`**`基准可显式共享配置UUID，SKU不另建配置；BOM内外饰差异与配置原表差异分别展示；更新一个基准不连带切换另一个。
 - [x] 本地自动回归与真实Chrome＋隔离PostgreSQL：约60MB TIFF经58片保存为小于6MB的WebP；HEIC真文件可上传/预览；中断后同一uploadId续传且已成功的第一片不重传；取消清理且不可再保存。一个配置UUID/图片组复用至两个基准，黑/棕内饰差异仍可见；回收站恢复不改新绑定；390px无整页横溢出。
 - [x] 隔离PostgreSQL从空库执行完整Alembic至0063；真实并发移入仅一方成功，合计容量不超额。未触碰生产业务数据。
-- [ ] PR CI与最终交付回执（以本PR检查及发布回执为准）。
-- [ ] Candidate交付回执；本轮不授权Active/intl推广。
+- [x] PR #319及主分支CI通过；Candidate版本36abd3a6、release run41264524520。
+- [x] 登录后只读入口/回收站/语言及空资料门禁核验；真实资料写入仍以隔离库验证为准。Active/intl未推广。
 - 交付回执：[PR #319](https://github.com/tristan419/JATO_Analysis_System/pull/319)集中记录最终CI、Candidate身份及线上验收；本地验证不冒充线上真实资料CRUD验收。
 
 ## 2026-11-01 BOM 基准物料号搜索

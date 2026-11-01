@@ -1,5 +1,5 @@
 import { request, requestBlob } from "./core";
-import type { AssetCatalog, AssetLinkChange, AssetUploadState, AssetUploadTarget, AssetTrash, ConfigComparison, ConfigDetails, ConfigPreview } from "../types/materialAssets";
+import type { AssetCatalog, AssetDownloadPreview, AssetLinkChange, AssetUploadState, AssetUploadTarget, AssetTrash, ConfigComparison, ConfigDetails, ConfigPreview } from "../types/materialAssets";
 const root = "/order-genius/material-assets";
 export const materialAssets = {
   catalog: (signal?: AbortSignal): Promise<AssetCatalog> => request(root, { signal }),
@@ -11,6 +11,8 @@ export const materialAssets = {
   compare: (keys: string[], signal?: AbortSignal): Promise<ConfigComparison> => request(`${root}/compare?${new URLSearchParams({ materialKeys: keys.join(",") })}`, { signal }),
   photo: (id: string, signal?: AbortSignal, variant: "thumbnail" | "display" = "thumbnail"): Promise<Blob> => requestBlob(`${root}/files/${id}?variant=${variant}`, { signal }),
   download: (ids: string[]): Promise<Blob> => requestBlob(`${root}/download?${new URLSearchParams({ fileIds: ids.join(",") })}`),
+  downloadPreview: (referenceMonth: string, signal?: AbortSignal): Promise<AssetDownloadPreview> => request(`${root}/download-preview?${new URLSearchParams({ referenceMonth })}`, { signal }),
+  downloadMonth: (referenceMonth: string, signature: string, selected: string[], signal: AbortSignal): Promise<Blob> => requestBlob(`${root}/download`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ referenceMonth, signature, selected }) }),
   trash: (signal?: AbortSignal): Promise<AssetTrash> => request(`${root}/trash`, { signal }),
   restore: (id: string): Promise<{ restored: boolean }> => request(`${root}/trash/${id}/restore`, { method: "POST" }),
   purge: (id: string): Promise<{ deleted: boolean }> => request(`${root}/trash/${id}?confirmed=true`, { method: "DELETE" }),

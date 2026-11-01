@@ -4,12 +4,14 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
+from calendar import monthrange
 from datetime import date, datetime, timezone
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import SpooledTemporaryFile, TemporaryDirectory
 from threading import BoundedSemaphore
 from uuid import UUID
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from fastapi import HTTPException
 from sqlalchemy import func, or_, select
@@ -28,6 +30,7 @@ MAX_CONFIG_BYTES = 32 * 1024 * 1024
 MAX_STORED_PHOTO_BYTES = 6_000_000
 MAX_GROUP_BYTES = 128 * 1024 * 1024
 TRASH_MAX_BYTES = 2_000_000_000
+MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 IMAGE_FORMATS = {"JPEG": "image/jpeg", "PNG": "image/png", "GIF": "image/gif", "WEBP": "image/webp", "BMP": "image/bmp", "TIFF": "image/tiff", "AVIF": "image/avif", "HEIF": "image/heif"}
 _IMAGE_WORKERS = BoundedSemaphore(1)
 
@@ -41,14 +44,36 @@ def colour_key(code: str | None, name: str | None = None) -> str:
     return "code:" + code.strip().upper() if clean_text(code) else "name:" + clean_text(name).upper()
 
 
-def catalog_materials(session: Session, user) -> dict[str, dict]:
+def month_bounds(month: str) -> tuple[date, date]:
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}", month):
+            raise ValueError
+        first = date.fromisoformat(month + "-01")
+        return first, first.replace(day=monthrange(first.year, first.month)[1])
+    except ValueError as exc:
+        raise HTTPException(422, "Choose a valid YYYY-MM / 请选择有效年月") from exc
+
+
+def active_in_month(sku, first: date, last: date) -> bool:
+    start, end = bom_repo.get_lifecycle_dates(sku)
+    if start and end and start > end:
+        return True  # Expose the conflicting row, but never offer its files.
+    if start or end:
+        return (start is None or start <= last) and (end is None or end >= first) and not (start and end and start > end)
+    return bool(getattr(sku, "is_active", True)) and bom_repo.resolve_effective_lifecycle_status(sku, first) in {"active", "phase_out"}
+
+
+def catalog_materials(session: Session, user, reference_month: str | None = None) -> dict[str, dict]:
     countries = ordering_countries(session, user)
     if countries == set():
         return {}
     skus = bom_repo.list_all_material_skus_for_admin(
         session, country_code=countries, allowed_brands=ordering_brands(session, user), limit=None)
     materials: dict[str, dict] = {}
+    bounds = month_bounds(reference_month) if reference_month else None
     for sku in skus:
+        if bounds and not active_in_month(sku, *bounds):
+            continue
         template = clean_text(sku.bom_template).upper()
         if "**" not in template:
             continue
@@ -60,6 +85,8 @@ def catalog_materials(session: Session, user) -> dict[str, dict]:
             "effectiveTo": last.isoformat() if last else None, "historical": False,
             "colours": {}, "interiors": {}, "notes": [], "issues": [],
         })
+        if first and last and first > last:
+            item["issues"] = ["Invalid BOM lifecycle dates / BOM生效日期冲突"]
         if item["version"] != sku.version or item["effectiveFrom"] != (first.isoformat() if first else None) or item["effectiveTo"] != (last.isoformat() if last else None):
             item["issues"] = ["Conflicting BOM fields/dates / BOM字段或日期不一致"]
         item["historical"] = item["historical"] or bom_repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
@@ -77,6 +104,107 @@ def catalog_materials(session: Session, user) -> dict[str, dict]:
         if sku.remark and sku.remark not in item["notes"]:
             item["notes"].append(sku.remark)
     return materials
+
+
+def archive_segment(value: str) -> str:
+    """Human names, safe on Windows and never a ZIP traversal path."""
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value).strip(" .") or "_"
+    suffix = Path(value).suffix
+    if len(value) > 110 or len(value.encode("utf-8")) > 200:
+        suffix = suffix if len(suffix) <= 12 else ""
+        value = value[:100].encode("utf-8")[:180].decode("utf-8", "ignore").rstrip(" .") + suffix
+    if value.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}:
+        value = "_" + value
+    return value
+
+
+def download_preview(session: Session, materials: dict, month: str) -> dict:
+    month_bounds(month)
+    catalog = read_catalog(session, materials, editor=False)
+    versions = {v["id"]: v for v in catalog["versions"]}
+    albums = {g["id"]: g for g in catalog["groups"]}
+    bindings = {(b["materialKey"], b["kind"], b["colourKey"]): b for b in catalog["bindings"]}
+    ids = {f["id"] for owner in [*versions.values(), *albums.values()] for f in owner["files"]}
+    sizes = {str(id): size for id, size in session.execute(select(MaterialAssetFile.asset_file_id, func.octet_length(MaterialAssetFile.content)).where(MaterialAssetFile.asset_file_id.in_([UUID(id) for id in ids])))}
+    rows, paths = [], set()
+    for material in sorted(materials.values(), key=lambda m: (m["brand"], m["modelName"], m["version"], m["bomTemplate"])):
+        root = "/".join(archive_segment(v) for v in (f'{material["brand"]} {material["modelName"]}', material["version"], material["bomTemplate"]))
+        groups = []
+        targets = [("config", "", "Configuration")]
+        targets += [(kind, colour["key"], colour["code"] or colour["name"] or colour["key"]) for kind, colours in (("exterior", material["colours"]), ("interior", material["interiors"])) for colour in colours.values()]
+        for kind, colour, label in targets:
+            binding = bindings.get((material["key"], kind, colour))
+            owner = (versions.get(binding["versionId"]) if kind == "config" else albums.get(binding["groupId"])) if binding else None
+            folder = {"config": "Configuration", "exterior": "Exterior", "interior": "Interior"}[kind]
+            folder = f"{root}/{folder}" + ("/" + archive_segment(label) if colour else "")
+            files = []
+            for file in (owner["files"] if owner and not material["issues"] else []):
+                filename = archive_segment(file["filename"])
+                path = f"{folder}/{filename}"
+                suffix = 0
+                while path.casefold() in paths:
+                    suffix += 1
+                    path = f"{folder}/{file['id']}_{suffix}_{filename}"
+                paths.add(path.casefold())
+                files.append({**file, "path": path, "bytes": sizes[file["id"]]})
+            groups.append({"key": f'{material["key"]}:{kind}:{colour}', "kind": kind, "label": label, "colourKey": colour,
+                           "bindingVersion": binding["rowVersion"] if binding else 0,
+                           "sourceId": owner["id"] if owner else None, "files": files})
+        rows.append({key: material[key] for key in ("key", "brand", "modelName", "version", "bomTemplate", "effectiveFrom", "effectiveTo", "issues")} | {"groups": groups})
+    signature = hashlib.sha256(json.dumps([month, rows], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    files = [f for row in rows for group in row["groups"] for f in group["files"]]
+    return {"referenceMonth": month, "signature": signature, "materials": rows, "totalFiles": len(files), "totalBytes": sum(f["bytes"] for f in files), "maxBytes": MAX_DOWNLOAD_BYTES}
+
+
+def selected_download(preview: dict, selected: list[str]) -> tuple[list[tuple[UUID, str]], str]:
+    import csv
+    from io import StringIO
+    groups = {g["key"]: g for row in preview["materials"] for g in row["groups"]}
+    if any(key not in groups or not groups[key]["files"] for key in selected):
+        raise HTTPException(404, "Selection unavailable; reload preview / 选择已不可用，请重读预览")
+    chosen = set(selected) if selected else set(groups)
+    output = StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(["Month", "Brand", "Model", "Trim", "Material", "Effective from", "Effective to", "Kind", "Colour", "Source UUID", "File UUID", "Path", "Status"])
+    entries = []
+    for row in preview["materials"]:
+        # Missing groups stay visible in an all-download index; explicit selection is exact.
+        included = not selected or any(g["key"] in chosen for g in row["groups"])
+        for group in row["groups"]:
+            if group["key"] not in chosen and not (included and not group["files"]):
+                continue
+            for file in group["files"] or [None]:
+                values = [preview["referenceMonth"], row["brand"], row["modelName"], row["version"], row["bomTemplate"], row["effectiveFrom"], row["effectiveTo"], group["kind"], group["label"], group["sourceId"], file["id"] if file else "", file["path"] if file else "", "ready" if file else ("; ".join(row["issues"]) or "not linked / no file")]
+                writer.writerow(["'" + value if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")) else value for value in values])
+                if file:
+                    entries.append((UUID(file["id"]), file["path"]))
+    if not entries:
+        raise HTTPException(409, "No files in this month/selection / 本月或所选范围暂无可下载文件")
+    return entries, output.getvalue()
+
+
+def build_download_archive(session: Session, entries: list[tuple[UUID, str]], index: str | None = None, *, max_bytes: int = MAX_DOWNLOAD_BYTES):
+    ids = {id for id, _ in entries}
+    sizes = dict(session.execute(select(MaterialAssetFile.asset_file_id, func.octet_length(MaterialAssetFile.content)).where(MaterialAssetFile.asset_file_id.in_(ids), MaterialAssetFile.deleted_at_utc.is_(None))).all())
+    if ids != sizes.keys():
+        raise HTTPException(409, "Files changed; reload preview / 文件已变化，请重读预览")
+    if sum(sizes[id] for id, _ in entries) > max_bytes:
+        raise HTTPException(413, "Package too large; select fewer models/materials / 文件包过大，请按车型或物料分批勾选")
+    output = SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+    try:
+        with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+            for id, path in entries:
+                content = session.scalar(select(MaterialAssetFile.content).where(MaterialAssetFile.asset_file_id == id, MaterialAssetFile.deleted_at_utc.is_(None)))
+                if content is None:
+                    raise HTTPException(409, "Files changed; reload preview / 文件已变化，请重读预览")
+                archive.writestr(path, content)
+            if index is not None:
+                archive.writestr("Materials.csv", b"\xef\xbb\xbf" + index.encode("utf-8"))
+        output.seek(0)
+        return output
+    except BaseException:
+        output.close()
+        raise
 
 
 def require_material(materials: dict, key: str) -> dict:
