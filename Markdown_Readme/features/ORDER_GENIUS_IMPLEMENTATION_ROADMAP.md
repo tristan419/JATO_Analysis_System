@@ -12,6 +12,7 @@
 - [x] 隔离PostgreSQL从空库执行完整Alembic至0063；真实并发移入仅一方成功，合计容量不超额。未触碰生产业务数据。
 - [ ] PR CI与最终交付回执（以本PR检查及发布回执为准）。
 - [ ] Candidate交付回执；本轮不授权Active/intl推广。
+- 交付回执：[PR #319](https://github.com/tristan419/JATO_Analysis_System/pull/319)集中记录最终CI、Candidate身份及线上验收；本地验证不冒充线上真实资料CRUD验收。
 
 ## 2026-11-01 BOM 基准物料号搜索
 

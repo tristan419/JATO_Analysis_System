@@ -14,7 +14,7 @@
 
 ## 2026-10-31 Notice Board / Material Assets 当前契约
 
-本节是本轮唯一业务规则；实现与发布状态仅记在 `ORDER_GENIUS_IMPLEMENTATION_ROADMAP.md`。
+本文件是唯一业务规则，较新日期的补充契约优先；实现与发布状态仅记在 `ORDER_GENIUS_IMPLEMENTATION_ROADMAP.md`。
 
 - BOM Admin 仍唯一维护物料号、Product fields、生命周期日期、国家与报价。本轮不改变它们，也不改数量、旧 PI、颜色释放及成交快照。
 - BOM Admin 搜索同时匹配完整颜色SKU和含 `**` 的基准物料号；二者属于同一物料条件组，同类取并集、与车型/动力等条件取交集。`*` 是基准号的字面字符，不扩展成任意通配符；保留原国家/品牌权限、历史物料及清空行为。
