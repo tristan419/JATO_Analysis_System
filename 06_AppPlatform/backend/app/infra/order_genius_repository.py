@@ -2433,13 +2433,14 @@ def list_all_material_skus_for_admin(
     if search:
         from app.infra.business_search import search_expression, facet_words
         columns = [MaterialSkuMaster.brand, MaterialSkuMaster.powertrain, MaterialSkuMaster.model_name,
-                   MaterialSkuMaster.version, MaterialSkuMaster.material_code]
+                   MaterialSkuMaster.version, MaterialSkuMaster.material_code, MaterialSkuMaster.bom_template]
         vocabulary = session.execute(stmt.with_only_columns(*columns).distinct()).all()
-        facets = [([column], facet_words(row[i] for row in vocabulary)) for i, column in enumerate(columns)]
+        facets = [([column], facet_words(row[i] for row in vocabulary)) for i, column in enumerate(columns[:4])]
+        facets.append((columns[4:], facet_words(value for row in vocabulary for value in row[4:])))
         facets[1][1].update({"EV", "SHS"})
         import re
         facets[4][1].update(term.upper() for term in re.split(r"[\s,，;；]+", search)
-                            if re.fullmatch(r"\d{2,5}|T\d[A-Za-z0-9]+", term, re.IGNORECASE))
+                            if re.fullmatch(r"\d{2,5}|T\d[A-Za-z0-9*]+", term, re.IGNORECASE))
         expression = search_expression(search, columns, facets)
         if expression is not None:
             stmt = stmt.where(expression)

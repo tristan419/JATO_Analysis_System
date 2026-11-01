@@ -5,6 +5,7 @@
 本节是本轮唯一业务规则；实现与发布状态仅记在 `ORDER_GENIUS_IMPLEMENTATION_ROADMAP.md`。
 
 - BOM Admin 仍唯一维护物料号、Product fields、生命周期日期、国家与报价。本轮不改变它们，也不改数量、旧 PI、颜色释放及成交快照。
+- BOM Admin 搜索同时匹配完整颜色SKU和含 `**` 的基准物料号；二者属于同一物料条件组，同类取并集、与车型/动力等条件取交集。`*` 是基准号的字面字符，不扩展成任意通配符；保留原国家/品牌权限、历史物料及清空行为。
 - 替换现有 Notice Board / 泳道：按 Model、Trim 和含 `**` 的基准物料展示轻量线性日历；共用一个双柄时间窗口，默认最近四个月，可调整到今天前后三年。日期继续读取原 `material-timeline`，不建第二套日期或推断更替。保留授权范围、个人已读和明确的缺失/冲突状态；不增加“跳转编辑 BOM”入口。
 - Material Assets 入口位于选品页 Filters & Actions 的 BOM / Assets 工具区，与 BOM Admin 使用同类近全屏大面板；Mega Menu 不提供该入口。复用现有资料内容，不离开选品页、不重建选品状态。管理单位是品牌＋Model＋含 `**` 的 `bomTemplate`，不是展开颜色后的完整 SKU，也不修改物料号。配置版本使用 UUID，与该基准关联；读取 BOM Product fields 而不是另造小电池/FWD等描述。
 - 选品页移除标题下说明和常驻的国家/年/月/品牌/车型/动力标签；筛选功能及工具区内摘要保留。Enter new batch 与 Order Genius 标题同排，原有余量/保存/PI门禁不变。Notice Board 折叠后只保留紧凑单行，提醒和日历随面板折叠，未读数量仍可见。
