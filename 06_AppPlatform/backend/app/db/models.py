@@ -1719,6 +1719,7 @@ class ConfigVersion(Base):
     published_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     values_snapshot_json: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True, deferred=True)
+    deleted_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class MaterialAssetGroup(TimestampMixin, Base):
@@ -1737,6 +1738,7 @@ class MaterialAssetGroup(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    deleted_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class MaterialAssetFile(TimestampMixin, Base):
@@ -1754,6 +1756,11 @@ class MaterialAssetFile(TimestampMixin, Base):
     sha256: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
     created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    thumbnail: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    display_image: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    deleted_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    deleted_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    upload_id: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
 
 
 class MaterialAssetBinding(TimestampMixin, Base):

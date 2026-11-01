@@ -230,6 +230,14 @@ class TestChunkedUpload:
 
 
 class TestCleanup:
+    def test_cleanup_accepts_the_timezone_aware_timestamp_written_by_engine(self, session_root: Path) -> None:
+        from datetime import UTC, datetime, timedelta
+        from upload_toolkit.file_utils import write_json
+        state = create_upload_session(session_root, filename="old.png", size_bytes=10, chunk_size=10)
+        state["createdAt"] = (datetime.now(UTC) - timedelta(days=3)).isoformat()
+        write_json(session_root / state["uploadId"] / "upload_state.json", state)
+        assert cleanup_expired_sessions(session_root, max_age_days=2)["removedSessionIds"] == [state["uploadId"]]
+
     def test_cleanup_single_session(self, session_root: Path) -> None:
         state = create_upload_session(
             session_root, filename="todel.xlsx", size_bytes=10, chunk_size=10

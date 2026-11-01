@@ -224,13 +224,15 @@ def cleanup_expired_sessions(
     max_age_days: int = 90,
 ) -> dict[str, Any]:
     """Remove sessions older than max_age_days. Returns cleanup stats."""
-    cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=max_age_days)
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
     removed: list[str] = []
     for sp in sorted(session_root.glob("*/upload_state.json")):
         try:
             payload = read_json(sp)
             created = payload.get("createdAt", "")
             created_dt = datetime.fromisoformat(created) if created else None
+            if created_dt and created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=UTC)
             if created_dt and created_dt < cutoff:
                 shutil.rmtree(sp.parent)
                 removed.append(str(payload.get("uploadId", sp.parent.name)))
