@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import io
+from datetime import datetime, timezone
 from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -16,6 +17,8 @@ from app.core.security import require_min_role, require_roles, ROLE_LEVEL
 from app.db.models import MaterialAssetBinding, MaterialAssetFile, MaterialAssetGroup, ConfigVersion
 from app.db.session import get_db_session
 from app.services import material_asset_service as svc
+from app.services import material_asset_upload as uploads
+from upload_toolkit import upload_engine
 
 router = APIRouter(prefix="/order-genius/material-assets", tags=["material_assets"])
 reader = require_roles("order_filler", "editor", "admin", "developer")
@@ -40,6 +43,98 @@ class DeleteRequest(BaseModel):
     confirmed: bool = False
 
 
+class UploadRequest(BaseModel):
+    materialKey: str
+    kind: str
+    colourKey: str = ""
+    groupId: UUID | None = None
+    rowVersion: int = Field(ge=0)
+    filename: str = Field(min_length=1, max_length=255)
+    sizeBytes: int = Field(gt=0, le=svc.MAX_FILE_BYTES)
+    fileFingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class SaveUpload(BaseModel):
+    sourceColumn: int | None = Field(default=None, ge=0)
+
+
+@router.post("/uploads")
+def start_upload(body: UploadRequest, session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
+    return uploads.initiate(session, body.model_dump(mode="json"), user.name, svc.catalog_materials(session, user))
+
+
+@router.put("/uploads/{upload_id}/parts/{part}")
+async def upload_part(upload_id: str, part: int, request: Request, session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
+    uploads.get(session, upload_id, user.name)
+    chunks, total = [], 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > uploads.CHUNK_BYTES:
+            raise HTTPException(413, "Chunk too large / 分片过大")
+        chunks.append(chunk)
+    result = uploads.receive(session, upload_id, user.name, part, b"".join(chunks), request.headers.get("X-Chunk-SHA256", ""))
+    session.commit()
+    return result
+
+
+@router.post("/uploads/{upload_id}/preview")
+def preview_upload(upload_id: str, session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
+    with uploads.PROCESSING:
+        state, content = uploads.assembled(session, upload_id, user.name)
+        svc.require_material(svc.catalog_materials(session, user), state["target"]["materialKey"])
+        if state["target"]["kind"] != "config":
+            raise HTTPException(422, "Not a configuration / 不是配置表")
+        return svc.parse_configuration(content, state["filename"])
+
+
+@router.post("/uploads/{upload_id}/save")
+def save_upload(upload_id: str, body: SaveUpload, session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
+    # Bound file reads as well as decoding: pending 100-MiB inputs stay on disk.
+    with uploads.PROCESSING:
+        return save_completed_upload(upload_id, body, session, user)
+
+
+def save_completed_upload(upload_id: str, body: SaveUpload, session: Session, user) -> dict:
+    uploads.lock(session, upload_id)
+    materials = svc.catalog_materials(session, user)
+    previous = uploads.saved(session, upload_id, user.name)
+    if previous:
+        authorized_file(session, previous.asset_file_id, materials, user)
+        return {"saved": True, "groupId": str(previous.asset_group_id) if previous.asset_group_id else None}
+    state, content = uploads.assembled(session, upload_id, user.name)
+    target = state["target"]
+    material = svc.require_material(materials, target["materialKey"])
+    group = None
+    if target["kind"] == "config":
+        if body.sourceColumn is None:
+            raise HTTPException(422, "Choose a configuration column / 请选择配置列")
+        version = svc.attach_configuration(session, materials, target["materialKey"], content, state["filename"], body.sourceColumn, target["rowVersion"], user.name)
+        file = session.scalar(select(MaterialAssetFile).where(MaterialAssetFile.config_version_id == version.version_id))
+    else:
+        if target["groupId"]:
+            group = svc.group_access(session, UUID(target["groupId"]), materials, editor=True, lock=True)
+            if (group.brand, group.model_name, group.kind, group.colour_key) != (material["brand"], material["modelName"], target["kind"], target["colourKey"]):
+                raise HTTPException(422, "Photo group no longer matches the target / 图片组与目标不匹配")
+            file = svc.add_photos(session, group, [(state["filename"], content)], user.name, expected_row_version=target["rowVersion"])[0]
+        else:
+            group, files = svc.create_photo_group(session, materials, target, [(state["filename"], content)], user.name)
+            file = files[0]
+    file.upload_id = upload_id
+    commit(session)
+    upload_engine.cleanup_upload_session(uploads.root(user.name), upload_id)
+    return {"saved": True, "groupId": str(group.asset_group_id) if group else None, "rowVersion": group.row_version if group else None}
+
+
+@router.delete("/uploads/{upload_id}")
+def cancel_upload(upload_id: str, session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
+    uploads.lock(session, upload_id)
+    if uploads.saved(session, upload_id, user.name):
+        return {"cancelled": False, "saved": True}
+    uploads.get(session, upload_id, user.name)
+    upload_engine.cleanup_upload_session(uploads.root(user.name), upload_id)
+    return {"cancelled": True, "saved": False}
+
+
 def editable(user) -> bool:
     return ROLE_LEVEL[user.role] >= ROLE_LEVEL["editor"]
 
@@ -58,11 +153,12 @@ async def read_photos(files: list[UploadFile]) -> list[tuple[str, bytes]]:
     result = []
     total = 0
     for file in files:
-        content = await file.read(svc.MAX_FILE_BYTES + 1)
+        content = await file.read(8 * 1024 * 1024 + 1)
+        if len(content) > 8 * 1024 * 1024:
+            raise HTTPException(422, "Use resumable upload for images over 8 MiB / 大于8MiB的图片请使用分片上传")
         total += len(content)
-        svc.validate_image(content)
-        if total > svc.MAX_GROUP_BYTES:
-            raise HTTPException(422, "At most 32 MiB per upload / 每次上传最多32MiB")
+        if total > 32 * 1024 * 1024:
+            raise HTTPException(422, "Use resumable upload for batches over 32 MiB / 超过32MiB的批次请使用分片上传")
         result.append((file.filename or "image", content))
     return result
 
@@ -82,16 +178,8 @@ def save_bindings(body: LinkBatch, session: Session = Depends(get_db_session), u
 @router.post("/groups")
 async def create_group(material_key: str = Form(), kind: str = Form(), colour_key: str = Form(), name: str = Form(min_length=1, max_length=150), row_version: int = Form(ge=0),
                        files: list[UploadFile] = File(), session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
-    material = svc.require_material(svc.catalog_materials(session, user), material_key)
-    allowed = material["colours"] if kind == "exterior" else material["interiors"] if kind == "interior" else {}
-    if colour_key not in allowed:
-        raise HTTPException(422, "Use an existing BOM colour / 请使用既有BOM色码")
-    group = MaterialAssetGroup(brand=material["brand"], model_name=material["modelName"], kind=kind, colour_key=colour_key, name=name.strip(), created_by=user.name)
-    session.add(group)
-    session.flush()
-    svc.add_photos(session, group, await read_photos(files), user.name)
-    svc.replace_bindings(session, {material_key: material}, [{"materialKey": material_key, "kind": kind, "colourKey": colour_key,
-        "groupId": str(group.asset_group_id), "versionId": None, "rowVersion": row_version}], user.name)
+    target = {"materialKey": material_key, "kind": kind, "colourKey": colour_key, "rowVersion": row_version}
+    group, _ = svc.create_photo_group(session, svc.catalog_materials(session, user), target, await read_photos(files), user.name, name.strip())
     commit(session)
     return {"groupId": str(group.asset_group_id)}
 
@@ -99,9 +187,7 @@ async def create_group(material_key: str = Form(), kind: str = Form(), colour_ke
 @router.post("/groups/{group_id}/files")
 async def add_files(group_id: UUID, row_version: int = Form(ge=1), files: list[UploadFile] = File(), session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
     group = svc.group_access(session, group_id, svc.catalog_materials(session, user), editor=True, lock=True)
-    if row_version != group.row_version:
-        raise HTTPException(409, "Photo group changed; reload / 图片组已变化，请重读")
-    svc.add_photos(session, group, await read_photos(files), user.name)
+    svc.add_photos(session, group, await read_photos(files), user.name, expected_row_version=row_version)
     commit(session)
     return {"saved": True}
 
@@ -113,10 +199,9 @@ def delete_group(group_id: UUID, body: DeleteRequest, session: Session = Depends
         raise HTTPException(409, "Photo group changed; reload / 图片组已变化，请重读")
     if not body.confirmed or session.execute(select(MaterialAssetBinding).where(MaterialAssetBinding.asset_group_id == group_id)).first():
         raise HTTPException(409, "Confirm deletion of an unreferenced group / 仅可确认删除未被引用的图片组")
-    for file in session.execute(select(MaterialAssetFile).where(MaterialAssetFile.asset_group_id == group_id)).scalars():
-        session.delete(file)
-    session.flush()
-    session.delete(group)
+    files = list(session.scalars(select(MaterialAssetFile).where(MaterialAssetFile.asset_group_id == group_id)))
+    svc.move_to_trash(session, files, user.name)
+    group.deleted_at_utc = datetime.now(timezone.utc)
     commit(session)
     return {"deleted": True}
 
@@ -125,12 +210,12 @@ def delete_group(group_id: UUID, body: DeleteRequest, session: Session = Depends
 def delete_file(file_id: UUID, body: DeleteRequest, session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
     materials = svc.catalog_materials(session, user)
     file = session.get(MaterialAssetFile, file_id)
-    if not file or not file.asset_group_id:
+    if not file or file.deleted_at_utc or not file.asset_group_id:
         raise HTTPException(404, "Photo unavailable / 图片不可用")
     group = svc.group_access(session, file.asset_group_id, materials, editor=True, lock=True)
     if not body.confirmed or body.rowVersion != group.row_version:
         raise HTTPException(409, "Confirm shared-photo removal with current version / 请核对当前版本并确认移除共享图片")
-    session.delete(file)
+    svc.move_to_trash(session, [file], user.name)
     group.row_version += 1
     commit(session)
     return {"deleted": True}
@@ -138,7 +223,7 @@ def delete_file(file_id: UUID, body: DeleteRequest, session: Session = Depends(g
 
 def authorized_file(session: Session, file_id: UUID, materials: dict, user) -> MaterialAssetFile:
     file = session.get(MaterialAssetFile, file_id)
-    if not file:
+    if not file or file.deleted_at_utc:
         raise HTTPException(404, "File unavailable / 文件不可用")
     if file.asset_group_id:
         svc.group_access(session, file.asset_group_id, materials, editor=editable(user))
@@ -148,10 +233,22 @@ def authorized_file(session: Session, file_id: UUID, materials: dict, user) -> M
 
 
 @router.get("/files/{file_id}")
-def get_file(file_id: UUID, download: bool = False, session: Session = Depends(get_db_session), user=Depends(reader)):
+def get_file(file_id: UUID, download: bool = False, variant: str = Query("display", pattern="^(thumbnail|display|original)$"), session: Session = Depends(get_db_session), user=Depends(reader)):
     file = authorized_file(session, file_id, svc.catalog_materials(session, user), user)
     from urllib.parse import quote
-    return StreamingResponse(io.BytesIO(file.content), media_type=file.content_type, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+    image_variant = bool(file.asset_group_id) and not download and variant != "original"
+    if image_variant and (file.thumbnail is None or file.display_image is None):
+        # Legacy cache fills use the same parent→file lock order as removal, so a
+        # concurrent trash move counts the renditions against its 2-GB quota.
+        svc.group_access(session, file.asset_group_id, svc.catalog_materials(session, user), editor=editable(user), lock=True)
+        file = session.scalar(select(MaterialAssetFile).where(MaterialAssetFile.asset_file_id == file_id).with_for_update().execution_options(populate_existing=True))
+        if file is None or file.deleted_at_utc:
+            raise HTTPException(404, "Photo unavailable / 图片不可用")
+        if file.thumbnail is None or file.display_image is None:
+            _, _, file.thumbnail, file.display_image = svc.prepare_image(file.content)
+        commit(session)
+    content = (file.thumbnail if variant == "thumbnail" else file.display_image) if image_variant else file.content
+    return StreamingResponse(io.BytesIO(content), media_type="image/webp" if image_variant else file.content_type, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
         "Content-Disposition": ("attachment" if download else "inline") + "; filename*=UTF-8''" + quote(file.filename)})
 
 
@@ -159,19 +256,15 @@ def get_file(file_id: UUID, download: bool = False, session: Session = Depends(g
 async def preview_config(file: UploadFile = File(), session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
     if not svc.catalog_materials(session, user):
         raise HTTPException(403, "No authorized materials / 无获授权物料")
-    return svc.parse_configuration(await file.read(svc.MAX_FILE_BYTES + 1), file.filename or "")
+    return svc.parse_configuration(await file.read(svc.MAX_CONFIG_BYTES + 1), file.filename or "")
 
 
 @router.post("/configurations")
 async def upload_config(material_key: str = Form(), source_column: int = Form(ge=0), row_version: int = Form(ge=0), file: UploadFile = File(),
                         session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
     materials = svc.catalog_materials(session, user)
-    material = svc.require_material(materials, material_key)
-    content = await file.read(svc.MAX_FILE_BYTES + 1)
-    parsed = svc.parse_configuration(content, file.filename or "", source_column)
-    version = svc.create_configuration(session, material, parsed, content, file.filename or "config.xlsx", user.name)
-    svc.replace_bindings(session, materials, [{"materialKey": material_key, "kind": "config", "colourKey": "", "groupId": None,
-        "versionId": str(version.version_id), "rowVersion": row_version}], user.name)
+    content = await file.read(svc.MAX_CONFIG_BYTES + 1)
+    version = svc.attach_configuration(session, materials, material_key, content, file.filename or "config.xlsx", source_column, row_version, user.name)
     commit(session)
     return {"versionId": str(version.version_id)}
 
@@ -179,12 +272,48 @@ async def upload_config(material_key: str = Form(), source_column: int = Form(ge
 @router.delete("/configurations/{version_id}")
 def delete_config(version_id: UUID, confirmed: bool = Query(False), session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
     version = svc.version_access(session, version_id, svc.catalog_materials(session, user), lock=True)
-    if not confirmed or session.execute(select(MaterialAssetBinding).where(MaterialAssetBinding.config_version_id == version_id)).first() or session.execute(select(ConfigVersion).where(ConfigVersion.parent_version_id == version_id)).first():
-        raise HTTPException(409, "Referenced version cannot be deleted / 被关联或有后续版本引用的配置不可删除")
-    for file in session.execute(select(MaterialAssetFile).where(MaterialAssetFile.config_version_id == version_id)).scalars():
-        session.delete(file)
+    if not confirmed:
+        raise HTTPException(409, "Confirm moving this configuration to the recycle bin / 请确认将配置移入回收站")
+    svc.move_to_trash(session, list(session.scalars(select(MaterialAssetFile).where(MaterialAssetFile.config_version_id == version_id))), user.name)
+    version.deleted_at_utc = datetime.now(timezone.utc)
+    commit(session)
+    return {"deleted": True}
+
+
+@router.get("/trash")
+def recycle_bin(session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
+    return svc.read_trash(session, svc.catalog_materials(session, user))
+
+
+@router.post("/trash/{file_id}/restore")
+def restore_file(file_id: UUID, session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
+    file = svc.trash_file_access(session, file_id, svc.catalog_materials(session, user))
+    if file.asset_group_id:
+        group = session.get(MaterialAssetGroup, file.asset_group_id)
+        group.deleted_at_utc = None
+        group.row_version += 1
+    else:
+        session.get(ConfigVersion, file.config_version_id).deleted_at_utc = None
+    file.deleted_at_utc, file.deleted_by = None, None
+    commit(session)
+    return {"restored": True}
+
+
+@router.delete("/trash/{file_id}")
+def purge_file(file_id: UUID, confirmed: bool = Query(False), session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
+    file = svc.trash_file_access(session, file_id, svc.catalog_materials(session, user))
+    if not confirmed:
+        raise HTTPException(409, "Confirm permanent deletion; this cannot be undone / 永久删除不可恢复，请确认")
+    version = session.get(ConfigVersion, file.config_version_id) if file.config_version_id else None
+    session.delete(file)
     session.flush()
-    session.delete(version)
+    # Keep immutable source records used by successors; only the explicitly selected file is purged.
+    if version:
+        remaining_files = session.scalar(select(MaterialAssetFile.asset_file_id).where(MaterialAssetFile.config_version_id == version.version_id).limit(1))
+        successors = session.scalar(select(ConfigVersion.version_id).where(ConfigVersion.parent_version_id == version.version_id).limit(1))
+        bindings = session.scalar(select(MaterialAssetBinding.binding_id).where(MaterialAssetBinding.config_version_id == version.version_id).limit(1))
+        if not any((remaining_files, successors, bindings)):
+            session.delete(version)
     commit(session)
     return {"deleted": True}
 

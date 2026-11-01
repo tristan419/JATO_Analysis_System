@@ -40,3 +40,7 @@ export interface ConfigComparison {
   materials: Array<{ key: string; bomTemplate: string; modelName: string; versionId: string; version: number }>;
   rows: Array<{ category: string; featureName: string; values: Array<ConfigCell | null> }>;
 }
+export interface AssetUploadTarget { materialKey: string; kind: AssetKind; colourKey: string; groupId: string | null; rowVersion: number }
+export interface AssetUploadState { uploadId: string; chunkSize: number; totalChunks: number; receivedChunks: number[]; uploadedBytes: number }
+export interface AssetTrashEntry extends AssetFile { folder: "photos" | "configurations"; modelName: string; label: string; bytes: number; deletedAt: string; deletedBy: string }
+export interface AssetTrash { usedBytes: number; maxBytes: number; entries: AssetTrashEntry[] }

@@ -68,7 +68,20 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20261031_0062"]
+    assert sorted(revisions - parent_revisions) == ["20261101_0063"]
+
+
+def test_material_asset_trash_migration_only_adds_nullable_metadata_and_renditions() -> None:
+    spec = importlib.util.spec_from_file_location("material_assets_0063", VERSIONS_DIR / "20261101_0063_material_asset_trash.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = StringIO()
+    module.op = Operations(MigrationContext.configure(dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output}))
+    module.upgrade()
+    sql = output.getvalue().upper()
+    assert sql.count("ADD COLUMN DELETED_AT_UTC") == 3
+    assert "ADD COLUMN THUMBNAIL BYTEA" in sql and "ADD COLUMN DISPLAY_IMAGE BYTEA" in sql
+    assert not any(word in sql for word in ("UPDATE ", "DELETE FROM", "DROP TABLE", "CREATE TABLE"))
 
 
 def test_material_assets_migration_matches_frozen_model_columns() -> None:

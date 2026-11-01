@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { materialAssets } from "../../api/materialAssets";
 import { MaterialColourPreview } from "../../components/orderGenius/MaterialColourPreview";
-import { MaterialComparisonPanel } from "../../components/orderGenius/MaterialConfigurationComparison";
+import { MaterialComparisonPanel, MaterialConfigurationComparison } from "../../components/orderGenius/MaterialConfigurationComparison";
+import { MaterialPhotoThumbnail, MaterialPhotoViewer } from "../../components/orderGenius/MaterialPhotoViewer";
 import type { AssetCatalog, AssetMaterial, ConfigCell, ConfigComparison } from "../../types/materialAssets";
 
 const base = (key: string): AssetMaterial => ({ key, brand: "JAECOO", modelName: key === "B" ? "J8" : "J7", bomTemplate: `${key}**`, version: "FWD", powertrain: "PHEV", effectiveFrom: "2026-10-01", effectiveTo: null, historical: false,
@@ -28,6 +29,14 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("selection comparison", () => {
+  it("shows BOM interior differences even when the configuration source and values are identical", () => {
+    const data = catalog();
+    data.materials[1].interiors = [{ key: "code:BN", code: "BN", name: "Brown", hex: "#885533" }];
+    const same = { ...comparison, rows: [{ category: "Safety", featureName: "Same", values: [cell("6"), cell("6")] }] };
+    render(<MaterialConfigurationComparison comparison={same} catalog={data} t={en => en} />);
+    expect(screen.getByText("Interior")).toBeTruthy(); expect(screen.getByText("BN · Brown")).toBeTruthy();
+    expect(screen.queryByText("Same")).toBeNull(); expect(screen.queryByText("No recorded differences")).toBeNull();
+  });
   it("preserves the user's cross-model order, defaults to differences and offers original sources", async () => {
     vi.spyOn(materialAssets, "catalog").mockResolvedValue(catalog());
     const compare = vi.spyOn(materialAssets, "compare").mockResolvedValue(comparison);
@@ -61,12 +70,12 @@ describe("selection photo preview", () => {
     expect(load).not.toHaveBeenCalled(); expect(materialAssets.photo).not.toHaveBeenCalled();
     const button = screen.getByRole("button", { name: "Preview Black photos" });
     fireEvent.mouseEnter(button); await screen.findByAltText("Black");
-    expect(materialAssets.photo).toHaveBeenCalledWith("front", expect.any(AbortSignal));
-    expect(materialAssets.photo).not.toHaveBeenCalledWith("rear", expect.any(AbortSignal));
+    expect(materialAssets.photo).toHaveBeenCalledWith("front", expect.any(AbortSignal), "thumbnail");
+    expect(materialAssets.photo).not.toHaveBeenCalledWith("rear", expect.any(AbortSignal), "thumbnail");
     fireEvent.click(button); await screen.findByRole("dialog");
     fireEvent.click(screen.getByRole("button", { name: "→" }));
     await screen.findByAltText("Black views · rear.png");
-    expect(materialAssets.photo).toHaveBeenCalledWith("rear", expect.any(AbortSignal));
+    expect(materialAssets.photo).toHaveBeenCalledWith("rear", expect.any(AbortSignal), "display");
   });
   it("opens on the first touch click, without requiring prior hover", async () => {
     render(<MaterialColourPreview material={material} kind="exterior" name="Black" scope="user" loadCatalog={async () => catalog()} />);
@@ -90,5 +99,30 @@ describe("selection photo preview", () => {
     const button = screen.getByRole("button"); fireEvent.mouseEnter(button); await screen.findByText("offline");
     fireEvent.mouseLeave(button); await waitFor(() => expect(screen.queryByText("offline")).toBeNull());
     fireEvent.mouseEnter(button); await screen.findByAltText("Black"); expect(load).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("bounded photo loading", () => {
+  it("preloads only adjacent display images, reuses them on navigation and releases every URL on close", async () => {
+    const group = { ...catalog().groups[0], files: Array.from({ length: 6 }, (_, index) => ({ id: `p${index}`, filename: `${index}.webp`, contentType: "image/webp", sha256: String(index) })) };
+    const view = render(<MaterialPhotoViewer group={group} scope="memory" t={en => en} onClose={() => undefined} />);
+    await screen.findByAltText(/0.webp/);
+    expect(vi.mocked(materialAssets.photo).mock.calls.map(call => [call[0], call[2]])).toEqual([["p0", "display"], ["p1", "display"]]);
+    fireEvent.click(screen.getByRole("button", { name: "→" })); await screen.findByAltText(/1.webp/);
+    await waitFor(() => expect(materialAssets.photo).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(materialAssets.photo).mock.calls.map(call => call[0])).toEqual(["p0", "p1", "p2"]);
+    const revoke = vi.mocked(URL.revokeObjectURL); view.unmount(); await waitFor(() => expect(revoke).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(materialAssets.photo).mock.calls.every(call => call[1]?.aborted)).toBe(true);
+  });
+  it("loads thumbnails only near the viewport and aborts/releases them when offscreen", async () => {
+    let visibility: IntersectionObserverCallback | null = null;
+    vi.stubGlobal("IntersectionObserver", class { constructor(callback: IntersectionObserverCallback) { visibility = callback; } observe(): void {} disconnect(): void {} });
+    render(<MaterialPhotoThumbnail group={catalog().groups[0]} scope="viewport" onClick={() => undefined} />);
+    expect(materialAssets.photo).not.toHaveBeenCalled();
+    const intersect = (visible: boolean): void => { if (visibility) visibility([{ isIntersecting: visible } as IntersectionObserverEntry], {} as IntersectionObserver); };
+    act(() => intersect(true)); await screen.findByAltText("Black views");
+    expect(materialAssets.photo).toHaveBeenCalledWith("front", expect.any(AbortSignal), "thumbnail");
+    act(() => intersect(false)); await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledOnce());
+    expect(vi.mocked(materialAssets.photo).mock.calls[0][1]?.aborted).toBe(true);
   });
 });

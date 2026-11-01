@@ -7,6 +7,12 @@ import { errorMessage, useAssetLanguage, type AssetText } from "./materialAssetU
 
 export function MaterialConfigurationComparison({ comparison, catalog, t }: { comparison: ConfigComparison; catalog: AssetCatalog; t: AssetText }) {
   const [differences, setDifferences] = useState(true), [error, setError] = useState("");
+  const comparedMaterials = comparison.materials.map(item => catalog.materials.find(candidate => candidate.key === item.key));
+  const materialRows = (["interiors", "colours"] as const).map(kind => ({
+    key: kind, label: kind === "interiors" ? t("Interior", "内饰") : t("Exterior colours", "外饰颜色"),
+    values: comparedMaterials.map(material => material?.[kind].map(colour => [colour.code, colour.name].filter(Boolean).join(" · ")).sort().join(", ") || "—"),
+  })).filter(row => !differences || new Set(row.values).size > 1);
+  const configRows = comparison.rows.filter(row => !differences || new Set(row.values.map(value => JSON.stringify(value ? [value.raw_value, value.normalized_value, value.availability] : null))).size > 1);
   const download = async (versionId: string, template: string): Promise<void> => {
     setError("");
     const version = catalog.versions.find(item => item.id === versionId);
@@ -22,9 +28,9 @@ export function MaterialConfigurationComparison({ comparison, catalog, t }: { co
       return <th key={item.key}><MaterialCompareLabel index={index}>{item.bomTemplate}</MaterialCompareLabel><small>{item.modelName} · {material?.version} · v{item.version}</small>
         <small>{material?.effectiveFrom ?? "—"} → {material?.effectiveTo ?? "∞"}</small>
         <button type="button" className="mw-link" title={item.versionId} onClick={() => void download(item.versionId, item.bomTemplate)}>{t("Source", "原文件")} ↗</button></th>;
-    })}</tr></thead><tbody>{comparison.rows.filter(row => !differences || new Set(row.values.map(value => JSON.stringify(value ? [value.raw_value, value.normalized_value, value.availability] : null))).size > 1).map(row => <tr key={JSON.stringify([row.category, row.featureName])}>
+    })}</tr></thead><tbody>{materialRows.map(row => <tr key={row.key}><th><small>BOM</small>{row.label}</th>{row.values.map((value, index) => <td key={comparison.materials[index].key} title={`BOM · ${comparison.materials[index].bomTemplate}`}>{value}</td>)}</tr>)}{configRows.map(row => <tr key={JSON.stringify([row.category, row.featureName])}>
       <th><small>{row.category}</small>{row.featureName}</th>{row.values.map((value, index) => <td key={comparison.materials[index].key} title={value ? `${comparison.materials[index].versionId}\n${value.source_column}${value.source_row}` : t("Not recorded in this source; not equivalent to unavailable", "该源文件未记录，不等于未配备")}>{value?.raw_value ?? "—"}</td>)}
-    </tr>)}</tbody></table></div>
+    </tr>)}{!materialRows.length && !configRows.length ? <tr><td colSpan={comparison.materials.length + 1}>{t("No recorded differences", "未记录差异")}</td></tr> : null}</tbody></table></div>
   </section>;
 }
 
