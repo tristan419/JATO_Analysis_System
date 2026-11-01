@@ -4,14 +4,14 @@ from __future__ import annotations
 import io
 from datetime import datetime, timezone
 from uuid import UUID
-from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.core.security import require_min_role, require_roles, ROLE_LEVEL
 from app.db.models import MaterialAssetBinding, MaterialAssetFile, MaterialAssetGroup, ConfigVersion
@@ -56,6 +56,12 @@ class UploadRequest(BaseModel):
 
 class SaveUpload(BaseModel):
     sourceColumn: int | None = Field(default=None, ge=0)
+
+
+class MonthlyDownload(BaseModel):
+    referenceMonth: str
+    signature: str = Field(pattern=r"^[a-f0-9]{64}$")
+    selected: list[str] = Field(default_factory=list, max_length=10000)
 
 
 @router.post("/uploads")
@@ -344,19 +350,41 @@ def compare(material_keys: str = Query(alias="materialKeys"), session: Session =
 @router.get("/download")
 def download(file_ids: str = Query(alias="fileIds"), session: Session = Depends(get_db_session), user=Depends(reader)):
     ids = list(dict.fromkeys(file_ids.split(",")))
-    if not 1 <= len(ids) <= 50:
-        raise HTTPException(422, "Choose 1–50 files / 请选择1–50个文件")
+    if not file_ids.strip():
+        raise HTTPException(422, "Choose files / 请选择文件")
     materials = svc.catalog_materials(session, user)
     try:
         files = [authorized_file(session, UUID(id), materials, user) for id in ids]
     except ValueError as exc:
         raise HTTPException(422, "Invalid file ID / 文件ID无效") from exc
-    total = session.scalar(select(func.sum(func.octet_length(MaterialAssetFile.content))).where(MaterialAssetFile.asset_file_id.in_([f.asset_file_id for f in files]))) or 0
-    if total > 128 * 1024 * 1024:
-        raise HTTPException(413, "Download up to 128 MiB at once / 单次下载最多128MiB，请分批选择")
-    output = io.BytesIO()
-    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
-        for file in files:
-            archive.writestr(str(file.asset_file_id) + "_" + file.filename.replace("\\", "_").replace("/", "_"), file.content)
-    output.seek(0)
-    return StreamingResponse(output, media_type="application/zip", headers={"Cache-Control": "private, no-store", "Content-Disposition": 'attachment; filename="material-assets.zip"'})
+    output = svc.build_download_archive(session, [(file.asset_file_id, str(file.asset_file_id) + "_" + svc.archive_segment(file.filename)) for file in files], max_bytes=128 * 1024 * 1024)
+    return archive_response(output, "material-assets.zip")
+
+
+def archive_response(output, filename: str) -> StreamingResponse:
+    def chunks():
+        try:
+            while chunk := output.read(1024 * 1024):
+                yield chunk
+        finally:
+            output.close()
+    return StreamingResponse(chunks(), media_type="application/zip", background=BackgroundTask(output.close), headers={"Cache-Control": "private, no-store", "Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/download-preview")
+def monthly_download_preview(reference_month: str = Query(alias="referenceMonth"), session: Session = Depends(get_db_session), user=Depends(reader)) -> dict:
+    svc.month_bounds(reference_month)
+    return svc.download_preview(session, svc.catalog_materials(session, user, reference_month), reference_month)
+
+
+@router.post("/download")
+def monthly_download(body: MonthlyDownload, session: Session = Depends(get_db_session), user=Depends(reader)):
+    preview = monthly_download_preview(body.referenceMonth, session, user)
+    if body.signature != preview["signature"]:
+        raise HTTPException(409, "Assets changed; reload preview / 资料已变化，请重读预览")
+    entries, index = svc.selected_download(preview, body.selected)
+    # Reuse the same per-file authorization as single-album downloads.
+    materials = svc.catalog_materials(session, user)
+    for id in {id for id, _ in entries}:
+        authorized_file(session, id, materials, user)
+    return archive_response(svc.build_download_archive(session, entries, index), f"Material_Assets_{body.referenceMonth}.zip")

@@ -3,6 +3,8 @@ import hashlib
 import os
 from types import SimpleNamespace
 from uuid import uuid4
+from datetime import date
+from zipfile import ZipFile
 
 import openpyxl
 import pytest
@@ -87,6 +89,122 @@ def photo(format="PNG", size=(32, 24)):
     with Image.new("RGB", size, (20, 50, 90)) as image:
         image.save(output, format)
     return output.getvalue()
+
+
+@pytest.mark.parametrize("month", ["2026-13", "2026-00", "2026-1", "2026-10-01", "0000-01", "", "x"])
+def test_download_rejects_bad_month(month):
+    with pytest.raises(HTTPException) as error:
+        svc.month_bounds(month)
+    assert error.value.status_code == 422
+
+
+def test_month_overlap_includes_old_new_and_rejects_future_without_price():
+    first, last = svc.month_bounds("2026-02")
+    assert last == date(2026, 2, 28)
+    def sku(start, end, status="historical"):
+        return SimpleNamespace(effective_from_date=start, effective_to_date=end, lifecycle_status=status)
+    assert svc.active_in_month(sku(date(2025, 1, 1), date(2026, 2, 15)), first, last)
+    assert svc.active_in_month(sku(date(2026, 2, 16), None), first, last)
+    assert not svc.active_in_month(sku(date(2026, 3, 1), None), first, last)
+    assert not svc.active_in_month(sku(None, date(2026, 1, 31)), first, last)
+    assert not svc.active_in_month(sku(None, None), first, last)
+    assert svc.active_in_month(sku(None, None, "active"), first, last)
+    assert svc.month_bounds("2028-02")[1].day == 29
+
+
+def test_month_catalog_filters_colour_skus_and_keeps_invalid_dates_visible(monkeypatch):
+    monkeypatch.setattr(svc, "ordering_countries", lambda *_: {"CH"})
+    monkeypatch.setattr(svc, "ordering_brands", lambda *_: {"JAECOO"})
+    def sku(code, start, end=None):
+        return SimpleNamespace(bom_template="T7150D**WT1001", brand="JAECOO", model_name="J7", version="FWD", powertrain="PHEV", lifecycle_status="historical", is_active=False, effective_from_date=start, effective_to_date=end, exterior_color_code=code, exterior_color_name=code, colour_hex="#000000", interior_colour_code=None, interior_color_name="Black", remark="")
+    monkeypatch.setattr(svc.bom_repo, "list_all_material_skus_for_admin", lambda *_a, **kw: [sku("CL", date(2026, 2, 1), date(2026, 2, 15)), sku("BW", date(2026, 3, 1))] if kw["country_code"] == {"CH"} else pytest.fail("country scope lost"))
+    material = next(iter(svc.catalog_materials(None, UserContext("order_filler", "f"), "2026-02").values()))
+    assert set(material["colours"]) == {"code:CL"}
+    monkeypatch.setattr(svc.bom_repo, "list_all_material_skus_for_admin", lambda *_a, **kw: [sku("CL", date(2026, 3, 1), date(2026, 2, 1))])
+    assert next(iter(svc.catalog_materials(None, UserContext("order_filler", "f"), "2026-02").values()))["issues"]
+
+
+def test_month_download_complete_material_paths_reuse_and_missing_index(db, monkeypatch):
+    one, two = material(), material("T7150D**WT1002")
+    mats = {m["key"]: m for m in [one, two]}; album = group(db)
+    svc.add_photos(db, album, [("../CON.png", photo()), ("../CON.png", photo())], "e")
+    svc.replace_bindings(db, mats, [link(one, album), link(two, album)], "e")
+    config = svc.attach_configuration(db, mats, one["key"], matrix(), "config.xlsx", 3, 0, "e")
+    svc.replace_bindings(db, mats, [{"materialKey": two["key"], "kind": "config", "colourKey": "", "groupId": None, "versionId": str(config.version_id), "rowVersion": 0}], "e")
+    db.commit()
+    preview = svc.download_preview(db, mats, "2026-02")
+    assert preview["totalFiles"] == 6  # two complete material packages, shared sources not duplicated in DB
+    assert len(db.scalars(select(MaterialAssetFile)).all()) == 3
+    entries, index = svc.selected_download(preview, [])
+    output = svc.build_download_archive(db, entries, index)
+    try:
+        with ZipFile(output) as archive:
+            names = archive.namelist()
+            assert len(names) == len(set(name.casefold() for name in names)) == 7
+            assert any("JAECOO J7/Large battery FWD/T7150D__WT1001/Configuration/config.xlsx" == name for name in names)
+            assert any("T7150D__WT1002/Exterior/CL/" in name for name in names)
+            assert not any(".." in name.split("/") or "*" in name for name in names)
+            text = archive.read("Materials.csv").decode("utf-8-sig")
+            assert one["bomTemplate"] in text and str(config.version_id) in text and "not linked / no file" in text
+    finally:
+        output.close()
+    key = preview["materials"][0]["groups"][1]["key"]
+    selected, index = svc.selected_download(preview, [key])
+    assert len(selected) == 2 and "not linked / no file" in index
+    assert svc.archive_segment("NUL") == "_NUL"
+    assert svc.archive_segment("中" * 120 + ".xlsx").endswith(".xlsx")
+    assert len(svc.archive_segment("中" * 120 + ".xlsx").encode("utf-8")) <= 200
+    preview["materials"][0]["version"] = "=1+1"
+    assert "'=1+1" in svc.selected_download(preview, [key])[1]
+    with pytest.raises(HTTPException): svc.selected_download(preview, ["foreign-material"])
+    with pytest.raises(HTTPException) as limit: svc.build_download_archive(db, entries, max_bytes=1)
+    assert limit.value.status_code == 413
+
+
+def test_month_download_api_all_selection_stale_and_role_guards(client, db, monkeypatch):
+    m, album = material(), group(db)
+    for start in range(0, 51, 16):
+        svc.add_photos(db, album, [(f"angle-{n}.png", photo()) for n in range(start, min(start + 16, 51))], "e")
+    svc.replace_bindings(db, {m["key"]: m}, [link(m, album)], "e"); db.commit()
+    app.dependency_overrides[get_current_user] = lambda: UserContext("order_filler", "f")
+    root = "/v1/order-genius/material-assets"
+    preview = client.get(root + "/download-preview?referenceMonth=2026-02")
+    assert preview.status_code == 200 and preview.json()["totalFiles"] == 51
+    body = {"referenceMonth": "2026-02", "signature": preview.json()["signature"], "selected": []}
+    response = client.post(root + "/download", json=body)
+    assert response.status_code == 200
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert len(archive.namelist()) == 52
+    file_ids = ",".join(str(file.asset_file_id) for file in db.scalars(select(MaterialAssetFile)))
+    assert client.get(root + "/download", params={"fileIds": file_ids}).status_code == 200
+    assert client.post(root + "/download", json={**body, "selected": ["unauthorized"]}).status_code == 404
+    first = db.scalars(select(MaterialAssetFile)).first(); first.deleted_at_utc = svc.datetime.now(svc.timezone.utc); db.commit()
+    assert client.post(root + "/download", json=body).status_code == 409
+    app.dependency_overrides[get_current_user] = lambda: UserContext("viewer", "v")
+    assert client.get(root + "/download-preview?referenceMonth=2026-02").status_code == 403
+    assert client.post(root + "/download", json=body).status_code == 403
+
+
+def test_month_preview_never_falls_back_to_unrestricted_data(client, db, monkeypatch):
+    monkeypatch.setattr(svc, "catalog_materials", lambda *_: {})
+    root = "/v1/order-genius/material-assets"
+    preview = client.get(root + "/download-preview?referenceMonth=2026-02").json()
+    assert preview["materials"] == [] and preview["totalFiles"] == 0
+    assert client.post(root + "/download", json={"referenceMonth": "2026-02", "signature": preview["signature"], "selected": []}).status_code == 409
+
+
+def test_archive_failure_closes_temporary_output(db, monkeypatch):
+    m, album = material(), group(db)
+    file = svc.add_photos(db, album, [("a.png", photo())], "e")[0]
+    db.flush()
+    output = BytesIO()
+    monkeypatch.setattr(svc, "SpooledTemporaryFile", lambda **_: output)
+    class BrokenZip(ZipFile):
+        def writestr(self, *_args, **_kw):
+            raise OSError("disk full")
+    monkeypatch.setattr(svc, "ZipFile", BrokenZip)
+    with pytest.raises(OSError): svc.build_download_archive(db, [(file.asset_file_id, "a.png")])
+    assert output.closed
 
 
 def test_existing_parser_requires_explicit_column_and_retains_aa_provenance():

@@ -34,3 +34,15 @@ body:has(>.og-workspace-overlay){overflow:hidden}
 .mw-chain-materials{flex-wrap:wrap;align-content:center;gap:5px 9px}.mw-chain-member{display:inline-flex;align-items:center;gap:5px}.mw-chain-materials input{margin:0}.mw-chain-materials .mw-pair-compare{padding:2px 5px;font-size:10px}.mw-chain-materials>small{font-size:10px}.mw-chain-materials .mw-material-code{max-width:180px}.mw-chain-materials .mw-material-code>span{overflow:hidden;text-overflow:ellipsis}
 .og-photo-swatch{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;min-height:0;padding:0;flex-shrink:0;border:1px solid #cbd5e1;border-radius:3px;background:#fff;color:#64748b;font-size:12px;line-height:1;cursor:pointer}.og-photo-swatch:disabled{opacity:.4;cursor:default}
 .mw-swatch-preview{position:fixed;z-index:1050;width:248px;height:168px;padding:4px;background:#fff;border:1px solid #dce4ef;border-radius:7px;box-shadow:0 6px 22px #0f172a26;display:grid;place-items:center;font-size:12px;color:#64748b}.mw-swatch-preview>button{width:100%;height:100%;border:0;padding:0;background:#f8fafc;cursor:pointer}.mw-swatch-preview img{width:100%;height:100%;object-fit:contain}
+.mw-download-dialog .confirm-dialog { width: min(940px, calc(100vw - 32px)); }
+.mw-download-model { margin: 18px 0; }
+.mw-download-model h3 { margin-bottom: 6px; }
+.mw-download-material { padding: 10px 0; border-bottom: 1px solid #e2e8f0; }
+.mw-download-material > label, .mw-download-model h3 label { display: flex; align-items: center; gap: 8px; }
+.mw-download-material summary { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 4px 0 4px 24px; color: #64748b; cursor: pointer; }
+.mw-download-material summary::before { content: "▸"; }
+.mw-download-material details[open] > summary::before { content: "▾"; }
+.mw-download-group { display: flex; align-items: center; gap: 8px; padding: 5px 0 5px 24px; }
+.mw-download-group > span:last-child { margin-left: auto; color: #64748b; }
+.mw-download-group > span { overflow-wrap: anywhere; }
+.mw-download-material strong { overflow-wrap: anywhere; }

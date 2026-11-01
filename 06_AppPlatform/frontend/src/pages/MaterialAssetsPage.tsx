@@ -6,6 +6,7 @@ import type { AssetCatalog, AssetMaterial, ConfigComparison, MaterialAssetReques
 import { MaterialAssetInspector } from "../components/orderGenius/MaterialAssetInspector";
 import { MaterialConfigurationComparison } from "../components/orderGenius/MaterialConfigurationComparison";
 import { MaterialAssetTrash } from "../components/orderGenius/MaterialAssetTrash";
+import { MaterialAssetDownload } from "../components/orderGenius/MaterialAssetDownload";
 import { errorMessage, useAssetLanguage } from "../components/orderGenius/materialAssetUi";
 import { orderGeniusPowertrainColor } from "../utils/orderGeniusBomAdmin";
 import "../components/orderGenius/MaterialWorkspace.css";
@@ -35,6 +36,7 @@ function MaterialAssetsWorkspace({ scope, editor, request, onClose }: Props & { 
   const [query, setQuery] = useState(""), [historical, setHistorical] = useState(false), [revision, setRevision] = useState(0);
   const [comparison, setComparison] = useState<ConfigComparison | null>(null), [comparing, setComparing] = useState(false);
   const [trash, setTrash] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const reload = async (): Promise<void> => { const result = await materialAssets.catalog(); setCatalog(result); setComparison(null); };
   useEffect(() => {
     const abort = new AbortController(); setError("");
@@ -70,7 +72,8 @@ function MaterialAssetsWorkspace({ scope, editor, request, onClose }: Props & { 
     try { setComparison(await materialAssets.compare(selected)); } catch (e) { setError(errorMessage(e)); } finally { setComparing(false); }
   };
   return <section className={`mw-workspace${onClose ? " is-embedded" : ""}`}>
-    <header className="mw-page-header"><h1>{t("Material Assets", "物料资料")}</h1><span className="mw-spacer" />{editor ? <button type="button" onClick={() => setTrash(true)}>{t("Recycle bin", "回收站")}</button> : null}<button type="button" onClick={() => setRevision(v => v + 1)}>{t("Reload", "重读")}</button><button type="button" onClick={() => setLanguage(language === "en" ? "zh" : "en")}>{language === "en" ? "中文" : "EN"}</button>{onClose ? <button type="button" aria-label={t("Close Material Assets", "关闭物料资料")} onClick={onClose}>{t("Close", "关闭")}</button> : null}</header>
+    <header className="mw-page-header"><h1>{t("Material Assets", "物料资料")}</h1><span className="mw-spacer" /><button type="button" disabled={!catalog} onClick={() => setDownloading(true)}>{t("Download", "下载")}</button>{editor ? <button type="button" onClick={() => setTrash(true)}>{t("Recycle bin", "回收站")}</button> : null}<button type="button" onClick={() => setRevision(v => v + 1)}>{t("Reload", "重读")}</button><button type="button" onClick={() => setLanguage(language === "en" ? "zh" : "en")}>{language === "en" ? "中文" : "EN"}</button>{onClose ? <button type="button" aria-label={t("Close Material Assets", "关闭物料资料")} onClick={onClose}>{t("Close", "关闭")}</button> : null}</header>
+    {downloading && catalog ? <MaterialAssetDownload initialMonth={catalog.today.slice(0, 7)} t={t} onClose={() => setDownloading(false)} /> : null}
     {trash && editor ? <MaterialAssetTrash t={t} onClose={() => setTrash(false)} onChanged={reload} /> : null}
     {error ? <p role="alert">{error}</p> : null}
     {!catalog ? <div role="status">{error ? "—" : t("Loading…", "读取中…")}</div> : <div className="mw-assets-layout">
