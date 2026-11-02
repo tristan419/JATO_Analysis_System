@@ -23,6 +23,7 @@ from app.core.security import UserContext, get_current_user
 from app.db.models import ConfigVersion, MaterialAssetBinding, MaterialAssetFile, MaterialAssetGroup, VehicleTrim
 from app.db.session import get_db_session
 from app.services import material_asset_service as svc
+from app.services.config_availability import classify_availability
 
 app = FastAPI()
 app.include_router(route.router, prefix="/v1")
@@ -88,6 +89,118 @@ def material_matrix(rows=None, headers=None):
     for row in rows or [["Powertrain", "Battery capacity", "kWh", 18.3, 26.6], ["Safety", "Airbags", "", 0, "-"], ["Comfort", "Roof", "", None, "N/A"]]:
         sheet.append(row)
     out = BytesIO(); book.save(out); return out.getvalue()
+
+
+def countersign(*, duplicate=False, formula=False, hidden=False, same_material=False, offset=0):
+    book = openpyxl.Workbook(); book.remove(book.active)
+    total = book.create_sheet("总表"); total.append(["车型", "Brand", "BOM"])
+    for name, materials in [("J7 会签完成", ["T7150D**WT1001（黑）\nT7150D**WT1002（棕）", "T7150D**WT1003", "物料号待生成"]),
+                            ("J8 会签中", ["T7150D**WT1001" if same_material else "T6481QN**LX0004"])]:
+        sheet = book.create_sheet(name)
+        sheet.cell(3 + offset, 1, "基本参数"); sheet.cell(3 + offset, 2, "国家"); sheet.cell(3 + offset, 3, "Country")
+        sheet.cell(4 + offset, 2, "配置版型"); sheet.cell(5 + offset, 2, "物料号"); sheet.cell(5 + offset, 3, "Material No.")
+        sheet.merge_cells(start_row=3 + offset, start_column=1, end_row=7 + offset, end_column=1)
+        for col, material_header in enumerate(materials, 4):
+            sheet.cell(4 + offset, col, "Exclusive"); sheet.cell(5 + offset, col, material_header)
+            sheet.cell(6 + offset, col, "S"); sheet.cell(7 + offset, col, "18.3 kWh")
+        sheet.cell(6 + offset, 2, "方向盘加热"); sheet.cell(6 + offset, 3, "Steering wheel heating")
+        sheet.cell(7 + offset, 2, "电池容量"); sheet.cell(7 + offset, 3, "Battery capacity")
+        sheet.cell(4 + offset, 8, "备注"); sheet.cell(6 + offset, 8, "不应变成配置列")
+        if name.startswith("J7"):
+            if duplicate:
+                sheet.cell(8 + offset, 2, "方向盘加热"); sheet.cell(8 + offset, 3, "Steering wheel heating")
+                sheet.cell(8 + offset, 4, "-")
+            if formula: sheet.cell(6 + offset, 4, "=1+1")
+        elif hidden: sheet.sheet_state = "hidden"
+    out = BytesIO(); book.save(out); book.close(); return out.getvalue()
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("S", ("STANDARD", "标配", None)), ("s", ("STANDARD", "标配", None)), ("●", ("STANDARD", "标配", None)),
+    ("O", ("OPTIONAL", "选装", None)), ("o", ("OPTIONAL", "选装", None)), ("○", ("OPTIONAL", "选装", None)),
+    ("S（坐垫）", ("STANDARD", "标配（坐垫）", None)), ("●(LED)", ("STANDARD", "标配(LED)", None)),
+    ("S（米其林）\n二阶段马牌", ("STANDARD", "标配（米其林）\n二阶段马牌", None)),
+    ("-", ("NOT_AVAILABLE", None, None)), ("N/A", ("NOT_APPLICABLE", None, None)),
+    ("", ("UNKNOWN", None, None)), ("0", ("VALUE", "0", None)),
+    ("8 s", ("VALUE", "8", "s")), ("18.3 kWh", ("VALUE", "18.3", "kWh")),
+    ("5 L/100km", ("VALUE", "5", "L/100km")), ("DHT", ("VALUE", "DHT", None)),
+])
+def test_configuration_markers_precede_numeric_units(raw, expected):
+    assert classify_availability(raw) == expected
+
+
+def test_countersign_detects_shifted_material_rows_shared_columns_and_sources():
+    content = countersign(offset=2)
+    preview = svc.parse_configuration(content, "new-date.xlsx", target_template="t7150d**wt1002")
+    assert preview["materialHeaders"] and preview["suggestedSheet"] == "J7 会签完成"
+    assert preview["suggestedColumn"] == 3 and len(preview["columns"]) == 3
+    column = preview["columns"][0]
+    assert column["materials"] == ["T7150D**WT1001", "T7150D**WT1002"]
+    assert column["featureCount"] == 2 and not column["issues"]
+    assert any("待生成" in warning for warning in preview["warnings"])
+    values = svc.parse_configuration(content, "source.xlsx", 3, "T7150D**WT1002", "J7 会签完成")["values"]
+    assert values[0]["source_row"] == 8 and values[0]["source_sheet"] == "J7 会签完成"
+    assert values[0]["feature_name_zh"] == "方向盘加热" and values[0]["feature_name_en"] == "Steering wheel heating"
+    assert values[0]["availability"] == "STANDARD" and values[0]["unit"] is None
+    assert values[0]["source_materials"] == column["materials"] and "（棕）" in values[0]["source_material_header"]
+    for sheet, target in [(None, "T7150D**WT1002"), ("J8 会签中", "T7150D**WT1002"), ("missing", "T7150D**WT1002")]:
+        with pytest.raises(HTTPException): svc.parse_configuration(content, "s.xlsx", 3, target, sheet)
+
+
+def test_hidden_or_multiple_matching_sheets_require_explicit_selection():
+    preview = svc.parse_configuration(countersign(hidden=True), "s.xlsx", target_template="T6481QN**LX0004")
+    assert preview["suggestedColumn"] is None and preview["columns"][-1]["hidden"]
+    assert any("Hidden" in warning for warning in preview["warnings"])
+    preview = svc.parse_configuration(countersign(same_material=True), "s.xlsx", target_template="T7150D**WT1001")
+    assert preview["suggestedSheet"] is None
+    absent = svc.parse_configuration(countersign(), "s.xlsx", target_template="UNKNOWN**BASE")
+    assert not any(column["matchesTarget"] for column in absent["columns"]) and absent["warnings"]
+
+
+def test_duplicated_english_translation_does_not_merge_different_chinese_features():
+    book = openpyxl.load_workbook(BytesIO(countersign()))
+    sheet = book["J7 会签完成"]
+    sheet["B8"] = "座椅加热"; sheet["C8"] = "Steering wheel heating"; sheet["D8"] = "o"
+    output = BytesIO(); book.save(output); book.close()
+    parsed = svc.parse_configuration(output.getvalue(), "s.xlsx", 3, "T7150D**WT1001", "J7 会签完成")
+    assert [cell["feature_name"] for cell in parsed["values"]] == ["方向盘加热", "电池容量", "座椅加热"]
+    rows = svc.compare_versions([SimpleNamespace(values_snapshot_json=parsed["values"])])
+    assert len(rows) == 3 and sum(row["featureNameEn"] == "Steering wheel heating" for row in rows) == 2
+
+
+@pytest.mark.parametrize("options,source", [({"duplicate": True}, "D6,D8"), ({"formula": True}, "D6")])
+def test_countersign_conflicts_block_only_affected_columns(options, source):
+    content = countersign(**options)
+    preview = svc.parse_configuration(content, "source.xlsx", target_template="T7150D**WT1001")
+    assert any(source in issue for issue in preview["columns"][0]["issues"])
+    with pytest.raises(HTTPException) as error:
+        svc.parse_configuration(content, "source.xlsx", 3, "T7150D**WT1001", "J7 会签完成")
+    assert error.value.status_code == 422 and source in error.value.detail
+    assert svc.parse_configuration(content, "source.xlsx", 3, "T6481QN**LX0004", "J8 会签中")["values"]
+
+
+def test_countersign_save_keeps_original_shared_column_and_only_binds_target(db):
+    one, two = material(), material("T7150D**WT1002")
+    content = countersign()
+    version = svc.attach_configuration(db, {one["key"]: one, two["key"]: two}, two["key"], content, "source.xlsx", 3, 0, "editor", "J7 会签完成")
+    db.commit()
+    assert db.scalars(select(MaterialAssetBinding)).one().bom_template == two["bomTemplate"]
+    assert db.scalars(select(MaterialAssetFile)).one().content == content
+    assert version.values_snapshot_json[0]["source_materials"] == [one["bomTemplate"], two["bomTemplate"]]
+
+
+def test_unused_external_link_metadata_is_ignored_but_formula_workbooks_are_not():
+    for formula in (False, True):
+        output = BytesIO()
+        with ZipFile(BytesIO(countersign(formula=formula))) as source, ZipFile(output, "w") as target:
+            for item in source.infolist(): target.writestr(item, source.read(item.filename))
+            target.writestr("xl/externalLinks/externalLink1.xml", b"<externalLink/>")
+        if formula:
+            with pytest.raises(HTTPException) as error: svc.parse_configuration(output.getvalue(), "signing.xlsx")
+            assert "External-link" in error.value.detail
+        else:
+            preview = svc.parse_configuration(output.getvalue(), "signing.xlsx")
+            assert preview["columns"] and any("external-link" in value for value in preview["warnings"])
 
 
 def test_material_matrix_exact_column_preview_preserves_blank_zero_and_units():
@@ -562,6 +675,26 @@ def test_configuration_upload_preview_and_explicit_column(client, db):
     assert client.post(path + "/save", json={}).status_code == 422
     assert client.post(path + "/save", json={"sourceColumn": 26}).status_code == 200
     assert db.scalars(select(ConfigVersion)).one().values_snapshot_json[0]["source_column"] == "AA"
+
+
+def test_signing_upload_revalidates_sheet_material_and_keeps_version_on_wrong_target(client, db):
+    content = countersign()
+    body, chunks, hashes = upload_body(content, kind="config", filename="signing.xlsx")
+    root = "/v1/order-genius/material-assets"
+    state = client.post(root + "/uploads", json=body).json()
+    path = root + f"/uploads/{state['uploadId']}"
+    for index, (chunk, digest) in enumerate(zip(chunks, hashes), 1):
+        assert client.put(path + f"/parts/{index}", content=chunk, headers={"X-Chunk-SHA256": digest}).status_code == 200
+    preview = client.post(path + "/preview")
+    assert preview.status_code == 200 and preview.json()["suggestedSheet"] == "J7 会签完成"
+    for selection in [{"sourceColumn": 3}, {"sourceColumn": 3, "sourceSheet": "J8 会签中"}, {"sourceColumn": 4, "sourceSheet": "J7 会签完成"}]:
+        assert client.post(path + "/save", json=selection).status_code == 422
+        assert not db.scalars(select(ConfigVersion)).all()
+    assert client.post(path + "/save", json={"sourceColumn": 3, "sourceSheet": "J7 会签完成"}).status_code == 200
+    version = db.scalars(select(ConfigVersion)).one()
+    assert version.values_snapshot_json[0]["source_sheet"] == "J7 会签完成"
+    direct = client.post(root + "/configurations", data={"material_key": material()["key"], "source_column": 3, "row_version": 1, "source_sheet": "J7 会签完成"}, files={"file": ("signing.xlsx", content)})
+    assert direct.status_code == 200 and len(db.scalars(select(ConfigVersion)).all()) == 2
 
 
 def test_material_upload_preview_and_save_revalidate_target_and_filler_permission(client, db):

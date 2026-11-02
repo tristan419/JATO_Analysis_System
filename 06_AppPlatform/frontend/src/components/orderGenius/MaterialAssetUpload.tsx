@@ -7,6 +7,7 @@ import { configurationValue, errorMessage } from "./materialAssetUi";
 
 type Phase = "choose" | "uploading" | "pausing" | "paused" | "ready" | "saving" | "cancelling";
 interface Props { target: AssetUploadTarget; label: string; files?: File[]; t: AssetText; onDone: (saved: number, cancelled: boolean) => void }
+const columnKey = (item: { sheet: string; column: number }): string => JSON.stringify([item.sheet, item.column]);
 async function digest(blob: Blob): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
   return [...new Uint8Array(hash)].map(value => value.toString(16).padStart(2, "0")).join("");
@@ -44,7 +45,7 @@ export function MaterialAssetUpload({ target, label, files = [], t, onDone }: Pr
         }
         if (config) {
           const result = await materialAssets.previewUpload(state.uploadId, abort.signal);
-          if (alive.current) { setPreview(result); setColumn(result.suggestedColumn === null ? "" : String(result.suggestedColumn)); setPhase("ready"); }
+          if (alive.current) { setPreview(result); setColumn(result.suggestedColumn === null || !result.suggestedSheet ? "" : columnKey({ sheet: result.suggestedSheet, column: result.suggestedColumn })); setPhase("ready"); }
           return;
         }
         abort.signal.throwIfAborted(); setPhase("saving");
@@ -76,17 +77,17 @@ export function MaterialAssetUpload({ target, label, files = [], t, onDone }: Pr
       if (alive.current) onDone(saved.current + (result.saved ? 1 : 0), result.cancelled);
     } catch (cause) { if (alive.current) { setError(errorMessage(cause)); setPhase("paused"); } }
   };
+  const selected = preview?.columns.find(item => columnKey(item) === column);
   const saveConfig = async (): Promise<void> => {
-    if (!uploadId.current || !column) return;
+    if (!uploadId.current || !selected || !selected.matchesTarget || selected.issues.length) return;
     const abort = new AbortController(); controller.current = abort; setPhase("saving"); setError("");
-    try { await materialAssets.saveUpload(uploadId.current, abort.signal, Number(column)); if (alive.current) onDone(1, false); }
+    try { await materialAssets.saveUpload(uploadId.current, abort.signal, selected.column, selected.sheet); if (alive.current) onDone(1, false); }
     catch (cause) { if (alive.current) { setError(errorMessage(cause)); setPhase("ready"); } }
   };
-  const selected = preview?.columns.find(item => String(item.column) === column);
   return <ConfirmDialog title={config ? t("Upload configuration", "上传配置表") : t("Upload photos", "上传图片")}
     description={`${label} · ${filename || (config ? "XLSX" : target.colourKey.split(":").slice(1).join(":"))}`} cancelLabel={t("Cancel upload", "取消上传")} confirmLabel={phase === "paused" ? t("Resume", "继续上传") : t("Save version", "保存版本")}
     loadingLabel={phase === "pausing" ? t("Pausing…", "暂停中…") : phase === "cancelling" ? t("Cancelling…", "取消中…") : t("Saving…", "保存中…")} submitting={phase === "saving" || phase === "cancelling" || phase === "pausing"}
-    confirmDisabled={phase !== "paused" && !(phase === "ready" && !!column && !!selected?.filledCount)}
+    confirmDisabled={phase !== "paused" && !(phase === "ready" && selected?.matchesTarget && selected.filledCount > 0 && !selected.issues.length)}
     error={error ? { title: t("Not completed", "未完成"), message: error } : null}
     onCancel={() => void cancel()} onConfirm={() => phase === "paused" ? start() : void saveConfig()}>
     {config && phase === "choose" ? <label className="mw-form-label">XLSX<input type="file" accept=".xlsx" onChange={event => {
@@ -99,9 +100,10 @@ export function MaterialAssetUpload({ target, label, files = [], t, onDone }: Pr
       {phase === "uploading" ? <button type="button" onClick={() => void pause()}>{t("Pause", "暂停")}</button> : null}
       {phase === "paused" ? <span role="status">{t("Paused", "已暂停")}</span> : null}</div> : null}
     {preview ? <label className="mw-form-label">{t("Configuration column", "配置列")}<select aria-label={t("Configuration column", "配置列")} value={column} disabled={phase === "saving"} onChange={event => setColumn(event.target.value)}>
-      <option value="">{t("Choose…", "请选择…")}</option>{preview.columns.map(item => <option key={item.column} value={item.column} disabled={preview.materialHeaders && item.column !== preview.suggestedColumn}>{item.name}</option>)}
+      <option value="">{t("Choose…", "请选择…")}</option>{preview.columns.map(item => <option key={columnKey(item)} value={columnKey(item)} disabled={!item.matchesTarget}>{item.sheet} · {item.name}{item.materials.includes(item.name) ? "" : ` · ${item.materials.join(", ")}`}{item.hidden ? ` · ${t("Hidden", "隐藏")}` : ""}</option>)}
     </select></label> : null}
-    {selected ? <section aria-label={t("Configuration preview", "配置预览")}><strong>{selected.featureCount} {t("configuration items", "个配置项")}</strong><div className="mw-table-scroll"><table className="mw-table"><thead><tr><th>{t("Feature", "配置项")}</th><th>{t("Value", "值")}</th><th>{t("Source", "来源")}</th></tr></thead><tbody>{selected.sample.map(cell => <tr key={JSON.stringify([cell.category, cell.feature_name])}><th><small>{cell.category}</small>{cell.feature_name}</th><td>{configurationValue(cell, t)}</td><td>{cell.source_sheet}!{cell.source_column}{cell.source_row}</td></tr>)}</tbody></table></div></section> : null}
+    {selected?.issues.length ? <div role="alert">{selected.issues.map(issue => <p key={issue}>{issue}</p>)}</div> : null}
+    {selected ? <section aria-label={t("Configuration preview", "配置预览")}><strong>{selected.featureCount} {t("configuration items", "个配置项")}</strong><div className="mw-table-scroll"><table className="mw-table"><thead><tr><th>{t("Feature", "配置项")}</th><th>{t("Value", "值")}</th><th>{t("Source", "来源")}</th></tr></thead><tbody>{selected.sample.map(cell => <tr key={JSON.stringify([cell.category, cell.feature_name, cell.source_row])}><th title={cell.feature_name_zh}><small>{cell.category}</small>{t(cell.feature_name_en || cell.feature_name, cell.feature_name_zh || cell.feature_name)}</th><td>{configurationValue(cell, t)}</td><td title={`${cell.source_sheet}!${cell.source_column}${cell.source_row}`} aria-label={`${cell.source_sheet}!${cell.source_column}${cell.source_row}`}>{cell.source_column}{cell.source_row}</td></tr>)}</tbody></table></div></section> : null}
     {preview?.warnings.length ? <details><summary>{t("Source warnings", "源文件提示")} ({preview.warnings.length})</summary>{preview.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details> : null}
   </ConfirmDialog>;
 }

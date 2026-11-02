@@ -12,6 +12,7 @@ The matrix has:
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 import pandas as pd
@@ -23,6 +24,73 @@ _MATRIX_SHEET = "在售可控资源表"
 _TRIM_HEADER_ROW = 3  # 1-indexed Excel row
 _HEADER_ROW = 4
 _DATA_START_ROW = 5
+
+
+def parse_countersign_matrix(book) -> dict[str, Any]:
+    """Read material-labelled signing sheets into the existing config snapshots."""
+    trims, values, warnings = [], [], []
+    material_pattern = re.compile(r"[A-Z0-9_-]+\*\*[A-Z0-9_-]+")
+    def text(value) -> str:
+        return str(value).strip() if value is not None else ""
+
+    for sheet in book:
+        material_rows = [row[0].row for row in sheet.iter_rows(max_row=min(30, sheet.max_row), max_col=3)
+                         if any(re.sub(r"[\s.]+", "", text(cell.value)).casefold() in
+                                {"物料号", "物料编码", "materialno", "materialnumber", "bom"} for cell in row[1:])]
+        if not material_rows:
+            continue
+        if len(material_rows) != 1:
+            warnings.append(f"{sheet.title}: Multiple material headers / 多个物料表头，请拆分工作表")
+            continue
+        header = material_rows[0]
+        columns = {}
+        for cell in sheet[header][3:]:
+            raw = text(cell.value)
+            materials = list(dict.fromkeys(material_pattern.findall(raw.upper())))
+            if not materials:
+                if "待生成" in raw:
+                    warnings.append(f"{sheet.title}!{cell.coordinate}: Material pending / 物料待生成，不关联")
+                continue
+            if cell.data_type in {"f", "e"}:
+                warnings.append(f"{sheet.title}!{cell.coordinate}: Invalid material header / 物料表头不是值")
+                continue
+            columns[cell.column] = {"source_column": cell.column - 1, "source_sheet": sheet.title,
+                                    "source_hidden": sheet.sheet_state != "visible", "material_codes": materials,
+                                    "source_header": raw, "full_trim_name": text(sheet.cell(header - 1, cell.column).value), "issues": []}
+            trims.append(columns[cell.column])
+        if not columns:
+            continue
+        if sheet.sheet_state != "visible":
+            warnings.append(f"{sheet.title}: Hidden sheet / 隐藏工作表，需明确选择")
+        category = ""
+        for row in sheet.iter_rows():
+            if text(row[0].value):
+                category = " ".join(text(row[0].value).split())
+            if row[0].row <= header:
+                continue
+            chinese, english = (" ".join(text(cell.value).split()) for cell in row[1:3])
+            if not chinese and not english:
+                continue
+            for column in columns:
+                cell = row[column - 1]
+                raw = text(cell.value)
+                availability, normalized, unit = classify_availability(raw)
+                issues = []
+                if not category:
+                    issues.append(f"{sheet.title}!A{cell.row}: Missing category / 缺少配置类别")
+                if cell.data_type in {"f", "e"} or any(label.data_type in {"f", "e"} for label in row[:3]):
+                    issues.append(f"{sheet.title}!{cell.coordinate}: Paste values, not formulas/errors / 请粘贴值，不接受公式或错误")
+                if issues:
+                    columns[column]["issues"].extend(issues)
+                values.append({"category": category, "feature_name": chinese or english, "feature_code": None,
+                               "feature_name_zh": chinese, "feature_name_en": english, "raw_value": raw,
+                               "normalized_value": normalized, "availability": availability, "unit": unit,
+                               "source_sheet": sheet.title, "source_row": cell.row,
+                               "source_column": get_column_letter(column), "source_materials": columns[column]["material_codes"],
+                               "source_material_header": columns[column]["source_header"]})
+    if not trims:
+        raise ValueError("No material-labelled configuration sheets / 未找到含完整**物料号的配置工作表")
+    return {"trims": trims, "values": values, "warnings": warnings}
 
 
 def _forward_fill_categories(

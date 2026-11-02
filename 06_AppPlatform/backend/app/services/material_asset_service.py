@@ -24,7 +24,7 @@ from app.db.models import (ConfigVersion, MaterialAssetBinding, MaterialAssetFil
                            MaterialAssetGroup, VehicleTrim)
 from app.infra import engineering_config_repository as config_repo
 from app.infra import order_genius_repository as bom_repo
-from app.services.engineering_config_matrix_parser import parse_config_matrix
+from app.services.engineering_config_matrix_parser import parse_config_matrix, parse_countersign_matrix
 from app.services.config_availability import classify_availability
 from app.services.ordering_normalization import clean_text
 
@@ -437,47 +437,68 @@ def _material_matrix(sheet) -> dict:
     return {"trims": trims, "values": values, "warnings": []}
 
 
-def parse_configuration(content: bytes, filename: str, source_column: int | None = None, target_template: str | None = None) -> dict:
+def parse_configuration(content: bytes, filename: str, source_column: int | None = None, target_template: str | None = None, source_sheet: str | None = None) -> dict:
     if not content or len(content) > MAX_CONFIG_BYTES or Path(filename).suffix.lower() != ".xlsx":
         raise HTTPException(422, "Use an XLSX under 32 MiB / 请使用32MiB以内XLSX配置表")
     try:
         with ZipFile(io.BytesIO(content)) as archive:
-            if sum(i.file_size for i in archive.infolist()) > 64 * 1024 * 1024 or any("vbaProject" in name or "externalLinks/" in name for name in archive.namelist()):
-                raise ValueError("Unsupported workbook size/macros/external links")
+            if sum(i.file_size for i in archive.infolist()) > 64 * 1024 * 1024 or any("vbaProject" in name for name in archive.namelist()):
+                raise ValueError("Unsupported workbook size/macros")
+            external_links = any("externalLinks/" in name for name in archive.namelist())
         with TemporaryDirectory(prefix="material-config-") as directory:
             path = Path(directory) / "config.xlsx"
             path.write_bytes(content)
-            book = load_workbook(path, data_only=False)
+            book = load_workbook(path, data_only=False, keep_links=False)
             try:
+                if external_links and any(cell.data_type == "f" for sheet in book for row in sheet for cell in row):
+                    raise ValueError("External-link workbooks must contain values only / 含外链记录的工作簿须粘贴为值")
                 standard = "Configuration" in book.sheetnames
-                result = _material_matrix(book["Configuration"]) if standard else None
+                material_headers = standard or "在售可控资源表" not in book.sheetnames
+                result = _material_matrix(book["Configuration"]) if standard else parse_countersign_matrix(book) if material_headers else None
             finally:
                 book.close()
             if result is None:
                 result = parse_config_matrix(path)
                 for value in result["values"]:
                     value["source_sheet"] = "在售可控资源表"
+            if external_links:
+                result["warnings"].append("Unused external-link records ignored; no external files opened / 已忽略无公式的残留外链，未读取外部文件")
     except (BadZipFile, ValueError, KeyError, OSError, IndexError) as exc:
         raise HTTPException(422, "Configuration cannot be parsed / 配置表无法解析：" + str(exc)[:300]) from exc
     columns, by_column = [], {}
     for value in result["values"]:
-        by_column.setdefault(value["source_column"], []).append(value)
+        by_column.setdefault((value.get("source_sheet", "Configuration"), value["source_column"]), []).append(value)
     for item in result["trims"]:
-        cells = by_column.get(get_column_letter(item["source_column"] + 1), [])
-        columns.append({"column": item["source_column"], "name": item["full_trim_name"], "featureCount": len(cells),
-                        "filledCount": sum(bool(v["raw_value"].strip()) for v in cells), "sample": cells[:6]})
-    matched = next((c for c in columns if c["name"].strip().upper() == (target_template or "").strip().upper()), None)
-    if standard and target_template and not matched:
-        raise HTTPException(422, f"Configuration!D1: No column for {target_template} / 未找到目标基准物料列")
+        sheet = item.get("source_sheet", "Configuration" if standard else "在售可控资源表")
+        cells = by_column.get((sheet, get_column_letter(item["source_column"] + 1)), [])
+        materials = item.get("material_codes", [item["full_trim_name"]] if standard else [])
+        issues = list(item.get("issues", []))
+        seen = {}
+        for cell in cells:
+            key = (cell["category"], cell["feature_name"])
+            if key in seen:
+                issues.append(f'{sheet}!{cell["source_column"]}{seen[key]},{cell["source_column"]}{cell["source_row"]}: Duplicate {cell["feature_name"]} / 同类别配置项重复，请核对源表')
+            seen[key] = cell["source_row"]
+        columns.append({"column": item["source_column"], "sheet": sheet, "name": item["full_trim_name"],
+                        "materials": materials, "hidden": item.get("source_hidden", False), "issues": issues,
+                        "matchesTarget": not target_template or not material_headers or target_template.strip().upper() in materials,
+                        "featureCount": len(cells), "filledCount": sum(bool(v["raw_value"].strip()) for v in cells), "sample": cells[:6]})
+    matches = [c for c in columns if material_headers and c["matchesTarget"] and not c["hidden"] and not c["issues"]]
+    matched = matches[0] if len(matches) == 1 and target_template else None
     if source_column is None:
-        return {"columns": columns, "warnings": result["warnings"], "suggestedColumn": matched["column"] if matched else None, "materialHeaders": standard}
-    selected = [c for c in columns if c["column"] == source_column]
+        warnings = result["warnings"] + ([f"No column for {target_template} / 未找到目标基准物料列"] if target_template and material_headers and not any(c["matchesTarget"] for c in columns) else [])
+        return {"columns": columns, "warnings": warnings, "suggestedColumn": matched["column"] if matched else None,
+                "suggestedSheet": matched["sheet"] if matched else None, "materialHeaders": material_headers}
+    selected = [c for c in columns if c["column"] == source_column and (source_sheet is None or c["sheet"] == source_sheet)]
     if len(selected) != 1:
-        raise HTTPException(422, "Choose the exact configuration column / 请选择具体配置列")
-    if standard and target_template and selected[0] != matched:
-        raise HTTPException(422, f"Configuration!{get_column_letter(source_column + 1)}1: Material does not match {target_template} / 物料列与上传目标不符")
+        raise HTTPException(422, "Choose the exact worksheet and configuration column / 请选择具体工作表与配置列")
+    chosen = selected[0]
+    if material_headers and not chosen["matchesTarget"]:
+        raise HTTPException(422, f'{chosen["sheet"]}!{get_column_letter(source_column + 1)}: Material does not match {target_template} / 物料列与上传目标不符')
+    if chosen["issues"]:
+        raise HTTPException(422, "\n".join(chosen["issues"]))
     source_letter = get_column_letter(source_column + 1)
-    values = [v for v in result["values"] if v["source_column"] == source_letter]
+    values = by_column.get((chosen["sheet"], source_letter), [])
     keys = [(v["category"], v["feature_name"]) for v in values]
     if not values or len(set(keys)) != len(keys) or not any(v["raw_value"].strip() for v in values):
         raise HTTPException(422, "Empty or ambiguous configuration column / 配置列为空或有重复字段，请核对源文件")
@@ -503,9 +524,9 @@ def create_configuration(session: Session, material: dict, parsed: dict, content
     return version
 
 
-def attach_configuration(session: Session, materials: dict, material_key: str, content: bytes, filename: str, column: int, row_version: int, username: str) -> ConfigVersion:
+def attach_configuration(session: Session, materials: dict, material_key: str, content: bytes, filename: str, column: int, row_version: int, username: str, source_sheet: str | None = None) -> ConfigVersion:
     material = require_material(materials, material_key)
-    version = create_configuration(session, material, parse_configuration(content, filename, column, material["bomTemplate"]), content, filename, username)
+    version = create_configuration(session, material, parse_configuration(content, filename, column, material["bomTemplate"], source_sheet), content, filename, username)
     replace_bindings(session, materials, [{"materialKey": material_key, "kind": "config", "colourKey": "", "groupId": None,
                      "versionId": str(version.version_id), "rowVersion": row_version}], username)
     return version
@@ -514,7 +535,12 @@ def attach_configuration(session: Session, materials: dict, material_key: str, c
 def compare_versions(versions: list[ConfigVersion]) -> list[dict]:
     maps = [{(v["category"], v["feature_name"]): v for v in version.values_snapshot_json or []} for version in versions]
     keys = sorted({key for mapping in maps for key in mapping})
-    return [{"category": category, "featureName": name, "values": [mapping.get((category, name)) for mapping in maps]} for category, name in keys]
+    rows = []
+    for category, name in keys:
+        cells = [mapping.get((category, name)) for mapping in maps]
+        rows.append({"category": category, "featureName": name,
+                     "featureNameEn": next((cell["feature_name_en"] for cell in cells if cell and cell.get("feature_name_en")), None), "values": cells})
+    return rows
 
 
 def stored_bytes():

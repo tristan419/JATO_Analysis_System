@@ -32,16 +32,18 @@ export interface AssetLinkChange {
 }
 export interface ConfigCell {
   category: string; feature_name: string; raw_value: string | null; normalized_value: string | null; availability: string | null;
+  feature_name_zh?: string; feature_name_en?: string;
   source_row: number; source_column: string; source_sheet?: string; unit?: string | null;
 }
 export interface ConfigPreview {
-  columns: Array<{ column: number; name: string; featureCount: number; filledCount: number; sample: ConfigCell[] }>;
-  warnings: string[]; suggestedColumn: number | null; materialHeaders: boolean;
+  columns: Array<{ column: number; sheet: string; name: string; materials: string[]; hidden: boolean; issues: string[]; matchesTarget: boolean;
+    featureCount: number; filledCount: number; sample: ConfigCell[] }>;
+  warnings: string[]; suggestedColumn: number | null; suggestedSheet: string | null; materialHeaders: boolean;
 }
 export interface ConfigDetails { id: string; source: string | null; values: ConfigCell[] }
 export interface ConfigComparison {
   materials: Array<{ key: string; bomTemplate: string; modelName: string; versionId: string; version: number }>;
-  rows: Array<{ category: string; featureName: string; values: Array<ConfigCell | null> }>;
+  rows: Array<{ category: string; featureName: string; featureNameEn?: string | null; values: Array<ConfigCell | null> }>;
 }
 export interface AssetUploadTarget { materialKey: string; kind: AssetKind; colourKey: string; groupId: string | null; rowVersion: number }
 export interface AssetUploadState { uploadId: string; chunkSize: number; totalChunks: number; receivedChunks: number[]; uploadedBytes: number }
