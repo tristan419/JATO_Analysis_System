@@ -52,6 +52,22 @@ describe("selection comparison", () => {
     render(<MaterialConfigurationComparison comparison={{ ...comparison, rows }} catalog={catalog()} t={en => en} />);
     for (const value of ["0", "Not recorded", "Not filled", "Not equipped", "100 kW", "100 hp"]) expect(screen.getByText(value)).toBeTruthy();
   });
+  it("compares normalized signing markers without discarding meaningful annotations", () => {
+    const rows: ConfigComparison["rows"] = [
+      { category: "Safety", featureName: "Same equipment", values: [
+        { ...cell("S"), availability: "STANDARD", normalized_value: "标配" },
+        { ...cell("●"), availability: "STANDARD", normalized_value: "标配" },
+      ] },
+      { category: "Safety", featureName: "Lighting detail", values: [
+        { ...cell("S（LED）"), availability: "STANDARD", normalized_value: "标配（LED）" },
+        { ...cell("S（卤素）"), availability: "STANDARD", normalized_value: "标配（卤素）" },
+      ] },
+    ];
+    render(<MaterialConfigurationComparison comparison={{ ...comparison, rows }} catalog={catalog()} t={en => en} />);
+    expect(screen.queryByText("Same equipment")).toBeNull(); expect(screen.getByText("Lighting detail")).toBeTruthy();
+    expect(screen.getByText("S（LED）")).toBeTruthy(); expect(screen.getByText("S（卤素）")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Common items/ })); expect(screen.getByText("Same equipment")).toBeTruthy();
+  });
   it("shows BOM interior differences even when the configuration source and values are identical", () => {
     const data = catalog();
     data.materials[1].interiors = [{ key: "code:BN", code: "BN", name: "Brown", hex: "#885533" }];

@@ -5,7 +5,7 @@ import { OrderGeniusWorkspacePanel } from "./OrderGeniusWorkspacePanel";
 import { comparisonStyle, MaterialCompareLabel, materialIdentityKey } from "./materialComparison";
 import { configurationValue, errorMessage, useAssetLanguage, type AssetText } from "./materialAssetUi";
 
-const signature = (cell: ConfigCell | null): string => JSON.stringify(cell ? [cell.raw_value, cell.normalized_value, cell.availability, cell.unit ?? null] : null);
+const signature = (cell: ConfigCell | null): string => JSON.stringify(cell ? [cell.normalized_value ?? (cell.availability === "VALUE" ? cell.raw_value : null), cell.availability, cell.unit ?? null] : null);
 
 export function MaterialConfigurationComparison({ comparison, catalog, t }: { comparison: ConfigComparison; catalog: AssetCatalog; t: AssetText }) {
   const [differences, setDifferences] = useState(true), [error, setError] = useState("");
@@ -17,7 +17,7 @@ export function MaterialConfigurationComparison({ comparison, catalog, t }: { co
     key: kind, label: kind === "interiors" ? t("Interior", "内饰") : t("Exterior colours", "外饰颜色"),
     values: comparedMaterials.map(material => material?.[kind].map(colour => [colour.code, colour.name].filter(Boolean).join(" · ")).sort().join(", ") || "—"),
   }));
-  const rows = comparison.rows.map(row => ({ ...row, key: JSON.stringify([row.category, row.featureName]), different: new Set(row.values.map(signature)).size > 1 }));
+  const rows = comparison.rows.map(row => ({ ...row, label: t(row.featureNameEn || row.featureName, row.featureName), key: JSON.stringify([row.category, row.featureName]), different: new Set(row.values.map(signature)).size > 1 }));
   const commonCount = rows.filter(row => !row.different).length + materialRows.filter(row => new Set(row.values).size === 1).length;
   const showCommon = !differences || common;
   const categories = [...new Set(rows.filter(row => row.different || showCommon).map(row => row.category))];
@@ -40,7 +40,7 @@ export function MaterialConfigurationComparison({ comparison, catalog, t }: { co
         <small>{material?.effectiveFrom ?? "—"} → {material?.effectiveTo ?? "∞"}</small>
         <div className="mw-toolbar"><button type="button" aria-pressed={baseline === index} aria-label={`${t("Set baseline", "设为基准")} ${item.bomTemplate}`} onClick={() => setBaseline(index)}>{baseline === index ? t("Baseline", "基准") : t("Set baseline", "设为基准")}</button><button type="button" className="mw-link" title={item.versionId} onClick={() => void download(item.versionId, item.bomTemplate)}>{t("Source", "原文件")} ↗</button></div></article></th>;
     })}</tr></thead>{categories.map(category => <tbody key={category}><tr className="mw-compare-category"><th colSpan={comparison.materials.length + 1}><button type="button" aria-expanded={!collapsed.includes(category)} onClick={() => setCollapsed(current => current.includes(category) ? current.filter(value => value !== category) : [...current, category])}>{collapsed.includes(category) ? "▸" : "▾"} {category}</button></th></tr>
-      {!collapsed.includes(category) ? rows.filter(row => row.category === category && (row.different || showCommon)).map(row => <Fragment key={row.key}><tr className={!row.different ? "is-common" : ""}><th scope="row">{row.featureName}</th>{row.values.map((value, index) => {
+      {!collapsed.includes(category) ? rows.filter(row => row.category === category && (row.different || showCommon)).map(row => <Fragment key={row.key}><tr className={!row.different ? "is-common" : ""}><th scope="row" title={row.featureName}>{row.label}</th>{row.values.map((value, index) => {
         const id = JSON.stringify([row.key, index]);
         return <td key={comparison.materials[index].key} className={signature(value) !== signature(row.values[baseline]) ? "is-different" : ""}><button type="button" className="mw-config-value" aria-expanded={source === id} aria-label={`${row.featureName} · ${comparison.materials[index].bomTemplate} · ${t("Source", "来源")}`} title={value ? `${comparison.materials[index].versionId}\n${value.source_column}${value.source_row}` : t("Not recorded in this source; not equivalent to unavailable", "该源文件未记录，不等于未配备")} onClick={event => { sourceButton.current = event.currentTarget; setSource(source === id ? null : id); }}>{configurationValue(value, t)}</button></td>;
       })}</tr>{row.values.map((value, index) => source === JSON.stringify([row.key, index]) ? <tr key={`source-${index}`} className="mw-compare-source"><td colSpan={comparison.materials.length + 1}><div role="region" aria-label={t("Cell source", "单元格来源")}><strong>{comparison.materials[index].bomTemplate}</strong><span>{catalog.versions.find(version => version.id === comparison.materials[index].versionId)?.files[0]?.filename ?? t("Source unavailable", "原文件不可用")}</span><span>{value ? `${value.source_sheet ?? "在售可控资源表"}!${value.source_column}${value.source_row}` : t("Not recorded", "未记录")}</span><code>{comparison.materials[index].versionId}</code><button type="button" className="mw-remove" aria-label={t("Close source", "关闭来源")} onClick={closeSource}>×</button></div></td></tr> : null)}</Fragment>) : null}

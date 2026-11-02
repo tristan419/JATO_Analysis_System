@@ -56,6 +56,7 @@ class UploadRequest(BaseModel):
 
 class SaveUpload(BaseModel):
     sourceColumn: int | None = Field(default=None, ge=0)
+    sourceSheet: str | None = Field(default=None, min_length=1, max_length=31)
 
 
 class MonthlyDownload(BaseModel):
@@ -114,7 +115,7 @@ def save_completed_upload(upload_id: str, body: SaveUpload, session: Session, us
     if target["kind"] == "config":
         if body.sourceColumn is None:
             raise HTTPException(422, "Choose a configuration column / 请选择配置列")
-        version = svc.attach_configuration(session, materials, target["materialKey"], content, state["filename"], body.sourceColumn, target["rowVersion"], user.name)
+        version = svc.attach_configuration(session, materials, target["materialKey"], content, state["filename"], body.sourceColumn, target["rowVersion"], user.name, body.sourceSheet)
         file = session.scalar(select(MaterialAssetFile).where(MaterialAssetFile.config_version_id == version.version_id))
     else:
         if target["groupId"]:
@@ -267,10 +268,10 @@ async def preview_config(file: UploadFile = File(), session: Session = Depends(g
 
 @router.post("/configurations")
 async def upload_config(material_key: str = Form(), source_column: int = Form(ge=0), row_version: int = Form(ge=0), file: UploadFile = File(),
-                        session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
+                        source_sheet: str | None = Form(default=None, min_length=1, max_length=31), session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
     materials = svc.catalog_materials(session, user)
     content = await file.read(svc.MAX_CONFIG_BYTES + 1)
-    version = svc.attach_configuration(session, materials, material_key, content, file.filename or "config.xlsx", source_column, row_version, user.name)
+    version = svc.attach_configuration(session, materials, material_key, content, file.filename or "config.xlsx", source_column, row_version, user.name, source_sheet)
     commit(session)
     return {"versionId": str(version.version_id)}
 

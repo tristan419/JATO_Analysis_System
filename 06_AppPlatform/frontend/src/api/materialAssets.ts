@@ -19,7 +19,7 @@ export const materialAssets = {
   startUpload: (target: AssetUploadTarget, file: File, fileFingerprint: string, signal: AbortSignal): Promise<AssetUploadState> => request(`${root}/uploads`, { method: "POST", signal, body: JSON.stringify({ ...target, filename: file.name, sizeBytes: file.size, fileFingerprint }) }),
   uploadPart: (id: string, part: number, body: Blob, sha256: string, signal: AbortSignal): Promise<AssetUploadState> => request(`${root}/uploads/${id}/parts/${part}`, { method: "PUT", body, signal, headers: { "Content-Type": "application/octet-stream", "X-Chunk-SHA256": sha256 } }),
   previewUpload: (id: string, signal: AbortSignal): Promise<ConfigPreview> => request(`${root}/uploads/${id}/preview`, { method: "POST", signal }),
-  saveUpload: (id: string, signal: AbortSignal, sourceColumn?: number): Promise<{ saved: boolean; groupId: string | null; rowVersion: number | null }> => request(`${root}/uploads/${id}/save`, { method: "POST", signal, body: JSON.stringify({ sourceColumn }) }),
+  saveUpload: (id: string, signal: AbortSignal, sourceColumn?: number, sourceSheet?: string): Promise<{ saved: boolean; groupId: string | null; rowVersion: number | null }> => request(`${root}/uploads/${id}/save`, { method: "POST", signal, body: JSON.stringify({ sourceColumn, sourceSheet }) }),
   cancelUpload: (id: string): Promise<{ cancelled: boolean; saved?: boolean }> => request(`${root}/uploads/${id}`, { method: "DELETE" }),
 };
 export function saveAssetBlob(blob: Blob, filename: string): void {
