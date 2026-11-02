@@ -269,6 +269,44 @@ def test_terminal_digest_attempt_with_live_nested_pid_remains_busy(
     assert gate.inspect_state(root)["busy"] is True
 
 
+@pytest.mark.parametrize(("state", "alive"), [("Z", False), ("X", False), ("S", True)])
+def test_pid_liveness_distinguishes_exited_processes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, alive: bool,
+) -> None:
+    pid = os.getpid()
+    proc_stat = tmp_path / "stat"
+    proc_stat.write_text(f"{pid} (worker) {state} " + "0 " * 19, encoding="utf-8")
+    read_fields = gate._proc_stat_fields
+    monkeypatch.setattr(
+        gate, "_proc_stat_fields", lambda _path, expected: read_fields(proc_stat, expected),
+    )
+    assert gate._optional_pid_is_alive({"pid": pid}, "pid", context="test") is alive
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux zombie/procfs semantics")
+def test_consumed_upload_with_real_zombie_supervisor_is_idle(tmp_path: Path) -> None:
+    root = _job_root(tmp_path)
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        stat_path = Path(f"/proc/{child.pid}/stat")
+        deadline = time.monotonic() + 5
+        while gate._proc_stat_fields(stat_path, child.pid)[0] != "Z":
+            assert time.monotonic() < deadline, "child did not become a zombie"
+            time.sleep(0.01)
+        os.kill(child.pid, 0)  # The previous liveness check reports this as alive.
+        path = root / "_upload_sessions/upload-1/upload_state.json"
+        _write(path, {
+            "status": "consumed",
+            "digestAttempt": {"status": "finished", "supervisorPid": child.pid},
+        })
+        before = path.read_bytes()
+
+        assert gate.inspect_state(root)["busy"] is False
+        assert path.read_bytes() == before
+    finally:
+        child.wait(timeout=5)
+
+
 def test_runtime_contract_proves_live_lock_namespace(tmp_path: Path) -> None:
     root = _job_root(tmp_path)
     contract = _runtime_contract(tmp_path, root)

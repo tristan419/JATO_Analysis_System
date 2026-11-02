@@ -1928,3 +1928,5 @@ incident recovery/fence/hold 状态机。
 | 2026-08-10 | Candidate 自动链路使用独立 candidate-preview environment | 不放宽 production environment 的 Active 人工门禁 |
 | 2026-08-10 | 删除过时 intl-edge-prewarm，保留独立 intl 同步 | Candidate prepare 不应触发 intl；intl 只从当前 Active 另行同步 |
 | 2026-08-10 | Candidate 验收降低而不消除 Active 失败风险 | 快照/生产库、认证与后台任务、资源和真实流量仍有差异 |
+| 2026-11-02 | JATO busy 拒绝报告保留原检查明细（#323） | 输出 busyJobs、busyUploads、baselineStatus；不改变门禁判定，不清理上传或历史任务 |
+| 2026-11-02 | PID 存活检查排除 Linux Z/X 退出状态 | 复用现有 proc stat 解析；kill(pid, 0) 对僵尸进程也成功，不能据此认定仍有 JATO 写入；真实存活或不可读取身份的进程仍按原规则拦截 |
