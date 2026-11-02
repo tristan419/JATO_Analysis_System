@@ -2309,7 +2309,11 @@ def test_update_retry_jato_rejection_before_restart_leaves_state_unchanged(
     assert mutation["stateRestored"] is False
 
 
-def test_update_rejects_busy_jato_release_lock_before_mutation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("code", ["jato_lock_busy", "jato_busy"])
+def test_update_rejects_busy_jato_release_lock_before_mutation(
+    tmp_path: Path,
+    code: str,
+) -> None:
     cfg = config(tmp_path)
     install_active(cfg, ACTIVE)
     candidate_digest = create_release(cfg.layout, CANDIDATE)
@@ -2318,7 +2322,9 @@ def test_update_rejects_busy_jato_release_lock_before_mutation(tmp_path: Path) -
     @contextmanager
     def busy_lock(job_root: Path, active_bundle_lock: Path):
         del job_root, active_bundle_lock
-        raise MODULE.AdmissionError("jato_lock_busy", "busy")
+        raise MODULE.AdmissionError(
+            code, "busy", details={"busyUploads": ["upload-a"]}
+        )
         yield  # pragma: no cover
 
     ctrl = controller(cfg, system, jato_lock_holder=busy_lock)
@@ -2327,8 +2333,11 @@ def test_update_rejects_busy_jato_release_lock_before_mutation(tmp_path: Path) -
     with pytest.raises(MODULE.V2Error) as caught:
         ctrl.update_active(CANDIDATE, manifest_sha256=candidate_digest)
 
-    assert caught.value.code == "jato_lock_busy"
+    assert caught.value.code == code
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == ACTIVE
+    report = latest_report(cfg)
+    assert report["failed"]["details"] == {"busyUploads": ["upload-a"]}
+    assert not any(report["mutation"].values())
 
 
 def test_update_rejects_stale_legacy_marker_before_active_mutation(tmp_path: Path) -> None:
