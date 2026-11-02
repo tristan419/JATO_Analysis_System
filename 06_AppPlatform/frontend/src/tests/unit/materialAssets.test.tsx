@@ -152,7 +152,7 @@ describe("Material Assets", () => {
     await waitFor(() => expect(bind).toHaveBeenCalledWith([{ materialKey: "B", kind: "exterior", colourKey: "code:CL", groupId: "album", versionId: null, rowVersion: 0 }]));
   });
   it("requires explicit config column, sends the original file and selected base version", async () => {
-    vi.spyOn(materialAssets, "previewUpload").mockResolvedValue({ columns: [{ column: 26, name: "Large battery" }], warnings: [] });
+    vi.spyOn(materialAssets, "previewUpload").mockResolvedValue({ columns: [{ column: 26, name: "Large battery", featureCount: 1, filledCount: 1, sample: [] }], warnings: [], materialHeaders: false, suggestedColumn: null });
     const upload = vi.spyOn(materialAssets, "saveUpload").mockResolvedValue({ saved: true, groupId: null, rowVersion: null }); const data = catalog();
     render(<MaterialAssetInspector material={data.materials[0]} catalog={data} editor t={t} scope="s" onReload={async () => undefined} />);
     fireEvent.click(screen.getByRole("button", { name: "Upload" }));
@@ -162,6 +162,23 @@ describe("Material Assets", () => {
     fireEvent.change(select, { target: { value: "26" } }); fireEvent.click(screen.getByRole("button", { name: "Save version" }));
     await waitFor(() => expect(upload).toHaveBeenCalledOnce()); expect(upload.mock.calls[0][0]).toBe("upload-test"); expect(upload.mock.calls[0][2]).toBe(26);
     expect(materialAssets.startUpload).toHaveBeenCalledWith(expect.objectContaining({ materialKey: "A", kind: "config", rowVersion: 0 }), file, expect.any(String), expect.any(AbortSignal));
+  });
+  it("preselects only the exact material header, previews values and prevents an empty version", async () => {
+    const sample = { category: "Powertrain", feature_name: "Charging", raw_value: "0", normalized_value: "0", availability: "VALUE", unit: "W", source_sheet: "Configuration", source_column: "D", source_row: 2 };
+    vi.spyOn(materialAssets, "previewUpload").mockResolvedValue({ columns: [
+      { column: 3, name: "T7150D**A", featureCount: 1, filledCount: 1, sample: [sample] },
+      { column: 4, name: "T7150D**B", featureCount: 1, filledCount: 1, sample: [sample] },
+    ], warnings: [], materialHeaders: true, suggestedColumn: 3 });
+    const save = vi.spyOn(materialAssets, "saveUpload").mockResolvedValue({ saved: true, groupId: null, rowVersion: null });
+    render(<MaterialAssetUpload target={{ materialKey: "A", kind: "config", colourKey: "", groupId: null, rowVersion: 0 }} label="T7150D**A" t={t} onDone={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "Download format" }).getAttribute("href")).toBe("/material-configuration-template.xlsx");
+    const input = screen.getByRole("dialog").querySelector('input[type="file"]');
+    if (input) fireEvent.change(input, { target: { files: [new File(["xlsx"], "source.xlsx")] } });
+    const select = await screen.findByLabelText<HTMLSelectElement>("Configuration column");
+    expect(select.value).toBe("3"); expect(screen.getByRole<HTMLOptionElement>("option", { name: "T7150D**B" }).disabled).toBe(true);
+    expect(screen.getByText("0 W")).toBeTruthy(); expect(screen.getByText("Configuration!D2")).toBeTruthy();
+    expect(save).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole("button", { name: "Save version" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith("upload-test", expect.any(AbortSignal), 3));
   });
   it("failed upload retains input for retry and never claims saved", async () => {
     vi.spyOn(materialAssets, "previewUpload").mockRejectedValue(new Error("422 matrix unavailable")); const data = catalog();

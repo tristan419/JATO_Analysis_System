@@ -14,6 +14,8 @@ from uuid import UUID
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from fastapi import HTTPException
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -23,6 +25,7 @@ from app.db.models import (ConfigVersion, MaterialAssetBinding, MaterialAssetFil
 from app.infra import engineering_config_repository as config_repo
 from app.infra import order_genius_repository as bom_repo
 from app.services.engineering_config_matrix_parser import parse_config_matrix
+from app.services.config_availability import classify_availability
 from app.services.ordering_normalization import clean_text
 
 MAX_FILE_BYTES = 100 * 1024 * 1024
@@ -387,7 +390,54 @@ def create_photo_group(session: Session, materials: dict, target: dict, files: l
     return group, created
 
 
-def parse_configuration(content: bytes, filename: str, source_column: int | None = None) -> dict:
+def _material_matrix(sheet) -> dict:
+    """Read a material matrix into the existing immutable configuration snapshot."""
+    def fail(address: str, message: str):
+        raise ValueError(f"Configuration!{address}: {message}")
+
+    if sheet.merged_cells.ranges:
+        fail(str(next(iter(sheet.merged_cells.ranges))), "Unmerge cells / 请取消合并单元格")
+    rows = list(sheet.iter_rows())
+    if not rows or [cell.value for cell in rows[0][:3]] != ["Category", "Feature", "Unit"]:
+        fail("A1:C1", "Expected Category, Feature, Unit / 首三列须为Category、Feature、Unit")
+    trims, names = [], set()
+    for cell in rows[0][3:]:
+        name = str(cell.value or "").strip().upper()
+        if not re.fullmatch(r"[A-Z0-9_-]+\*\*[A-Z0-9_-]+", name) or name in names:
+            fail(cell.coordinate, "Use a unique ** base material / 须填写不重复的完整**基准物料号")
+        names.add(name)
+        trims.append({"source_column": cell.column - 1, "full_trim_name": name})
+    if not trims:
+        fail("D1", "Add a ** base material / 请添加**基准物料列")
+    values, keys = [], set()
+    for row in rows[1:]:
+        if all(cell.value is None for cell in row):
+            continue
+        for cell in row:
+            if cell.data_type in {"f", "e"}:
+                fail(cell.coordinate, "Paste values; formulas/errors are not accepted / 请粘贴值，不接受公式或错误值")
+        category, feature, unit = [str(cell.value).strip() if cell.value is not None else "" for cell in row[:3]]
+        if not category or not feature:
+            fail(f"A{row[0].row}:B{row[0].row}", "Category and Feature required / 类别与配置项必填")
+        key = (category, feature)
+        if key in keys:
+            fail(f"B{row[0].row}", "Duplicate Category + Feature / 类别与配置项重复")
+        keys.add(key)
+        for cell in row[3:]:
+            raw = str(cell.value).strip() if cell.value is not None else ""
+            availability, normalized, inferred_unit = classify_availability(raw)
+            if unit and inferred_unit and unit.casefold() != inferred_unit.casefold():
+                fail(cell.coordinate, "Value unit differs from Unit column / 数值单位与Unit列不一致")
+            values.append({"category": category, "feature_name": feature, "feature_code": None,
+                           "raw_value": raw, "normalized_value": normalized, "availability": availability,
+                           "unit": unit or inferred_unit, "source_sheet": sheet.title,
+                           "source_row": cell.row, "source_column": cell.column_letter})
+    if not values:
+        fail("A2", "Add configuration items / 请填写配置项")
+    return {"trims": trims, "values": values, "warnings": []}
+
+
+def parse_configuration(content: bytes, filename: str, source_column: int | None = None, target_template: str | None = None) -> dict:
     if not content or len(content) > MAX_CONFIG_BYTES or Path(filename).suffix.lower() != ".xlsx":
         raise HTTPException(422, "Use an XLSX under 32 MiB / 请使用32MiB以内XLSX配置表")
     try:
@@ -397,20 +447,39 @@ def parse_configuration(content: bytes, filename: str, source_column: int | None
         with TemporaryDirectory(prefix="material-config-") as directory:
             path = Path(directory) / "config.xlsx"
             path.write_bytes(content)
-            result = parse_config_matrix(path)
+            book = load_workbook(path, data_only=False)
+            try:
+                standard = "Configuration" in book.sheetnames
+                result = _material_matrix(book["Configuration"]) if standard else None
+            finally:
+                book.close()
+            if result is None:
+                result = parse_config_matrix(path)
+                for value in result["values"]:
+                    value["source_sheet"] = "在售可控资源表"
     except (BadZipFile, ValueError, KeyError, OSError, IndexError) as exc:
-        raise HTTPException(422, "Configuration cannot be parsed using the existing matrix format / 配置表无法按现有配置矩阵格式解析：" + str(exc)[:300]) from exc
-    columns = [{"column": item["source_column"], "name": item["full_trim_name"]} for item in result["trims"]]
+        raise HTTPException(422, "Configuration cannot be parsed / 配置表无法解析：" + str(exc)[:300]) from exc
+    columns, by_column = [], {}
+    for value in result["values"]:
+        by_column.setdefault(value["source_column"], []).append(value)
+    for item in result["trims"]:
+        cells = by_column.get(get_column_letter(item["source_column"] + 1), [])
+        columns.append({"column": item["source_column"], "name": item["full_trim_name"], "featureCount": len(cells),
+                        "filledCount": sum(bool(v["raw_value"].strip()) for v in cells), "sample": cells[:6]})
+    matched = next((c for c in columns if c["name"].strip().upper() == (target_template or "").strip().upper()), None)
+    if standard and target_template and not matched:
+        raise HTTPException(422, f"Configuration!D1: No column for {target_template} / 未找到目标基准物料列")
     if source_column is None:
-        return {"columns": columns, "warnings": result["warnings"]}
+        return {"columns": columns, "warnings": result["warnings"], "suggestedColumn": matched["column"] if matched else None, "materialHeaders": standard}
     selected = [c for c in columns if c["column"] == source_column]
     if len(selected) != 1:
         raise HTTPException(422, "Choose the exact configuration column / 请选择具体配置列")
-    from openpyxl.utils import get_column_letter
+    if standard and target_template and selected[0] != matched:
+        raise HTTPException(422, f"Configuration!{get_column_letter(source_column + 1)}1: Material does not match {target_template} / 物料列与上传目标不符")
     source_letter = get_column_letter(source_column + 1)
     values = [v for v in result["values"] if v["source_column"] == source_letter]
     keys = [(v["category"], v["feature_name"]) for v in values]
-    if not values or len(set(keys)) != len(keys):
+    if not values or len(set(keys)) != len(keys) or not any(v["raw_value"].strip() for v in values):
         raise HTTPException(422, "Empty or ambiguous configuration column / 配置列为空或有重复字段，请核对源文件")
     return {"column": selected[0], "values": values, "warnings": result["warnings"]}
 
@@ -436,7 +505,7 @@ def create_configuration(session: Session, material: dict, parsed: dict, content
 
 def attach_configuration(session: Session, materials: dict, material_key: str, content: bytes, filename: str, column: int, row_version: int, username: str) -> ConfigVersion:
     material = require_material(materials, material_key)
-    version = create_configuration(session, material, parse_configuration(content, filename, column), content, filename, username)
+    version = create_configuration(session, material, parse_configuration(content, filename, column, material["bomTemplate"]), content, filename, username)
     replace_bindings(session, materials, [{"materialKey": material_key, "kind": "config", "colourKey": "", "groupId": None,
                      "versionId": str(version.version_id), "rowVersion": row_version}], username)
     return version
