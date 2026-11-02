@@ -37,6 +37,33 @@ def test_jato_busy_fails_closed(tmp_path: Path) -> None:
     with pytest.raises(MODULE.AdmissionError) as caught:
         MODULE.inspect_jato_idle(tmp_path)
     assert caught.value.code == "jato_busy"
+    assert caught.value.details == {
+        "jobStateCount": 1,
+        "uploadStateCount": 0,
+        "busyJobs": ["job-a"],
+        "busyUploads": [],
+        "baselineStatus": "",
+        "busy": True,
+    }
+
+
+def test_jato_busy_preserves_upload_and_maintenance_diagnostics(tmp_path: Path) -> None:
+    write_json(
+        tmp_path / "_upload_sessions/upload-a/upload_state.json",
+        {"status": "digesting"},
+    )
+    write_json(
+        tmp_path / "_maintenance/baseline_promotion_state.json",
+        {"status": "queued"},
+    )
+
+    with pytest.raises(MODULE.AdmissionError) as caught:
+        MODULE.inspect_jato_idle(tmp_path)
+
+    assert caught.value.code == "jato_busy"
+    assert caught.value.details["busyJobs"] == []
+    assert caught.value.details["busyUploads"] == ["upload-a"]
+    assert caught.value.details["baselineStatus"] == "queued"
 
 
 def test_jato_invalid_state_preserves_existing_gate_diagnostic(tmp_path: Path) -> None:

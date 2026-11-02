@@ -170,9 +170,16 @@ print(json.dumps(dict(zip(keys, row)), sort_keys=True))
 class AdmissionError(RuntimeError):
     """A release cannot safely proceed."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.details = dict(details or {})
 
 
 @dataclass(frozen=True)
@@ -231,7 +238,11 @@ def inspect_jato_idle(job_root: Path) -> dict[str, Any]:
     except GateError as exc:
         raise AdmissionError("jato_state_invalid", str(exc)) from exc
     if result.get("busy") is not False:
-        raise AdmissionError("jato_busy", "JATO write activity is in progress")
+        raise AdmissionError(
+            "jato_busy",
+            "JATO write activity is in progress",
+            details=result,
+        )
     return dict(result)
 
 
