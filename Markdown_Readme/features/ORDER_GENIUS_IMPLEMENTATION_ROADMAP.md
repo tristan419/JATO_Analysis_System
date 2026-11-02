@@ -11,6 +11,7 @@
 - [x] Chrome156＋隔离真实API/PostgreSQL：标准XLSX上传/更新/旧版切换/回收站恢复、三物料跨Model/基准/来源/语言、390px无横溢出；显式复用同UUID后黑/棕内饰仍独立，原文件ZIP实际下载并核验；Filler无维护入口、后端写入403。未上传或修改生产资料。
 - [x] 上传弹层提供可扩容洗数XLSX模板（Configuration空白填写页、Example虚构示例、Readme中英文）；模板实际digest回读、新增配置行和空白/零/缺项回归通过，OpenXML零错误、三页视觉核验无截断。
 - [ ] PR / CI / Candidate及交付回执；本轮不更新Active/intl。
+- 交付回执：[PR #321](https://github.com/tristan419/JATO_Analysis_System/pull/321)集中记录最终CI、Candidate身份及在线核验；本节为合并前快照，发布结论以回执为准。
 
 ## 2026-11-01 Material Assets 按月批量下载（本地完成，发布待回执）
 
