@@ -203,6 +203,13 @@ def _optional_pid_is_alive(
     if isinstance(value, bool) or not isinstance(value, int) or value <= 1:
         raise GateError(f"{context} {key} must be one PID integer greater than 1")
     try:
+        # kill(pid, 0) also succeeds for zombies, which cannot execute JATO work.
+        if _proc_stat_fields(Path(f"/proc/{value}/stat"), value)[0] in {"Z", "X"}:
+            return False
+    except GateError:
+        # Missing/unreadable procfs must not make a live process look idle.
+        pass
+    try:
         os.kill(value, 0)
     except ProcessLookupError:
         return False
@@ -365,7 +372,7 @@ def inspect_state(job_root: Path) -> dict[str, object]:
     }
 
 
-def _proc_stat_start_time(path: Path, expected_pid: int) -> int:
+def _proc_stat_fields(path: Path, expected_pid: int) -> list[str]:
     try:
         raw = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
@@ -379,6 +386,11 @@ def _proc_stat_start_time(path: Path, expected_pid: int) -> int:
     fields = raw[closing_parenthesis + 1 :].strip().split()
     if len(fields) <= 19:
         raise GateError(f"active backend process stat is incomplete: {path}")
+    return fields
+
+
+def _proc_stat_start_time(path: Path, expected_pid: int) -> int:
+    fields = _proc_stat_fields(path, expected_pid)
     try:
         start_time = int(fields[19])
     except ValueError as exc:
