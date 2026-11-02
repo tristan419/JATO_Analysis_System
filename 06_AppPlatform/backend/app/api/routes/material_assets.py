@@ -87,10 +87,10 @@ async def upload_part(upload_id: str, part: int, request: Request, session: Sess
 def preview_upload(upload_id: str, session: Session = Depends(get_db_session), user=Depends(writer)) -> dict:
     with uploads.PROCESSING:
         state, content = uploads.assembled(session, upload_id, user.name)
-        svc.require_material(svc.catalog_materials(session, user), state["target"]["materialKey"])
+        material = svc.require_material(svc.catalog_materials(session, user), state["target"]["materialKey"])
         if state["target"]["kind"] != "config":
             raise HTTPException(422, "Not a configuration / 不是配置表")
-        return svc.parse_configuration(content, state["filename"])
+        return svc.parse_configuration(content, state["filename"], target_template=material["bomTemplate"])
 
 
 @router.post("/uploads/{upload_id}/save")

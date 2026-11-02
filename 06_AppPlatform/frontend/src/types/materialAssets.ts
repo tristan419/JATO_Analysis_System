@@ -32,9 +32,12 @@ export interface AssetLinkChange {
 }
 export interface ConfigCell {
   category: string; feature_name: string; raw_value: string | null; normalized_value: string | null; availability: string | null;
-  source_row: number; source_column: string;
+  source_row: number; source_column: string; source_sheet?: string; unit?: string | null;
 }
-export interface ConfigPreview { columns: Array<{ column: number; name: string }>; warnings: string[] }
+export interface ConfigPreview {
+  columns: Array<{ column: number; name: string; featureCount: number; filledCount: number; sample: ConfigCell[] }>;
+  warnings: string[]; suggestedColumn: number | null; materialHeaders: boolean;
+}
 export interface ConfigDetails { id: string; source: string | null; values: ConfigCell[] }
 export interface ConfigComparison {
   materials: Array<{ key: string; bomTemplate: string; modelName: string; versionId: string; version: number }>;

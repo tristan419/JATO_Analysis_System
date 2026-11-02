@@ -1,5 +1,17 @@
 # Order Genius — 当前状态与待办
 
+## 2026-11-02 配置矩阵 digest、管理与卡片对比（本地完成，发布待回执）
+
+- 基线main@c8c2ee49；独立分支codex/material-configuration-digest-compare，原混合目录只读。
+- 根因：现有上传只支持按Trim选工程矩阵列，未按真实基准号校验；对比仍为平面表。复用现有配置JSON快照、版本/复用/回收站及上传流程，不新建表或解析平台。
+- [x] 唯一业务规则MD与进度同步。
+- [x] 标准Configuration矩阵digest、精确物料匹配、样本预览与定位错误；全空列不可保存。旧工程矩阵保持明确选列。
+- [x] 卡片/基准/分类/相同项折叠/单元格来源，保留跨Model和共享配置的BOM内饰差异。窄屏只在表格内部横滚，不撑宽整页。
+- [x] 配置管理与权限/不可变版本/复用/回收站回归；前端693通过、类型/构建/路由通过，SQLite56通过/1跳过，独立PostgreSQL57通过。浏览器夹具与回归分库，避免已保存夹具污染计数。
+- [x] Chrome156＋隔离真实API/PostgreSQL：标准XLSX上传/更新/旧版切换/回收站恢复、三物料跨Model/基准/来源/语言、390px无横溢出；显式复用同UUID后黑/棕内饰仍独立，原文件ZIP实际下载并核验；Filler无维护入口、后端写入403。未上传或修改生产资料。
+- [x] 上传弹层提供可扩容洗数XLSX模板（Configuration空白填写页、Example虚构示例、Readme中英文）；模板实际digest回读、新增配置行和空白/零/缺项回归通过，OpenXML零错误、三页视觉核验无截断。
+- [ ] PR / CI / Candidate及交付回执；本轮不更新Active/intl。
+
 ## 2026-11-01 Material Assets 按月批量下载（本地完成，发布待回执）
 
 - 基线main@36abd3a6；独立分支codex/material-assets-monthly-download，原混合目录只读。

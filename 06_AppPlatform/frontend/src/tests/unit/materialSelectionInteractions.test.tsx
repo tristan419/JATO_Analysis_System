@@ -29,6 +29,29 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("selection comparison", () => {
+  it("switches baseline without reordering, expands common items and exposes cell provenance inline", async () => {
+    render(<MaterialConfigurationComparison comparison={comparison} catalog={catalog()} t={en => en} />);
+    const baseline = screen.getByRole("button", { name: "Set baseline A**" });
+    fireEvent.click(baseline); expect(baseline.getAttribute("aria-pressed")).toBe("true");
+    expect(Array.from(document.querySelectorAll(".mw-compare-card .mw-compare-label")).map(item => item.textContent)).toEqual(["1B**", "2A**"]);
+    fireEvent.click(screen.getByRole("button", { name: /Common items/ })); expect(screen.getByText("Same")).toBeTruthy();
+    const source = screen.getByRole("button", { name: "Airbags · A** · Source" });
+    fireEvent.click(source);
+    const region = screen.getByRole("region", { name: "Cell source" });
+    expect(region.textContent).toContain("matrix.xlsx"); expect(region.textContent).toContain("AA9"); expect(region.textContent).toContain("uuid-A");
+    fireEvent.click(screen.getByRole("button", { name: "Close source" })); expect(document.activeElement).toBe(source);
+    fireEvent.click(screen.getByRole("button", { name: /▾ Safety/ })); expect(screen.queryByText("Airbags")).toBeNull();
+    expect(materialAssets.photo).not.toHaveBeenCalled();
+  });
+  it("distinguishes missing, blank, zero and different units rather than inventing equipment", () => {
+    const rows: ConfigComparison["rows"] = [
+      { category: "Safety", featureName: "Zero", values: [cell("0"), null] },
+      { category: "Safety", featureName: "Blank", values: [cell(""), cell("Not equipped")] },
+      { category: "Powertrain", featureName: "Unit", values: [{ ...cell("100"), unit: "kW" }, { ...cell("100"), unit: "hp" }] },
+    ];
+    render(<MaterialConfigurationComparison comparison={{ ...comparison, rows }} catalog={catalog()} t={en => en} />);
+    for (const value of ["0", "Not recorded", "Not filled", "Not equipped", "100 kW", "100 hp"]) expect(screen.getByText(value)).toBeTruthy();
+  });
   it("shows BOM interior differences even when the configuration source and values are identical", () => {
     const data = catalog();
     data.materials[1].interiors = [{ key: "code:BN", code: "BN", name: "Brown", hex: "#885533" }];

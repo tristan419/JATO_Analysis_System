@@ -1,6 +1,7 @@
 from io import BytesIO
 import hashlib
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 from datetime import date
@@ -79,6 +80,78 @@ def matrix(column=4, value="标配"):
     sheet.cell(3, column, "JAECOO7-Exclusive"); sheet.cell(4, 2, "配置大类"); sheet.cell(4, 3, "配置子项")
     sheet.cell(5, 1, "F1"); sheet.cell(5, 2, "Safety"); sheet.cell(5, 3, "Airbag"); sheet.cell(5, column, value)
     out = BytesIO(); book.save(out); return out.getvalue()
+
+
+def material_matrix(rows=None, headers=None):
+    book = openpyxl.Workbook(); sheet = book.active; sheet.title = "Configuration"
+    sheet.append(headers or ["Category", "Feature", "Unit", "T7150D**WT1001", "T7150D**WT1002"])
+    for row in rows or [["Powertrain", "Battery capacity", "kWh", 18.3, 26.6], ["Safety", "Airbags", "", 0, "-"], ["Comfort", "Roof", "", None, "N/A"]]:
+        sheet.append(row)
+    out = BytesIO(); book.save(out); return out.getvalue()
+
+
+def test_material_matrix_exact_column_preview_preserves_blank_zero_and_units():
+    content = material_matrix()
+    preview = svc.parse_configuration(content, "source.xlsx", target_template="t7150d**wt1002")
+    assert preview["materialHeaders"] and preview["suggestedColumn"] == 4
+    assert preview["columns"][1]["featureCount"] == 3
+    assert preview["columns"][0]["sample"][0]["source_sheet"] == "Configuration"
+    values = svc.parse_configuration(content, "source.xlsx", 3, "T7150D**WT1001")["values"]
+    assert [(v["raw_value"], v["availability"]) for v in values] == [("18.3", "VALUE"), ("0", "VALUE"), ("", "UNKNOWN")]
+    assert values[0]["unit"] == "kWh" and values[0]["source_column"] == "D" and values[0]["source_row"] == 2
+    assert svc.parse_configuration(content, "source.xlsx", 4)["values"][2]["availability"] == "NOT_APPLICABLE"
+    for wrong_column, wrong_target in [(3, "T7150D**WT1002"), (3, "T7150D**WT1009")]:
+        with pytest.raises(HTTPException) as error:
+            svc.parse_configuration(content, "source.xlsx", wrong_column, wrong_target)
+        assert error.value.status_code == 422 and "Configuration!" in error.value.detail
+
+
+@pytest.mark.parametrize("rows,headers,location", [
+    ([["Safety", "Airbags", "", 6, 8], ["Safety", "Airbags", "", 6, 8]], None, "B3"),
+    ([[None, "Airbags", "", 6, 8]], None, "A2:B2"),
+    ([["Safety", "Airbags", "", "=1+1", 8]], None, "D2"),
+    ([["Powertrain", "Battery", "kWh", "20 km", 8]], None, "D2"),
+    (None, ["Category", "Feature", "Unit", "T7150D**WT1001", "t7150d**wt1001"], "E1"),
+    (None, ["Category", "Feature", "Unit", "T7150DCLWT1001"], "D1"),
+])
+def test_material_matrix_reports_cells_instead_of_silently_skipping(rows, headers, location):
+    with pytest.raises(HTTPException) as error:
+        svc.parse_configuration(material_matrix(rows, headers), "config.xlsx")
+    assert error.value.status_code == 422 and f"Configuration!{location}" in error.value.detail
+
+
+def test_material_matrix_extension_versions_and_wrong_target_leave_current_binding(db):
+    one, two = material(), material("T7150D**WT1002")
+    mats = {m["key"]: m for m in [one, two]}
+    content = material_matrix()
+    old = svc.attach_configuration(db, mats, one["key"], content, "v1.xlsx", 3, 0, "editor"); db.commit()
+    changed = material_matrix([["Safety", "Airbags", "", 8, 6], ["New category", "Expandable feature", "W", 50, 100]])
+    new = svc.attach_configuration(db, mats, one["key"], changed, "v2.xlsx", 3, 1, "editor"); db.commit()
+    assert old.values_snapshot_json[0]["raw_value"] == "18.3" and new.parent_version_id == old.version_id
+    rows = svc.compare_versions([old, new])
+    added = next(r for r in rows if r["featureName"] == "Expandable feature")
+    removed = next(r for r in rows if r["featureName"] == "Battery capacity")
+    assert added["values"][0] is None and added["values"][1]["raw_value"] == "50"
+    assert removed["values"][1] is None
+    with pytest.raises(HTTPException):
+        svc.attach_configuration(db, mats, one["key"], content, "wrong.xlsx", 4, 2, "editor")
+    db.rollback()
+    assert len(db.scalars(select(ConfigVersion)).all()) == 2
+    assert db.scalars(select(MaterialAssetBinding)).one().config_version_id == new.version_id
+
+
+def test_shipped_cleaning_format_roundtrips_and_expands_without_schema_changes():
+    content = (Path(__file__).resolve().parents[3] / "frontend/public/material-configuration-template.xlsx").read_bytes()
+    preview = svc.parse_configuration(content, "format.xlsx", target_template="T7150DY**WT1000")
+    assert preview["columns"][0]["featureCount"] == 20 and preview["columns"][0]["filledCount"] == 0
+    with pytest.raises(HTTPException): svc.parse_configuration(content, "format.xlsx", 3, "T7150DY**WT1000")
+    book = openpyxl.load_workbook(BytesIO(content)); sheet = book["Configuration"]
+    sheet["D2"] = 18.3
+    sheet.append(["New category", "New feature", "W", 0, "-"])
+    out = BytesIO(); book.save(out); book.close()
+    parsed = svc.parse_configuration(out.getvalue(), "cleaned.xlsx", 3, "T7150DY**WT1000")
+    assert len(parsed["values"]) == 21 and parsed["values"][-1]["raw_value"] == "0"
+    assert parsed["values"][-1]["unit"] == "W" and parsed["values"][-1]["source_row"] == 22
 
 
 def photo(format="PNG", size=(32, 24)):
@@ -489,6 +562,24 @@ def test_configuration_upload_preview_and_explicit_column(client, db):
     assert client.post(path + "/save", json={}).status_code == 422
     assert client.post(path + "/save", json={"sourceColumn": 26}).status_code == 200
     assert db.scalars(select(ConfigVersion)).one().values_snapshot_json[0]["source_column"] == "AA"
+
+
+def test_material_upload_preview_and_save_revalidate_target_and_filler_permission(client, db):
+    body, chunks, hashes = upload_body(material_matrix(), kind="config", filename="materials.xlsx")
+    root = "/v1/order-genius/material-assets"
+    state = client.post(root + "/uploads", json=body).json()
+    path = root + f"/uploads/{state['uploadId']}"
+    assert client.put(path + "/parts/1", content=chunks[0], headers={"X-Chunk-SHA256": hashes[0]}).status_code == 200
+    preview = client.post(path + "/preview")
+    assert preview.status_code == 200 and preview.json()["suggestedColumn"] == 3
+    assert client.post(path + "/save", json={"sourceColumn": 4}).status_code == 422
+    assert not db.scalars(select(ConfigVersion)).all()
+    assert client.post(path + "/save", json={"sourceColumn": 3}).status_code == 200
+    version = db.scalars(select(ConfigVersion)).one()
+    assert version.values_snapshot_json[0]["raw_value"] == "18.3"
+    app.dependency_overrides[get_current_user] = lambda: UserContext("order_filler", "f")
+    assert client.post(path + "/save", json={"sourceColumn": 3}).status_code == 403
+    assert client.get(root + f"/configurations/{version.version_id}").status_code == 200
 
 
 def test_same_model_bases_can_explicitly_share_one_configuration_not_interior_links(db):
