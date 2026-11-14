@@ -70,6 +70,41 @@ flowchart TD
 
 ## Expected Monthly Update Behavior
 
+### 2026-11-14: SC009 follow-up and blocker audit
+
+- Reuse the schema contract for both single-country and full Review. A populated
+  active field omitted or wholly empty in an uploaded country follows the same
+  core/optional classification. Individual null cells remain allowed; zero is
+  a value. Check countries separately, not the global column population.
+- Recognize harmless casing, spacing and full-width punctuation variations of
+  the existing optional-field names. This is classification, not permission to
+  substitute prices, units, analysis dimensions or configuration identity keys.
+- Reject unresolved SC009 before Smart Merge can align the missing field to an
+  empty column. Complete Review must also inspect newly supplied month rows,
+  so preserved historical values cannot conceal a wholly empty new attribute.
+- Other rules retain their existing meaning: SC006 suspected doubling and
+  SC014 optional attributes require candidate-bound acknowledgment; SC010 new
+  columns, SC012 row-count changes and SC013 derived totals are review warnings.
+  SC011 historical revisions use keep_active/use_latest. SC001/SC002 unusable
+  month data, SC003 actual regression, SC004 true duplicates, SC005 negative
+  sales and SC007 unintended country changes are not acknowledgment bypasses.
+- No new approval screen, policy framework, dependencies or migration. Verify
+  locally and in Candidate; do not retry or publish monthly runtime data.
+
+| Rule / condition | Current treatment | Reason |
+| --- | --- | --- |
+| SC009 optional populated fields missing/empty | SC014 warning, explicit final acknowledgment | Attribute coverage may be incomplete without corrupting sales |
+| SC009 other populated fields missing/empty | Block | Necessary identity/price/analysis fields cannot silently disappear; unknown fields are not automatically optional |
+| SC006 suspected twofold sales | Warning, explicit candidate/country-bound acknowledgment | A ratio is a suspicion, not proof of duplication |
+| SC010 new columns / SC012 changed row count / SC013 YTD-year totals | Review warning | Structural changes alone do not prove invalid input |
+| SC011 overlapping historical revisions | Existing keep_active/use_latest decision | Historical replacement must be intentional; failed keep_active validation still blocks |
+| SC015 / R005 omitted old months / R204 reduced raw coverage | Preserve Active through Smart Merge, review/info | Missing source history is not zero and is not permission to regress the final result |
+| SC008 unavailable untouched-country proof | Review warning, final isolation checks still enforced | Lack of a preliminary sample cannot authorize unverifiable final changes |
+| SC001/SC002, R002/R003 unusable month/identity data | Block | No trustworthy attribution or comparison possible |
+| SC003 / R005 actual latest-month regression, R004 country loss | Block final loss; existing Smart Merge may preserve Active | Final coverage must not decrease |
+| SC004 true normalized duplicate configurations / SC005 negative sales / SC007 unintended country changes | Block | Acknowledgment cannot resolve ambiguous records or invalid mutations |
+| Stale candidate/Active lineage, missing artifacts, locks, resource and hash guards | Block/retry existing flow | Operational validity is not a discretionary data-quality warning |
+
 ### 2026-11-14: optional attributes, explicit warnings and one publish confirmation
 
 - Missing ordinary specification attributes are review warnings, not SC009

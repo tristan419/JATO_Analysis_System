@@ -74,7 +74,10 @@ def test_final_confirmation_does_not_approve_a_new_unseen_candidate(review_state
     assert not saved.get("reviewApproval") and not saved.get("pendingOperation")
 
 
-@pytest.mark.parametrize("rule", ["SC004", "SC005", "SC007", "SC009"])
+@pytest.mark.parametrize("rule", [
+    "SC001", "SC002", "SC003", "SC004", "SC005", "SC007", "SC009", "SC011",
+    "R002", "R003", "R004", "R005",
+])
 def test_warning_acceptance_cannot_bypass_blockers(review_state, rule):
     state, review = review_state
     review["reviewFindings"] = [{"ruleId": rule, "severity": "blocker", "target": "丹麦"}]

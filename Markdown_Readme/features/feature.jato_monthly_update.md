@@ -3,6 +3,22 @@
 ## Status
 implemented
 
+### 2026-11-14 SC009 follow-up (validated locally)
+
+- Fix existing schema classification for optional-name variants and populated
+  active fields that become wholly empty per uploaded country.
+- Preserve the source schema check before Smart Merge; verify new-month rows
+  after merge instead of letting preserved history conceal missing attributes.
+- Audit remaining blocker/warning paths without weakening duplicate, sales,
+  country-isolation, lineage or publication invariants. Reuse final confirmation.
+- Validation: 425 monthly/raw-compare/API tests pass, including all 18 optional
+  names missing/empty, harmless name variants, core emptiness, new-month masking,
+  multi-country isolation, pre-merge rejection and non-bypassable hard rules.
+- Review schema v7 requires the existing isolated Review refresh for old bundles;
+  no new approval or automatic production job retry is introduced.
+- Pending: PR/CI and Candidate validation. Active and monthly
+  runtime data remain unchanged.
+
 ### 2026-11-14 warning policy and approval interaction (validated locally)
 
 - Scope: optional-attribute warnings, explicit candidate-bound acceptance of
