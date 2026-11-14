@@ -9,6 +9,17 @@ describe("JATO monthly update historical reclassification API", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sends the exact reviewed candidate and warning consent with the final publish request", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ item: {
+      jobId: "jato-final-confirmation", status: "success", phase: "completed",
+    } })));
+    const confirmation = { expectedCandidateFingerprint: "a".repeat(64), acceptedWarningRules: ["SC006", "SC014"] };
+    await api.publishJatoMonthlyUpdateJob("jato-final-confirmation", confirmation);
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/jato-final-confirmation/publish"), expect.objectContaining({
+      method: "POST", body: JSON.stringify(confirmation),
+    }));
+  });
+
   it("maps the country, dimension and exact old-to-new review report", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({
       item: {

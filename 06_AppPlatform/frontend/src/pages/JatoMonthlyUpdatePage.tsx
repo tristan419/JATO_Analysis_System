@@ -56,7 +56,6 @@ type ReviewIssueState = {
 type JatoConfirmationAction =
   | "cancel_job"
   | "resume_smart_merge"
-  | "approve_review"
   | "resolve_historical_reclassification"
   | "publish_candidate"
   | "rollback_publish"
@@ -500,7 +499,6 @@ export function JatoMonthlyUpdatePage() {
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
   const [reviewRefreshSubmittingJobId, setReviewRefreshSubmittingJobId] = useState<string | null>(null);
   const [reviewIssue, setReviewIssue] = useState<ReviewIssueState | null>(null);
-  const [approvingReviewJobId, setApprovingReviewJobId] = useState<string | null>(null);
   const [
     resolvingHistoricalReclassificationJobId,
     setResolvingHistoricalReclassificationJobId,
@@ -1314,90 +1312,6 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
-  function handleApproveReview(job: JatoMonthlyUpdateJob) {
-    if (guardReviewRefreshMutation(job)) {
-      return;
-    }
-    if (!reviewBundle || reviewBundle.jobId !== job.jobId) {
-      setError("请先打开并核对 Review Candidate，再执行批准。");
-      return;
-    }
-    if (!hasValidHistoricalReclassificationScope(
-      reviewBundle.historicalReclassificationReport
-    )) {
-      setError("历史数据变化报告状态与逐国范围不一致，不能批准当前 Candidate。");
-      return;
-    }
-    if (reviewBundle.historicalReclassificationReport.status === "decision_required") {
-      setError("请先应用历史处理选择并等待完整 Candidate 重建，再执行批准。");
-      return;
-    }
-    if (
-      reviewBundle.historicalReclassificationReport.status === "resolved"
-      && !isResolvedHistoricalReclassificationReady(
-        reviewBundle.historicalReclassificationReport
-      )
-    ) {
-      setError("历史处理决策或 keep_active 最终复核不完整，不能批准当前 Candidate。");
-      return;
-    }
-    const decisionCountries = reviewBundle.historicalReclassificationReport.countries
-      .filter((countryReport) => countryReport.decisionRequired);
-    openConfirmation({
-      action: "approve_review",
-      title: "确认批准 Review",
-      description: "批准会绑定当前 Candidate 指纹并解锁后续 Publish；任何重建都会让本次批准失效。",
-      tone: "warning",
-      cancelLabel: "返回检查",
-      confirmLabel: "确认批准",
-      loadingLabel: "正在批准...",
-      content: (
-        <>
-          <ConfirmationFacts
-            items={[
-              { label: "Job", value: job.jobId },
-              {
-                label: "Candidate 指纹",
-                value: formatDigestPreview(reviewBundle.candidateFingerprint),
-              },
-              {
-                label: "历史处理国家",
-                value: formatMonthlyUpdateNumber(decisionCountries.length),
-              },
-              {
-                label: "Review blocker",
-                value: formatMonthlyUpdateNumber(
-                  reviewBundle.reviewFindings.filter((finding) => finding.severity === "blocker").length
-                ),
-              },
-            ]}
-          />
-          <div className="confirm-dialog-note">
-            <strong>批准不等于发布</strong>
-            <span>此步骤只记录对当前指纹的治理确认；active 数据仍保持不变，之后仍需单独确认 Publish。</span>
-          </div>
-        </>
-      ),
-      execute: async () => {
-        setApprovingReviewJobId(job.jobId);
-        setError("");
-        setNotice("");
-        try {
-          const response = await api.approveJatoMonthlyUpdateReview(job.jobId);
-          setSelectedJob(response.item);
-          setReviewBundle((current) => current?.jobId === job.jobId
-            ? { ...current, approval: response.item.reviewApproval ?? null }
-            : current);
-          setNotice(`Review 已批准：${job.jobId}。Publish 只接受这一候选指纹。`);
-          await refreshJobs(job.jobId, true);
-          await loadJobDetail(job.jobId, true);
-        } finally {
-          setApprovingReviewJobId(null);
-        }
-      },
-    });
-  }
-
   function handleResolveHistoricalReclassification(job: JatoMonthlyUpdateJob) {
     if (guardReviewRefreshMutation(job)) {
       return;
@@ -1512,7 +1426,7 @@ export function JatoMonthlyUpdatePage() {
           )}
           <div className="confirm-dialog-note">
             <strong>当前只重建 staging</strong>
-            <span>这一步不会修改 active；完成后仍需重新 Review、Approve 和 Publish。</span>
+            <span>这一步不会修改 active；完成后核对完整结果，再确认发布。</span>
           </div>
         </>
       ),
@@ -1579,13 +1493,29 @@ export function JatoMonthlyUpdatePage() {
     if (guardReviewRefreshMutation(job)) {
       return;
     }
+    if (
+      !reviewBundle || reviewBundle.jobId !== job.jobId
+      || !reviewBundle.candidateFingerprint
+      || !hasValidHistoricalReclassificationReport
+      || historicalReclassificationReport?.status === "decision_required"
+      || !hasRecordedResolvedHistoricalReclassificationDecisions
+      || !hasVerifiedResolvedKeepActiveDecisions
+      || reviewBundle.reviewFindings.some((finding) => finding.severity === "blocker")
+    ) {
+      setError("请先核对完整 Review，并解决历史选择或 blocker。 / Review the complete candidate first.");
+      return;
+    }
+    const candidateFingerprint = reviewBundle.candidateFingerprint;
+    const warnings = reviewBundle.reviewFindings.filter((finding) => finding.severity === "review");
+    const historyChoices = reviewBundle.historicalReclassificationReport.countries
+      .filter((country) => country.decisionRequired);
     openConfirmation({
       action: "publish_candidate",
       title: "确认发布 Candidate",
-      description: "这是实际的 active 数据切换。系统会先备份现有 active，再把当前已批准 Candidate 提升为生产数据。",
+      description: "确认本次 Review 并发布当前候选。系统会先备份 Active。 / Approve this review and publish this candidate.",
       tone: "danger",
       cancelLabel: "返回检查",
-      confirmLabel: "确认发布",
+      confirmLabel: warnings.length > 0 ? "接受警告并发布 / Accept & publish" : "确认发布",
       loadingLabel: "正在发布...",
       content: (
         <>
@@ -1600,15 +1530,32 @@ export function JatoMonthlyUpdatePage() {
                   : job.country || "完整数据集",
               },
               {
-                label: "批准指纹",
-                value: formatDigestPreview(job.reviewApproval?.candidateFingerprint),
-              },
-              {
-                label: "批准人",
-                value: job.reviewApproval?.reviewedBy || "-",
+                label: "Candidate",
+                value: formatDigestPreview(candidateFingerprint),
               },
             ]}
           />
+          {historyChoices.length > 0 && (
+            <div className="confirm-dialog-choice-list">
+              {historyChoices.map((country) => (
+                <div key={country.country} className="confirm-dialog-choice">
+                  <strong>{country.country}</strong>
+                  <span>{country.decision === "use_latest" ? "使用上传历史 / Use uploaded history" : "保留 Active 历史 / Keep Active history"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {warnings.length > 0 && (
+            <div className="confirm-dialog-risk">
+              <strong>本次接受的警告 / Warnings accepted for this candidate</strong>
+              {warnings.map((finding, index) => (
+                <details key={`${finding.ruleId}-${finding.target}-${index}`}>
+                  <summary>{finding.ruleId} · {finding.target} · {finding.message}</summary>
+                  <pre>{formatReviewMetrics(finding.metrics)}</pre>
+                </details>
+              ))}
+            </div>
+          )}
           <div className="confirm-dialog-risk">
             <strong>确认后会改变 active 数据</strong>
             <span>发布前会自动备份 active parquet、manifest、partitioned_dataset_v1 与 fingerprint；发布失败时旧 active 保持运行。</span>
@@ -1621,7 +1568,10 @@ export function JatoMonthlyUpdatePage() {
         setNotice("");
         setPublishBlocker(null);
         try {
-          const response = await api.publishJatoMonthlyUpdateJob(job.jobId);
+          const response = await api.publishJatoMonthlyUpdateJob(job.jobId, {
+            expectedCandidateFingerprint: candidateFingerprint,
+            acceptedWarningRules: Array.from(new Set(warnings.map((finding) => finding.ruleId))),
+          });
           setSelectedJob(response.item);
           setSelectedJobId(response.item.jobId);
           const operation = response.item.pendingOperation;
@@ -1753,7 +1703,7 @@ export function JatoMonthlyUpdatePage() {
           ) : null}
           <div className="confirm-dialog-note">
             <strong>active 不会在此步骤改变</strong>
-            <span>当前 Review 与批准会失效；Smart Merge 完成后必须重新 Review、批准并手动 Publish。</span>
+            <span>合并后核对完整 Review，再确认发布；不会自动改动 Active。</span>
           </div>
         </>
       ),
@@ -1902,10 +1852,9 @@ export function JatoMonthlyUpdatePage() {
     selectedJob?.publication?.publishedAt && !selectedJob?.publication?.rolledBackAt
   );
   const hasReviewedSelectedJob = reviewBundle?.jobId === selectedJob?.jobId;
-  const hasApprovedSelectedJob = Boolean(
-    selectedJob?.reviewApproval?.decision === "approved"
-    && reviewBundle?.candidateFingerprint
-    && selectedJob.reviewApproval.candidateFingerprint === reviewBundle.candidateFingerprint
+  const needsCandidateMerge = isPartitionScopedReview || Boolean(
+    !hasSmartMerge && Array.isArray(reviewBundle?.timeAxisCheck.removedMonths)
+    && reviewBundle.timeAxisCheck.removedMonths.length > 0
   );
   const availableReviewCountries = reviewBundle
     ? Array.from(
@@ -2698,28 +2647,16 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                           : "Review Candidate"}
                     </button>
                   )}
-                  {canPublishSelectedJob
-                    && hasReviewedSelectedJob
-                    && historicalReclassificationReport?.status !== "decision_required" && (
+                  {needsCandidateMerge && hasReviewedSelectedJob
+                    && historicalReclassificationReport?.status === "not_required" && (
                     <button
                       type="button"
-                      className="btn btn-secondary"
-                      onClick={() => void handleApproveReview(selectedJob)}
-                      disabled={
-                        hasApprovedSelectedJob
-                        || approvingReviewJobId === selectedJob.jobId
-                        || isReviewRefreshActionLocked
-                        || !hasValidHistoricalReclassificationReport
-                        || !hasRecordedResolvedHistoricalReclassificationDecisions
-                        || !hasVerifiedResolvedKeepActiveDecisions
-                        || Boolean(reviewBundle?.reviewFindings.some((finding) => finding.severity === "blocker"))
-                      }
+                      className="btn btn-primary"
+                      onClick={() => void handleSmartMerge(selectedJob)}
+                      disabled={isSmartMerging || hasActiveJob || isReviewRefreshActionLocked
+                        || Boolean(reviewBundle?.reviewFindings.some((finding) => finding.severity === "blocker"))}
                     >
-                      {hasApprovedSelectedJob
-                        ? "Review Approved"
-                        : approvingReviewJobId === selectedJob.jobId
-                          ? "批准中..."
-                          : "Approve Review"}
+                      生成完整候选 / Prepare candidate
                     </button>
                   )}
                   {hasReviewedSelectedJob
@@ -2760,7 +2697,13 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       onClick={() => void handlePublishJob(selectedJob)}
                       disabled={
                         isSelectedJobPublished
-                        || !hasApprovedSelectedJob
+                        || !hasReviewedSelectedJob
+                        || needsCandidateMerge
+                        || !hasValidHistoricalReclassificationReport
+                        || historicalReclassificationReport?.status === "decision_required"
+                        || !hasRecordedResolvedHistoricalReclassificationDecisions
+                        || !hasVerifiedResolvedKeepActiveDecisions
+                        || Boolean(reviewBundle?.reviewFindings.some((finding) => finding.severity === "blocker"))
                         || publishingJobId === selectedJob.jobId
                         || isReviewRefreshActionLocked
                         || hasActiveJob
@@ -2768,8 +2711,8 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     >
                       {isSelectedJobPublished
                         ? "Published"
-                        : !hasApprovedSelectedJob
-                          ? "先批准 Review 再 Publish"
+                        : !hasReviewedSelectedJob
+                          ? "先查看 Review / Review first"
                           : publishingJobId === selectedJob.jobId
                             ? "Publishing..."
                             : "Publish Candidate"}
@@ -3151,7 +3094,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       <p className="section-note">
                         {isPartitionScopedReview
                           ? "部分国家任务 success 只表示分区 Review 候选已生成；它没有改动 active，因此 Dashboard 仍显示原月份。"
-                          : "这里集中展示 raw compare checklist 与人工 review 要点；没有 blocker 时仍需 Approve Review 才能 Publish。"}
+                          : "核对结果后，确认发布。 / Review the results, then confirm publication."}
                       </p>
                     </div>
                     <div className="table-status-chip">
@@ -3164,7 +3107,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       ? "部分国家候选为隔离 Review 产物，只读验证上传国家和未上传分区；不能直接 Publish。"
                       : reviewBundle.approval?.decision === "approved"
                         ? `Review 已由 ${reviewBundle.approval.reviewedBy || "-"} 批准（${formatMonthlyUpdateTimestamp(reviewBundle.approval.reviewedAt)}）。`
-                        : "Review 尚未批准；核对所有 findings 后再执行 Approve Review。"}
+                        : "尚未发布 / Not published"}
                   </div>
                   {historicalReclassificationReport && historicalReclassificationReport.countries.length > 0 && (
                     <section className="monthly-update-reclassification">
@@ -3247,10 +3190,10 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                         }>
                           {hasRecordedResolvedHistoricalReclassificationDecisions
                             && hasVerifiedResolvedKeepActiveDecisions
-                            ? "历史处理选择已应用到当前完整 Candidate。请重新核对本报告与 findings，然后再执行标准 Approve Review；active 仍未改变。"
+                            ? "历史处理已应用。核对完整结果后确认发布；Active 尚未改变。"
                             : !hasRecordedResolvedHistoricalReclassificationDecisions
-                              ? "报告缺少部分国家的已应用选择。为避免无法审计的默认行为，Approve Review 已锁定；请刷新 Review。"
-                              : "keep_active 的最终 Candidate 历史复核缺失或失败。Approve Review 已锁定；请查看 SC011 findings。"}
+                              ? "缺少部分国家的历史选择，暂不能发布；请刷新 Review。"
+                              : "keep_active 最终复核缺失或失败，暂不能发布；请查看 SC011。"}
                         </div>
                       )}
                       <div className="monthly-update-reclassification-list">

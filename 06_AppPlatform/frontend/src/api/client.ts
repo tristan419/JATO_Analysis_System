@@ -4437,9 +4437,13 @@ export const api = {
     }).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)
     })),
-  publishJatoMonthlyUpdateJob: (jobId: string) =>
+  publishJatoMonthlyUpdateJob: (
+    jobId: string,
+    confirmation: { expectedCandidateFingerprint: string; acceptedWarningRules: string[] },
+  ) =>
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/publish`, {
-      method: "POST"
+      method: "POST",
+      body: JSON.stringify(confirmation),
     }).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)
     })),

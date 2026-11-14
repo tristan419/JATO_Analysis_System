@@ -232,6 +232,11 @@ def post_monthly_update_review_approval(
             triggered_by=user.name,
             decision=str(payload.get("decision", "")),
             note=str(payload.get("note", "")) if payload.get("note") is not None else None,
+            expected_candidate_fingerprint=(
+                str(payload["expectedCandidateFingerprint"])
+                if payload.get("expectedCandidateFingerprint") is not None else None
+            ),
+            accepted_warning_rules=payload.get("acceptedWarningRules"),
         )
     }
 
@@ -257,11 +262,17 @@ def post_historical_reclassification_resolution(
 def post_publish_monthly_update_job(
     job_id: str,
     user: UserContext = Depends(require_min_role("admin")),
+    payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "item": publish_jato_monthly_update_job(
             job_id=job_id,
             triggered_by=user.name,
+            expected_candidate_fingerprint=(
+                str(payload["expectedCandidateFingerprint"])
+                if payload and payload.get("expectedCandidateFingerprint") is not None else None
+            ),
+            accepted_warning_rules=payload.get("acceptedWarningRules") if payload else None,
         )
     }
 

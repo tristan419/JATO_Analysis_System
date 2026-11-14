@@ -1,5 +1,7 @@
 import hashlib
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from app.api.routes import msrp_monthly_update
@@ -842,12 +844,15 @@ def test_historical_reclassification_resolution_route_passes_decisions(
     }
 
 
-def test_publish_monthly_update_job_route_returns_queued_operation(monkeypatch) -> None:
+@pytest.mark.parametrize("with_confirmation", [False, True])
+def test_publish_monthly_update_job_route_returns_queued_operation(monkeypatch, with_confirmation) -> None:
     monkeypatch.setattr(
         msrp_monthly_update,
         "publish_jato_monthly_update_job",
-        lambda *, job_id, triggered_by: {
+        lambda *, job_id, triggered_by, expected_candidate_fingerprint=None, accepted_warning_rules=None: {
             "jobId": job_id,
+            "confirmedCandidate": expected_candidate_fingerprint,
+            "acceptedWarningRules": accepted_warning_rules,
             "status": "success",
             "phase": "completed",
             "triggeredBy": "builder",
@@ -865,6 +870,7 @@ def test_publish_monthly_update_job_route_returns_queued_operation(monkeypatch) 
     response = client.post(
         "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/publish",
         headers=_admin_headers(monkeypatch),
+        json={"expectedCandidateFingerprint": "a" * 64, "acceptedWarningRules": ["SC006", "SC014"]} if with_confirmation else None,
     )
 
     assert response.status_code == 200
@@ -874,6 +880,8 @@ def test_publish_monthly_update_job_route_returns_queued_operation(monkeypatch) 
     assert payload["pendingOperation"]["type"] == "publish"
     assert payload["pendingOperation"]["status"] == "queued"
     assert payload["pendingOperation"]["requestedBy"] == "tester"
+    assert payload["confirmedCandidate"] == ("a" * 64 if with_confirmation else None)
+    assert payload["acceptedWarningRules"] == (["SC006", "SC014"] if with_confirmation else None)
 
 
 def test_rollback_monthly_update_job_route_returns_queued_operation(monkeypatch) -> None:

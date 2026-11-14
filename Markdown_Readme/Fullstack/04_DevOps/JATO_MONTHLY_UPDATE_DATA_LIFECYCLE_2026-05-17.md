@@ -70,6 +70,29 @@ flowchart TD
 
 ## Expected Monthly Update Behavior
 
+### 2026-11-14: optional attributes, explicit warnings and one publish confirmation
+
+- Missing ordinary specification attributes are review warnings, not SC009
+  blockers. Country, Make/Model, registration, price and analytical dimensions
+  remain required when populated in active. Preserve the schema; inherit an
+  optional value only through the existing unambiguous configuration-key
+  carry-forward. Otherwise retain null, never invent zero or a replacement field.
+- Suspected twofold sales (SC006) require an explicit, candidate-bound warning
+  acknowledgment, rather than an unconditional rejection. True duplicate
+  configurations (SC004), invalid sales, regression and unintended country
+  changes remain blocking. History replacement still needs keep_active/use_latest.
+- Same-month corrections may enter Review without advancing a country. The
+  default keeps active; use_latest replaces only supplied overlapping months.
+  Missing historical months remain active, including full-batch comparisons.
+- Review preparation/Smart Merge changes staging only. Do not approve raw
+  partitions or carry approval across a rebuild. The complete reviewed candidate
+  has one final confirmation that records Review approval and explicitly queues
+  Publish. Show accepted warnings and history choices in that confirmation.
+- The browser submits the exact reviewed candidate fingerprint. Changed
+  candidates/active lineage, stale approval, concurrency and failed merge
+  invariants still stop publication. Code changes never automatically publish
+  monthly data or retry production jobs.
+
 ### 2026-10-29: preserve uploaded static-field distinctions
 
 Read-only inspection of `jato-update-398aa04a` identified a platform-generated
@@ -115,8 +138,8 @@ the input. Reuse the existing country Review and bounded streaming Smart Merge:
   YTD/year totals from the selected monthly slices.
 - The merged complete candidate must pass Review before approval/publication;
   a raw partition-only candidate is still not directly publishable.
-- A file missing history but not advancing the latest month remains blocked;
-  this change does not introduce a history-only repair workflow.
+- Same-month revisions now follow the explicit correction policy above; an
+  omitted month is still not permission to clear or overwrite active history.
 
 Existing cached Reviews require the normal Review refresh/new-attempt flow to
 use new rules. This code change does not publish the above job, modify active
@@ -190,7 +213,8 @@ For future JATO monthly updates:
 1. Use the web monthly-update upload flow.
 2. Upload only the countries provided by JATO for that batch.
 3. Let the system supplement missing countries from current active parquet.
-4. Publish only after review shows no latest-month regression and no suspected 2x sales anomaly.
+4. Publish only after Review has no blockers and any suspected 2x anomaly has
+   been explicitly accepted for the exact candidate being published.
 5. Verify production freshness and key values.
 6. If local development must use the same data, sync runtime data from cloud to local after production publish.
 

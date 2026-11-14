@@ -47,6 +47,20 @@ def test_compute_payload_digest_ignores_row_order() -> None:
     ) == raw_compare_module.compute_payload_digest(reordered)
 
 
+def test_missing_old_months_are_reviewable_but_latest_month_regression_still_blocks():
+    findings = raw_compare_module.build_review_findings(
+        {"criticalMissingColumns": [], "addedColumns": [], "renamedCandidates": []},
+        {"recognizedMonthColumnsNew": ["2026 Sep"], "removedMonths": ["2023 Jan"]},
+        {"groups": [1, 2, 3, 4]}, {"removedCountries": []},
+        [{"country": "Denmark", "freshnessStatus": "regressed",
+          "oldLatestMonth": "2026 Sep", "newLatestMonth": "2026 Aug"}],
+        [{"country": "Denmark", "coverageStatus": "regressed_coverage", "removedMonths": ["2023 Jan"]}], [],
+    )
+    assert any(item["ruleId"] == "R204" and item["severity"] == "review" for item in findings)
+    assert any(item["ruleId"] == "R005" and item["severity"] == "review" for item in findings)
+    assert any(item["ruleId"] == "R005" and item["severity"] == "blocker" for item in findings)
+
+
 def test_build_key_digest_frame_preserves_group_digests_when_rows_reordered(
 ) -> None:
     key_groups = [

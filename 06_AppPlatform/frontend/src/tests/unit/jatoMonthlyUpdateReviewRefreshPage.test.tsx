@@ -195,7 +195,7 @@ describe("JATO Review refresh interaction", () => {
 
     expect(await screen.findByText("Review 已过期")).toBeTruthy();
     expect(screen.getByText("原因：legacy_stat_signature · Candidate aaaaaaaaaaaa…")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "先批准 Review 再 Publish" }) as HTMLButtonElement).disabled)
+    expect((screen.getByRole("button", { name: "先查看 Review / Review first" }) as HTMLButtonElement).disabled)
       .toBe(true);
 
     const refreshButton = screen.getByRole("button", {
@@ -211,7 +211,7 @@ describe("JATO Review refresh interaction", () => {
     expect(api.getJatoMonthlyUpdateJob).toHaveBeenCalled();
     expect((screen.getByRole("button", { name: "Review Candidate" }) as HTMLButtonElement).disabled)
       .toBe(true);
-    expect((screen.getByRole("button", { name: "先批准 Review 再 Publish" }) as HTMLButtonElement).disabled)
+    expect((screen.getByRole("button", { name: "先查看 Review / Review first" }) as HTMLButtonElement).disabled)
       .toBe(true);
     expect((screen.getByRole("button", { name: "刷新任务状态" }) as HTMLButtonElement).disabled)
       .toBe(false);
@@ -254,7 +254,7 @@ describe("JATO Review refresh interaction", () => {
       fireEvent.click(await screen.findByRole("button", {
         name: "Review Candidate",
       }));
-      expect(await screen.findByRole("button", { name: "Review Approved" }))
+      expect(await screen.findByRole("button", { name: "Publish Candidate" }))
         .toBeTruthy();
       expect((screen.getByRole("button", {
         name: "Publish Candidate",
@@ -297,8 +297,8 @@ describe("JATO Review refresh interaction", () => {
         expect(screen.queryByText(/这里集中展示 raw compare checklist/))
           .toBeNull();
       });
-      expect((screen.getByRole("button", {
-        name: "先批准 Review 再 Publish",
+      expect((await screen.findByRole("button", {
+        name: "先查看 Review / Review first",
       }) as HTMLButtonElement).disabled).toBe(true);
       const reviewButton = screen.getByRole("button", {
         name: "Review Candidate",
