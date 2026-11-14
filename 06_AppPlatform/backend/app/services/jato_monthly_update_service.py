@@ -53,7 +53,7 @@ STATE_FILENAME = "job_state.json"
 LOG_FILENAME = "job.log"
 UPLOAD_STATE_FILENAME = "upload_state.json"
 REVIEW_BUNDLE_FILENAME = "review_bundle.json"
-REVIEW_BUNDLE_SCHEMA_VERSION = 5
+REVIEW_BUNDLE_SCHEMA_VERSION = 6
 CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION = 2
 CANDIDATE_ARTIFACT_FIELDS = (
     ("parquet", "stagingOutputPath"),
@@ -126,7 +126,7 @@ MONTH_COLUMN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 YEAR_COLUMN_PATTERN = re.compile(r"^\d{4}$")
-YTD_COLUMN_PATTERN = re.compile(r"^YTD\s+\d{4}\s+\([A-Za-z]{3}\)$", re.IGNORECASE)
+YTD_COLUMN_PATTERN = re.compile(r"^YTD\s+(\d{4})\s*\(([A-Za-z]{3})\)$", re.IGNORECASE)
 BATCH_ID_PATTERN = re.compile(r"^(20\d{2}-\d{2})-r(\d+)$")
 RECOVERY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 REVIEW_REFRESH_REQUEST_ID_PATTERN = re.compile(
@@ -385,6 +385,17 @@ DEPRECATED_OPTIONAL_STATIC_COLUMNS = frozenset(
         "WLTP Emission combined",
         "cargo volume (l)",
         "curb weight (kg)",
+        "Maximum power hp/PS",
+        "Seating capacity",
+        "Battery type",
+        "Battery kwh",
+        "Useable battery kilowatt hour (kWh)",
+        "Battery range",
+        "length (mm)",
+        "width (mm)",
+        "height (mm)",
+        "wheelbase (mm)",
+        "品牌 (奇瑞集团整合)",
     }
 )
 SC011_LATEST_WASHED_CONFIRMATION_SCOPE = {
@@ -2202,7 +2213,7 @@ def _single_country_schema_contract(*, active_frame: pd.DataFrame, candidate_fra
     for column in missing:
         if not _series_has_data(active_frame[column]):
             null_only.append(column)
-        elif _is_derived_ytd_column(column):
+        elif _is_derived_ytd_column(column) or YEAR_COLUMN_PATTERN.fullmatch(column):
             derived_ytd.append(column)
         elif column in DEPRECATED_OPTIONAL_STATIC_COLUMNS:
             deprecated_optional.append(column)
@@ -2227,6 +2238,35 @@ def _single_country_configuration_key_columns(frame: pd.DataFrame) -> list[str]:
         and not YEAR_COLUMN_PATTERN.fullmatch(str(column).strip())
         and not _is_derived_ytd_column(str(column))
     ]
+
+
+def _schema_contract_review_findings(
+    country: str, contract: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for key, rule_id, severity, message in (
+        ("missingMaterial", "SC009", "blocker", "缺少必要业务列"),
+        ("missingDeprecatedOptional", "SC014", "review", "缺少可选属性；仅在配置匹配且旧值唯一时沿用，否则保留空值"),
+    ):
+        columns = contract[key]
+        if not columns:
+            continue
+        metrics = {
+            "missingMaterialColumns": contract["missingMaterial"],
+            "missingDeprecatedOptionalColumns": contract["missingDeprecatedOptional"],
+            "missingDerivedYtdColumns": contract["missingDerivedYtd"],
+            "missingNullOnlyColumns": contract["missingNullOnly"],
+        }
+        findings.append({
+            "severity": severity, "scope": "country", "target": country,
+            "ruleId": rule_id, "message": message + "：" + "、".join(columns),
+            "metrics": metrics,
+            "suggestedAction": "reject_input_batch" if severity == "blocker" else "manual_review_required",
+            "sourceFeedback": _single_country_source_feedback(
+                rule_id=rule_id, country=country, metrics=metrics,
+            ),
+        })
+    return findings
 
 
 def _duplicate_configuration_samples(
@@ -3136,14 +3176,14 @@ def _single_country_historical_sales_stability(
         if (
             not allow_forward_patch
             or candidate_latest is None
-            or _time_sort_key(candidate_latest) <= _time_sort_key(active_latest_month)
+            or _time_sort_key(candidate_latest) < _time_sort_key(active_latest_month)
         ):
             return {
                 "status": "fail",
                 "reason": "candidate_missing_historical_months",
                 "missingMonths": missing,
             }
-        # An advancing upload is a month patch, not a complete historical
+        # A forward or same-month upload is a patch, not a complete historical
         # replacement. Smart Merge preserves absent months from active; still
         # compare every supplied overlap so revisions require the usual review.
         historical_months = [
@@ -3471,7 +3511,7 @@ def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict
     if rule_id == "SC013":
         return f"{country} 缺少旧月份 YTD 派生列：{columns('missingDerivedYtdColumns') or '见 Review 明细'}。这不是发布 blocker；请确认最新月份的 YTD 字段仍由 Jan 至当月销量计算，并在后续导出中保持 YTD 列命名和口径一致。"
     if rule_id == "SC014":
-        return f"{country} 缺少已停用的可选静态字段：{columns('missingDeprecatedOptionalColumns') or '见 Review 明细'}。无需为本次月更补齐；系统只会在配置键匹配且 active 旧值一致时沿用旧值，新配置或旧值冲突的配置保持为空，且不会用 Retail price 等相近字段冒充原字段。"
+        return f"{country} 缺少可选属性：{columns('missingDeprecatedOptionalColumns') or '见 Review 明细'}。确认后可继续，无需为本次月更补齐；系统只会在配置键匹配且 active 旧值一致时沿用旧值，新配置或旧值冲突的配置保持为空，不补零，也不会用 Retail price 等相近字段冒充原字段。"
     return None
 
 
@@ -4733,6 +4773,7 @@ def _load_country_configuration_history_frame(
     *,
     country: str,
     path_label: str,
+    include_static: bool = False,
 ) -> pd.DataFrame:
     """Load one country with stable analysis dimensions and monthly sales."""
     try:
@@ -4812,6 +4853,8 @@ def _load_country_configuration_history_frame(
                 ]
             )
         )
+        if include_static:
+            selected_columns = schema_columns
         country_filter = (
             (country_column, "==", matching_raw_values[0])
             if len(matching_raw_values) == 1
@@ -5090,6 +5133,9 @@ def _build_historical_reclassification_report_from_paths(
     reports: list[dict[str, Any]] = []
     unavailable_countries: list[dict[str, Any]] = []
     current_stability_by_key: dict[str, dict[str, Any]] = {}
+    schema_findings: list[dict[str, Any]] = []
+    artifacts = payload.get("artifacts") or {}
+    is_raw_candidate = artifacts.get("candidateScope") != "full_smart_merge"
     for requested_country in countries:
         country_key = requested_country.strip().casefold()
         active_entry = active_by_key.get(country_key)
@@ -5106,11 +5152,13 @@ def _build_historical_reclassification_report_from_paths(
                 active_path,
                 country=active_country,
                 path_label=f"Review active（{active_country}）",
+                include_static=True,
             )
             candidate_frame = _load_country_configuration_history_frame(
                 candidate_path,
                 country=candidate_country,
                 path_label=f"Review candidate（{candidate_country}）",
+                include_static=True,
             )
         except HTTPException as exc:
             current_stability_by_key[country_key] = {
@@ -5124,12 +5172,17 @@ def _build_historical_reclassification_report_from_paths(
                 }
             )
             continue
+        schema_findings.extend(_schema_contract_review_findings(
+            active_country,
+            _single_country_schema_contract(active_frame=active_frame, candidate_frame=candidate_frame),
+        ))
         stability = _single_country_historical_sales_stability(
             country=active_country,
             active_frame=active_frame,
             candidate_frame=candidate_frame,
             active_latest_month=active_latest_month,
             source_upload_sha256=source_upload_sha256,
+            allow_forward_patch=is_raw_candidate,
         )
         current_stability_by_key[country_key] = {
             "status": str(stability.get("status") or "unavailable"),
@@ -5185,6 +5238,7 @@ def _build_historical_reclassification_report_from_paths(
                 validation.append(validation_entry)
         report["resolutionValidation"] = validation
     report["unavailableCountries"] = unavailable_countries[:10]
+    report["schemaFindings"] = schema_findings
     if len(unavailable_countries) > 10:
         report["truncation"]["truncated"] = True
     return report
@@ -8429,32 +8483,12 @@ def _build_single_country_review(
 
     if not month_columns:
         add_finding("blocker", "SC001", "candidate 缺少月份列。", {})
-    if schema_contract["missingMaterial"]:
-        add_finding("blocker", "SC009", "目标国家 candidate 缺少 active 业务列：" + "、".join(schema_contract["missingMaterial"]) + "。", {
-            "missingMaterialColumns": schema_contract["missingMaterial"],
-            "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
-            "missingNullOnlyColumns": schema_contract["missingNullOnly"],
-        })
-    if schema_contract["missingDeprecatedOptional"]:
-        add_finding(
-            "review",
-            "SC014",
-            "目标国家 candidate 缺少已停用的可选静态字段："
-            + "、".join(schema_contract["missingDeprecatedOptional"])
-            + "。Smart Merge 仅在配置键匹配且 active 旧值一致时沿用旧值。",
-            {
-                "missingDeprecatedOptionalColumns": schema_contract[
-                    "missingDeprecatedOptional"
-                ],
-                "activePopulatedRowsByColumn": {
-                    column: int(
-                        (~_series_missing_value_mask(active_frame[column])).sum()
-                    )
-                    for column in schema_contract["missingDeprecatedOptional"]
-                },
-                "carryForwardPolicy": "consistent_active_key_values_only",
-                "unmatchedPolicy": "leave_null",
-            },
+    findings.extend(_schema_contract_review_findings(country, schema_contract))
+    if artifacts.get("candidateScope") == "full_smart_merge":
+        findings.extend(
+            item for item in artifacts.get("sourceReviewWarnings", [])
+            if item.get("target") == country
+            and not any(current.get("ruleId") == item.get("ruleId") for current in findings)
         )
     if schema_contract["missingDerivedYtd"]:
         add_finding("review", "SC013", "目标国家 candidate 缺少旧月份 YTD 派生列：" + "、".join(schema_contract["missingDerivedYtd"]) + "。", {
@@ -8491,7 +8525,15 @@ def _build_single_country_review(
     if negative_sales_count:
         add_finding("blocker", "SC005", "目标国家 candidate 存在负销量。", {"negativeSalesCells": negative_sales_count})
     if len(doubled_months) >= SALES_DOUBLING_MIN_MONTH_COUNT:
-        add_finding("blocker", "SC006", "目标国家 candidate 疑似销量翻倍。", {"months": doubled_months})
+        add_finding("review", "SC006", "目标国家 candidate 疑似销量翻倍；发布时须明确确认。", {
+            "months": doubled_months,
+            "samples": [
+                {"month": month, "activeSales": active_sales[month],
+                 "candidateSales": candidate_sales[month],
+                 "ratio": candidate_sales[month] / active_sales[month]}
+                for month in doubled_months[:SALES_DOUBLING_SAMPLE_LIMIT]
+            ],
+        })
     keep_active_validation_failed = bool(
         isinstance(reclassification_resolution, dict)
         and reclassification_resolution.get("status") == "resolved"
@@ -9202,6 +9244,26 @@ def get_jato_monthly_update_review(
             candidate_path=candidate_path,
         )
     )
+    findings.extend(historical_reclassification_report.get("schemaFindings", []))
+    existing_warning_keys = {(item.get("ruleId"), item.get("target")) for item in findings}
+    findings.extend(
+        item for item in artifacts.get("sourceReviewWarnings", [])
+        if isinstance(item, dict) and item.get("ruleId") == "SC014"
+        and (item.get("ruleId"), item.get("target")) not in existing_warning_keys
+    )
+    if (
+        reference_path is not None and reference_path.suffix == ".parquet"
+        and candidate_path is not None and candidate_path.suffix == ".parquet"
+        and reference_path.exists() and candidate_path.exists()
+    ):
+        for anomaly in _find_publish_sales_doubling_anomalies(
+            active_parquet_path=reference_path, candidate_parquet_path=candidate_path,
+        ):
+            findings.append({
+                "severity": "review", "scope": "country", "target": anomaly["country"],
+                "ruleId": "SC006", "message": "疑似销量翻倍；请核对月份与新旧销量，发布时明确确认。",
+                "metrics": anomaly, "suggestedAction": "manual_review_required",
+            })
     resolution_validation = (
         historical_reclassification_report.get("resolutionValidation")
         if isinstance(
@@ -9847,6 +9909,8 @@ def approve_jato_monthly_update_review(
     triggered_by: str,
     decision: str,
     note: str | None = None,
+    expected_candidate_fingerprint: str | None = None,
+    accepted_warning_rules: Any = None,
 ) -> dict[str, Any]:
     normalized_decision = decision.strip().lower()
     if normalized_decision not in {"approve", "reject"}:
@@ -9912,6 +9976,41 @@ def approve_jato_monthly_update_review(
         candidate_fingerprint = str(
             review.get("candidateFingerprint") or ""
         ).strip()
+        if (
+            expected_candidate_fingerprint is not None
+            and expected_candidate_fingerprint != candidate_fingerprint
+        ):
+            raise HTTPException(status_code=409, detail={
+                "blockerType": "stale_candidate",
+                "message": "Candidate 已变化，不能批准未查看的新结果；请重新 Review。",
+            })
+        accepted_warnings = []
+        if normalized_decision == "approve":
+            if accepted_warning_rules is not None and (
+                not isinstance(accepted_warning_rules, list)
+                or any(not isinstance(rule, str) for rule in accepted_warning_rules)
+            ):
+                raise HTTPException(status_code=400, detail="acceptedWarningRules 必须是规则编号数组。")
+            required_warnings = [
+                item for item in (findings or [])
+                if isinstance(item, dict) and item.get("severity") == "review"
+                and item.get("ruleId") in {"SC006", "SC014"}
+            ]
+            if required_warnings and (
+                expected_candidate_fingerprint != candidate_fingerprint
+                or any(item["ruleId"] not in (accepted_warning_rules or []) for item in required_warnings)
+            ):
+                raise HTTPException(status_code=409, detail={
+                    "blockerType": "review_warnings_unacknowledged",
+                    "message": "请核对可选属性缺失／疑似翻倍警告，并明确确认当前 Candidate。",
+                    "rules": sorted({item["ruleId"] for item in required_warnings}),
+                })
+            accepted_warnings = required_warnings
+            if (
+                artifacts.get("candidateScope") != "full_smart_merge"
+                and review.get("timeAxisCheck", {}).get("removedMonths")
+            ):
+                raise HTTPException(status_code=409, detail="请先生成保留历史月份的完整 Candidate，再确认发布。")
         if not re.fullmatch(r"[0-9a-f]{64}", candidate_fingerprint):
             raise HTTPException(
                 status_code=409,
@@ -9952,6 +10051,7 @@ def approve_jato_monthly_update_review(
             "candidateFingerprint": candidate_fingerprint,
             "activeBaseFingerprint": candidate_active_fingerprint,
             "note": str(note or "").strip() or None,
+            "acceptedWarnings": accepted_warnings,
         }
         if (
             normalized_decision == "approve"
@@ -10515,11 +10615,29 @@ def publish_jato_monthly_update_job(
     *,
     job_id: str,
     triggered_by: str,
+    expected_candidate_fingerprint: str | None = None,
+    accepted_warning_rules: Any = None,
 ) -> dict[str, Any]:
     with _monthly_update_worker_start_window(
         action="排队 Publish",
         excluding_job_id=job_id,
     ):
+        if expected_candidate_fingerprint is not None:
+            state = _load_job_state(job_id)
+            pending = _pending_operation(state) or {}
+            publication = state.get("publication") or {}
+            if publication.get("publishedAt") or (
+                pending.get("type") == "publish"
+                and pending.get("status") in {"queued", "running"}
+            ):
+                if (state.get("reviewApproval") or {}).get("candidateFingerprint") != expected_candidate_fingerprint:
+                    raise HTTPException(status_code=409, detail="发布候选与本次确认不一致，请重新 Review。")
+            else:
+                approve_jato_monthly_update_review(
+                    job_id=job_id, triggered_by=triggered_by, decision="approve",
+                    expected_candidate_fingerprint=expected_candidate_fingerprint,
+                    accepted_warning_rules=accepted_warning_rules,
+                )
         return _publish_jato_monthly_update_job_with_job_lock(
             job_id=job_id,
             triggered_by=triggered_by,
@@ -10955,6 +11073,15 @@ def _publish_jato_monthly_update_job_locked(
             active_parquet_path=active_paths["parquet"],
             candidate_parquet_path=source_paths["parquet"],
         )
+        accepted_doubling_countries = {
+            str(item.get("target") or "").strip().casefold()
+            for item in approval.get("acceptedWarnings", [])
+            if isinstance(item, dict) and item.get("ruleId") == "SC006"
+        }
+        sales_doubling_anomalies = [
+            item for item in sales_doubling_anomalies
+            if str(item.get("country") or "").strip().casefold() not in accepted_doubling_countries
+        ]
         if sales_doubling_anomalies:
             rendered = _render_sales_doubling_anomalies(sales_doubling_anomalies)
             raise HTTPException(
@@ -10962,8 +11089,8 @@ def _publish_jato_monthly_update_job_locked(
                 detail={
                     "blockerType": "sales_doubling",
                     "message": (
-                        "publish 检测到 candidate 疑似重复合并，多个重叠月份销量约为 "
-                        f"当前 active 的 2x：{rendered}。请先重建 candidate 或回滚到正确 active。"
+                        "多个重叠月份销量约为 "
+                        f"active 的 2x：{rendered}。请在 Review 核对并确认当前候选的 SC006 警告。"
                     ),
                     "anomalies": [
                         {
@@ -12360,12 +12487,12 @@ def _build_upload_ingest_digest(
                 )
             )
         if not advanced_countries and not regressed_countries:
-            blockers.append(
+            warnings.append(
                 issue(
                     "NO_COUNTRY_ADVANCED",
-                    "上传没有推进任何国家的最新月份，属于重复或同月文件。",
+                    "上传未推进最新月份，将按同月修订进入 Review；默认保留 active 历史。",
                     issue_countries=unchanged_countries,
-                    source_feedback="无需重新上传同月文件；请提供至少一个国家晚于 active 的最新月份。",
+                    source_feedback="如需修改历史，请在 Review 明确选择 use_latest；否则保留 active，不重复累计。",
                 )
             )
         elif unchanged_countries:
@@ -16745,18 +16872,6 @@ def _keep_active_history_country_frame(
         for month in month_columns
         if month not in historical_months
     ]
-    if not any(
-        _time_sort_key(month) > _time_sort_key(active_latest)
-        for month in future_months
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "keep_active candidate 没有晚于 active 的月份，"
-                "不能生成推进后的完整 candidate。"
-            ),
-        )
-
     active_expected = (
         active[historical_months]
         .apply(pd.to_numeric, errors="coerce")
@@ -16827,6 +16942,22 @@ def _keep_active_history_country_frame(
                 },
             )
 
+    if not future_months:
+        return active.reset_index(drop=True), {
+            "policy": "keep_active",
+            "activeLatestMonth": active_latest,
+            "historicalMonthsFrom": "active",
+            "futureMonthsFrom": "candidate",
+            "historicalMonthCount": len(historical_months),
+            "preservedHistoricalMonths": historical_months,
+            "futureMonthCount": 0,
+            "activeInputRows": int(len(active_frame)),
+            "candidateInputRows": int(len(candidate_frame)),
+            "outputRows": int(len(active)),
+            "exactStaticKeyColumnCount": len(key_columns),
+            "monthBoundaryCheck": "pass",
+        }
+
     combined = pd.DataFrame(
         {
             column: pd.concat(
@@ -16865,9 +16996,7 @@ def _keep_active_history_country_frame(
     # Derived totals must follow the chosen monthly slices, not stale uploaded
     # YTD values (which may include history that keep_active deliberately ignores).
     for column in all_columns:
-        ytd_match = re.fullmatch(
-            r"YTD\s+(\d{4})\s+\(([A-Za-z]{3})\)", column, re.IGNORECASE,
-        )
+        ytd_match = YTD_COLUMN_PATTERN.fullmatch(column)
         if ytd_match or YEAR_COLUMN_PATTERN.fullmatch(column):
             year = ytd_match.group(1) if ytd_match else column
             end = f"{year} {ytd_match.group(2)}" if ytd_match else f"{year} Dec"
@@ -17989,7 +18118,7 @@ def _smart_merge_parquet_streaming(
                     if (
                         history_policy is None
                         and _time_sort_key(candidate_latest[candidate_country])
-                        > _time_sort_key(active_latest[active_country])
+                        >= _time_sort_key(active_latest[active_country])
                     ):
                         history_policy = "keep_active"
                     history_summary: dict[str, Any] = {
@@ -18720,6 +18849,11 @@ def _create_smart_merge_candidate_locked(
         raise HTTPException(status_code=409, detail="找不到 active 数据集，不能执行 Smart Merge。")
     review = get_jato_monthly_update_review(job_id)
     historical_report = review.get("historicalReclassificationReport")
+    artifacts["sourceReviewWarnings"] = [
+        item for item in review.get("reviewFindings", [])
+        if isinstance(item, dict) and item.get("ruleId") == "SC014"
+        and item.get("severity") == "review"
+    ]
     resolution = _historical_reclassification_resolution(payload)
     if (
         isinstance(historical_report, dict)

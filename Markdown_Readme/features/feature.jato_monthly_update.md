@@ -3,6 +3,28 @@
 ## Status
 implemented
 
+### 2026-11-14 warning policy and approval interaction (validated locally)
+
+- Scope: optional-attribute warnings, explicit candidate-bound acceptance of
+  suspected sales doubling, same-month corrections and preserved omitted history.
+- Remove the separate Approve Review dialog/button from the normal UI. One final
+  publish confirmation reuses the existing approval and isolated publish APIs;
+  it never automatically publishes after Smart Merge or reuses an old approval.
+- Reuse current schema classification, carry-forward, country history decisions,
+  Review bundle and job state. No migration, dependency or policy-control system.
+- Local validation: 347 monthly/backend + raw-compare tests; all 697 frontend
+  tests; TypeScript, production Vite build, style and router regression pass.
+  Coverage includes core/optional fields, overlap, same-month keep/use-latest,
+  stale consent, country-bound doubling acceptance and retained source warnings.
+- Headless Chrome with local mocked APIs verifies cancel makes no publish call,
+  one final confirmation makes exactly one publish request and no separate
+  approval request, and a stale response stays in the confirmation dialog.
+  No real monthly data was uploaded, retried or published.
+- Pending: PR/CI and Candidate verification; Active remains unchanged.
+- This work is isolated from PR #313; only its still-valid monthly merge fixes
+  may be reused, not unrelated Order Genius/login changes. Active is untouched.
+- Authoritative rules: [data lifecycle runbook](../Fullstack/04_DevOps/JATO_MONTHLY_UPDATE_DATA_LIFECYCLE_2026-05-17.md#2026-11-14-optional-attributes-explicit-warnings-and-one-publish-confirmation).
+
 ### 2026-10-29 static carry-forward collision correction (validated locally)
 
 - Actual 4c inspection: Finland's raw advancing rows have no normalized static

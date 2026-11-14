@@ -882,13 +882,13 @@ def build_review_findings(
         )
     if time_axis_check["removedMonths"]:
         add_finding(
-            "blocker",
+            "review",
             "global",
             "timeAxis",
             "R005",
-            "候选文件缺少 baseline 已存在的月份列。",
+            "上传未提供部分历史月份；生成完整 Candidate 时须保留 Active，不得补零或删除。",
             {"removedMonths": time_axis_check["removedMonths"]},
-            "reject_input_batch",
+            "manual_review_required",
         )
     if scope_summary["removedCountries"]:
         add_finding(
@@ -1030,13 +1030,13 @@ def build_review_findings(
             )
         elif status == "regressed_coverage":
             add_finding(
-                "blocker",
+                "review",
                 "country",
                 country,
                 "R204",
-                "国家月份覆盖发生退化。",
+                "上传省略部分历史月份；完整 Candidate 仍须保留 Active 的这些月份。",
                 {"removedMonths": entry["removedMonths"]},
-                "reject_input_batch",
+                "manual_review_required",
             )
 
     for summary in overlap_summaries:

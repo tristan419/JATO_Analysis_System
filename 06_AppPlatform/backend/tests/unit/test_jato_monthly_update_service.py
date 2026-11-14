@@ -2978,8 +2978,9 @@ def test_single_country_schema_contract_downgrades_deprecated_optional_columns()
     assert contract["missingDeprecatedOptional"] == [
         "Base price",
         "MSRP including delivery charge",
+        "Seating capacity",
     ]
-    assert contract["missingMaterial"] == ["Seating capacity"]
+    assert contract["missingMaterial"] == []
     assert contract["extra"] == ["MSRP规整"]
 
 
@@ -3030,7 +3031,7 @@ def test_forward_month_review_still_requires_overlap_revision_decision() -> None
     assert stability["historicalReclassification"]["decisionRequired"] is True
 
 
-def test_missing_history_without_forward_month_stays_blocked() -> None:
+def test_same_month_patch_preserves_omitted_history() -> None:
     stability = jato_monthly_update_service._single_country_historical_sales_stability(
         country="芬兰",
         active_frame=pd.DataFrame({"2023 Jan": [7], "2026 Aug": [10]}),
@@ -3038,13 +3039,8 @@ def test_missing_history_without_forward_month_stays_blocked() -> None:
         active_latest_month="2026 Aug",
         allow_forward_patch=True,
     )
-    assert stability["status"] == "fail"
-    assert stability["reason"] == "candidate_missing_historical_months"
-    assert "0 处历史销量差异" not in (
-        jato_monthly_update_service._single_country_source_feedback(
-            rule_id="SC011", country="芬兰", metrics=stability,
-        ) or ""
-    )
+    assert stability["status"] == "pass"
+    assert stability["preservedHistoricalMonths"] == ["2023 Jan"]
 
 
 @pytest.mark.parametrize("complete", [False, True])

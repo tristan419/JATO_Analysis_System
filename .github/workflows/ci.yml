@@ -208,6 +208,8 @@ jobs:
             tests/unit/test_material_assets.py \
             tests/unit/test_db_session.py \
             tests/unit/test_jato_monthly_update_enabled_gate.py \
+            tests/unit/test_jato_monthly_update*.py \
+            ../../03_Scripts/tests/test_raw_compare_review.py \
             tests/unit/test_readiness_service.py \
             tests/unit/test_security.py \
             tests/unit/test_order_genius_vehicle_allocation.py \
@@ -226,7 +228,7 @@ jobs:
           exit "$status"
 
   fullstack-frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:

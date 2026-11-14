@@ -22,6 +22,7 @@ vi.mock("../../api/client", () => ({
     getJatoMonthlyUpdateReview: vi.fn(),
     resolveJatoMonthlyUpdateHistoricalReclassification: vi.fn(),
     approveJatoMonthlyUpdateReview: vi.fn(),
+    publishJatoMonthlyUpdateJob: vi.fn(),
     promoteCurrentActiveToJatoBaseline: vi.fn(),
     runJatoMonthlyUpdateCleanup: vi.fn(),
     createJatoMonthlyUpdateJob: vi.fn(),
@@ -311,7 +312,7 @@ describe("JATO historical reclassification review interaction", () => {
     expect(keepActiveRadios).toHaveLength(2);
     expect(useLatestRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
     expect(keepActiveRadios.every((radio) => (radio as HTMLInputElement).checked)).toBe(true);
-    expect(screen.getByText("2/2")).toBeTruthy();
+    expect(await screen.findByText("2/2")).toBeTruthy();
 
     expect(screen.getByRole("group", {
       name: "批量设置所有国家的历史数据处理方式",
@@ -648,15 +649,13 @@ describe("JATO historical reclassification review interaction", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
 
-    expect(await screen.findByRole("button", { name: "Approve Review" })).toBeTruthy();
-    expect(screen.getByText("2/2")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Approve Review" })).toBeNull();
+    expect(await screen.findByText("2/2")).toBeTruthy();
     expect(screen.getByText(/已应用选择：当前完整 Candidate 使用本次 washed 文件/)).toBeTruthy();
     expect(screen.getByText(/最终 Candidate 复核通过：已保留当前 active 历史/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /应用选择并生成完整 Candidate/ })).toBeNull();
-    const publishBeforeApproval = screen.getByRole("button", {
-      name: "先批准 Review 再 Publish",
-    });
-    expect((publishBeforeApproval as HTMLButtonElement).disabled).toBe(true);
+    const publishButton = screen.getByRole("button", { name: "Publish Candidate" });
+    expect((publishButton as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByText(/部分国家候选为隔离 Review 产物/)).toBeNull();
 
     vi.mocked(api.listJatoMonthlyUpdateJobs).mockResolvedValue({
@@ -664,20 +663,24 @@ describe("JATO historical reclassification review interaction", () => {
       items: [approvedJob],
     });
     vi.mocked(api.getJatoMonthlyUpdateJob).mockResolvedValue({ item: approvedJob });
-    fireEvent.click(screen.getByRole("button", { name: "Approve Review" }));
+    vi.mocked(api.publishJatoMonthlyUpdateJob).mockResolvedValue({ item: approvedJob });
+    fireEvent.click(publishButton);
 
     const approvalDialog = await screen.findByRole("dialog", {
-      name: "确认批准 Review",
+      name: "确认发布 Candidate",
     });
     expect(api.approveJatoMonthlyUpdateReview).not.toHaveBeenCalled();
-    expect(approvalDialog.textContent).toContain("批准不等于发布");
+    expect(approvalDialog.textContent).toContain("确认后会改变 active 数据");
     fireEvent.click(within(approvalDialog).getByRole("button", {
-      name: "确认批准",
+      name: "确认发布",
     }));
 
     await waitFor(() => {
-      expect(api.approveJatoMonthlyUpdateReview).toHaveBeenCalledWith("jato-review-1");
+      expect(api.publishJatoMonthlyUpdateJob).toHaveBeenCalledWith("jato-review-1", {
+        expectedCandidateFingerprint: "candidate-sha", acceptedWarningRules: [],
+      });
     });
+    expect(api.approveJatoMonthlyUpdateReview).not.toHaveBeenCalled();
     const publishAfterApproval = await screen.findByRole("button", {
       name: "Publish Candidate",
     });
@@ -716,7 +719,7 @@ describe("JATO historical reclassification review interaction", () => {
     const warning = await screen.findByText(/高风险选择已应用/);
     expect(warning.className).toContain("alert-danger");
     expect(warning.textContent).toContain("历史 Dashboard、同比和份额会变化");
-    expect(screen.getByRole("button", { name: "Approve Review" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Publish Candidate" })).toBeTruthy();
     expect(screen.queryByRole("group", {
       name: "批量设置所有国家的历史数据处理方式",
     })).toBeNull();
@@ -912,8 +915,8 @@ describe("JATO historical reclassification review interaction", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
 
-    expect(await screen.findAllByText(/最终 Candidate 历史复核缺失或失败/)).toHaveLength(2);
-    expect((screen.getByRole("button", { name: "Approve Review" }) as HTMLButtonElement).disabled)
+    expect(await screen.findAllByText(/最终 Candidate 历史复核缺失或失败/)).toHaveLength(1);
+    expect((screen.getByRole("button", { name: "Publish Candidate" }) as HTMLButtonElement).disabled)
       .toBe(true);
     expect(screen.getByText(/当前不能批准 Publish/)).toBeTruthy();
   });

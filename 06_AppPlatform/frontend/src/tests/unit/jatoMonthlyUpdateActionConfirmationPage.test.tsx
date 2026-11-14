@@ -127,7 +127,7 @@ async function renderJob(job: JatoMonthlyUpdateJob): Promise<void> {
 
 async function openApprovedReview(): Promise<void> {
   fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
-  expect(await screen.findByRole("button", { name: "Review Approved" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Publish Candidate" })).toBeTruthy();
 }
 
 async function submitTwiceAndReadAlert(
@@ -216,11 +216,40 @@ describe("JATO remaining action confirmation dialogs", () => {
 
     const alert = await submitTwiceAndReadAlert(dialog, "确认发布");
     expect(api.publishJatoMonthlyUpdateJob).toHaveBeenCalledTimes(1);
-    expect(api.publishJatoMonthlyUpdateJob).toHaveBeenCalledWith(publishJob.jobId);
+    expect(api.publishJatoMonthlyUpdateJob).toHaveBeenCalledWith(publishJob.jobId, {
+      expectedCandidateFingerprint: candidateFingerprint, acceptedWarningRules: [],
+    });
     expect(alert.textContent).toContain("Candidate 指纹已过期");
     expect(alert.textContent).toContain("重新 Review");
     expect(screen.getByRole("dialog", { name: "确认发布 Candidate" })).toBeTruthy();
     expectNoNativePrompt();
+  });
+
+  it("accepts warnings and approves/publishes with one confirmation, never a separate approval call", async () => {
+    const job = makeJob({ reviewApproval: null });
+    const review = makeReview();
+    review.reviewFindings = [
+      { ruleId: "SC014", severity: "review", scope: "country", target: "丹麦",
+        message: "缺少 Maximum power hp/PS", metrics: { missingDeprecatedOptionalColumns: ["Maximum power hp/PS"] }, suggestedAction: "review" },
+      { ruleId: "SC006", severity: "review", scope: "country", target: "匈牙利",
+        message: "疑似销量翻倍", metrics: { months: ["2026 May", "2026 Jun"] }, suggestedAction: "review" },
+    ];
+    vi.mocked(api.getJatoMonthlyUpdateReview).mockResolvedValue({ item: review });
+    vi.mocked(api.publishJatoMonthlyUpdateJob).mockRejectedValue(new Error("409 candidate changed"));
+    await renderJob(job);
+    await openApprovedReview();
+    expect(screen.queryByRole("button", { name: "Approve Review" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Publish Candidate" }));
+    const dialog = await screen.findByRole("dialog", { name: "确认发布 Candidate" });
+    expect(dialog.textContent).toContain("Maximum power hp/PS");
+    expect(dialog.textContent).toContain("疑似销量翻倍");
+    expect(api.publishJatoMonthlyUpdateJob).not.toHaveBeenCalled();
+    await submitTwiceAndReadAlert(dialog, "接受警告并发布 / Accept & publish");
+    expect(api.publishJatoMonthlyUpdateJob).toHaveBeenCalledTimes(1);
+    expect(api.publishJatoMonthlyUpdateJob).toHaveBeenCalledWith(job.jobId, {
+      expectedCandidateFingerprint: candidateFingerprint, acceptedWarningRules: ["SC014", "SC006"],
+    });
+    expect(api.approveJatoMonthlyUpdateReview).not.toHaveBeenCalled();
   });
 
   it("confirms rollback once and keeps a rejected restore inside the dialog", async () => {
