@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import traceback
+import unicodedata
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,7 +54,7 @@ STATE_FILENAME = "job_state.json"
 LOG_FILENAME = "job.log"
 UPLOAD_STATE_FILENAME = "upload_state.json"
 REVIEW_BUNDLE_FILENAME = "review_bundle.json"
-REVIEW_BUNDLE_SCHEMA_VERSION = 6
+REVIEW_BUNDLE_SCHEMA_VERSION = 7
 CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION = 2
 CANDIDATE_ARTIFACT_FIELDS = (
     ("parquet", "stagingOutputPath"),
@@ -397,6 +398,10 @@ DEPRECATED_OPTIONAL_STATIC_COLUMNS = frozenset(
         "wheelbase (mm)",
         "品牌 (奇瑞集团整合)",
     }
+)
+OPTIONAL_STATIC_COLUMN_NAME_KEYS = frozenset(
+    re.sub(r"\s+", "", unicodedata.normalize("NFKC", column)).casefold()
+    for column in DEPRECATED_OPTIONAL_STATIC_COLUMNS
 )
 SC011_LATEST_WASHED_CONFIRMATION_SCOPE = {
     "comparedThrough": "2026 Mar",
@@ -2200,27 +2205,49 @@ def _is_derived_ytd_column(column: str) -> bool:
     return bool(YTD_COLUMN_PATTERN.fullmatch(str(column).strip()))
 
 
+def _is_optional_static_column(column: str) -> bool:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", column)).casefold() in OPTIONAL_STATIC_COLUMN_NAME_KEYS
+
+
 def _single_country_schema_contract(*, active_frame: pd.DataFrame, candidate_frame: pd.DataFrame) -> dict[str, list[str]]:
     active_months = set(_detect_month_columns(list(active_frame.columns)))
     candidate_months = set(_detect_month_columns(list(candidate_frame.columns)))
     active_static = set(active_frame.columns) - active_months
     candidate_static = set(candidate_frame.columns) - candidate_months
     missing = sorted(active_static - candidate_static)
+    # Preserved historical rows must not conceal a lost field on new sales.
+    active_latest = _latest_month_from_frame(active_frame)
+    new_months = [
+        month for month in candidate_months
+        if active_latest is not None and _time_sort_key(month) > _time_sort_key(active_latest)
+    ]
+    supplied_rows: slice | pd.Series = slice(None)
+    if new_months:
+        new_sales = candidate_frame[new_months].apply(pd.to_numeric, errors="coerce").fillna(0)
+        new_sales_rows = new_sales.ne(0).any(axis=1)
+        if new_sales_rows.any():
+            supplied_rows = new_sales_rows
+    empty = sorted(
+        column for column in active_static & candidate_static
+        if _series_has_data(active_frame[column])
+        and not _series_has_data(candidate_frame.loc[supplied_rows, column])
+    )
     null_only: list[str] = []
     derived_ytd: list[str] = []
     deprecated_optional: list[str] = []
     material: list[str] = []
-    for column in missing:
+    for column in sorted(set(missing) | set(empty)):
         if not _series_has_data(active_frame[column]):
             null_only.append(column)
         elif _is_derived_ytd_column(column) or YEAR_COLUMN_PATTERN.fullmatch(column):
             derived_ytd.append(column)
-        elif column in DEPRECATED_OPTIONAL_STATIC_COLUMNS:
+        elif _is_optional_static_column(column):
             deprecated_optional.append(column)
         else:
             material.append(column)
     return {
         "missing": missing,
+        "empty": empty,
         "missingNullOnly": null_only,
         "missingDerivedYtd": derived_ytd,
         "missingDeprecatedOptional": deprecated_optional,
@@ -2245,8 +2272,8 @@ def _schema_contract_review_findings(
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for key, rule_id, severity, message in (
-        ("missingMaterial", "SC009", "blocker", "缺少必要业务列"),
-        ("missingDeprecatedOptional", "SC014", "review", "缺少可选属性；仅在配置匹配且旧值唯一时沿用，否则保留空值"),
+        ("missingMaterial", "SC009", "blocker", "必要业务列缺失或整列为空 / Required fields missing or entirely empty"),
+        ("missingDeprecatedOptional", "SC014", "review", "可选属性缺失或整列为空；仅在配置匹配且旧值唯一时沿用，否则保留空值 / Optional fields missing or entirely empty"),
     ):
         columns = contract[key]
         if not columns:
@@ -2256,6 +2283,7 @@ def _schema_contract_review_findings(
             "missingDeprecatedOptionalColumns": contract["missingDeprecatedOptional"],
             "missingDerivedYtdColumns": contract["missingDerivedYtd"],
             "missingNullOnlyColumns": contract["missingNullOnly"],
+            "emptyColumns": contract.get("empty", []),
         }
         findings.append({
             "severity": severity, "scope": "country", "target": country,
@@ -3405,7 +3433,7 @@ def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict
     if rule_id == "SC008":
         return "本次无法证明未上传国家未被影响。请保留单国文件的国家范围、源文件哈希和分区清单，以便重新提交时完成隔离校验。"
     if rule_id == "SC009":
-        return f"请在 {country} 的洗数后 Data Export 中保留业务字段：{columns('missingMaterialColumns') or '见 Review 明细'}。这些列在当前 active 数据中有实际值，不能用 Retail price 或其他相近字段自动替代；请从原始 JATO 导出补齐后重新输出同一月份文件。"
+        return f"请在 {country} 的洗数后 Data Export 中补齐业务字段及其值：{columns('missingMaterialColumns') or '见 Review 明细'}。这些列在当前 active 数据中有实际值，不能只留空表头，也不能用 Retail price 或其他相近字段自动替代；请从原始 JATO 导出补齐后重新输出同一月份文件。 Restore required fields and their values; empty headers or substitute fields do not resolve this blocker."
     if rule_id == "SC010":
         return f"{country} 文件新增字段：{columns('extraColumns') or '见 Review 明细'}。请提供字段定义、单位和是否应保留的确认；新增列不应覆盖或改名现有业务列。"
     if rule_id == "SC011":
@@ -3511,7 +3539,7 @@ def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict
     if rule_id == "SC013":
         return f"{country} 缺少旧月份 YTD 派生列：{columns('missingDerivedYtdColumns') or '见 Review 明细'}。这不是发布 blocker；请确认最新月份的 YTD 字段仍由 Jan 至当月销量计算，并在后续导出中保持 YTD 列命名和口径一致。"
     if rule_id == "SC014":
-        return f"{country} 缺少可选属性：{columns('missingDeprecatedOptionalColumns') or '见 Review 明细'}。确认后可继续，无需为本次月更补齐；系统只会在配置键匹配且 active 旧值一致时沿用旧值，新配置或旧值冲突的配置保持为空，不补零，也不会用 Retail price 等相近字段冒充原字段。"
+        return f"{country} 可选属性缺失或整列为空：{columns('missingDeprecatedOptionalColumns') or '见 Review 明细'}。确认后可继续，无需为本次月更补齐；系统只会在配置键匹配且 active 旧值一致时沿用旧值，新配置或旧值冲突的配置保持为空，不补零，也不会用 Retail price 等相近字段冒充原字段。 Optional attributes may remain empty after explicit confirmation."
     return None
 
 
@@ -16612,8 +16640,8 @@ def _carry_forward_deprecated_static_columns(
     """Inherit consistent active values without erasing uploaded distinctions."""
     columns = sorted(
         column
-        for column in DEPRECATED_OPTIONAL_STATIC_COLUMNS
-        if column in active_frame.columns
+        for column in active_frame.columns
+        if _is_optional_static_column(str(column))
         and (
             column not in candidate_frame.columns
             or bool(_series_missing_value_mask(candidate_frame[column]).any())
@@ -18848,6 +18876,17 @@ def _create_smart_merge_candidate_locked(
     if not active_paths["parquet"].exists():
         raise HTTPException(status_code=409, detail="找不到 active 数据集，不能执行 Smart Merge。")
     review = get_jato_monthly_update_review(job_id)
+    schema_blockers = [
+        item for item in review.get("reviewFindings", [])
+        if isinstance(item, dict) and item.get("ruleId") == "SC009"
+        and item.get("severity") == "blocker"
+    ]
+    if schema_blockers:
+        raise HTTPException(status_code=409, detail={
+            "blockerType": "review_blockers_present", "rules": ["SC009"],
+            "message": "请先补齐必要业务列及其值；Smart Merge 不会用空列消解 SC009。 Restore required fields before Smart Merge.",
+            "findings": schema_blockers,
+        })
     historical_report = review.get("historicalReclassificationReport")
     artifacts["sourceReviewWarnings"] = [
         item for item in review.get("reviewFindings", [])
