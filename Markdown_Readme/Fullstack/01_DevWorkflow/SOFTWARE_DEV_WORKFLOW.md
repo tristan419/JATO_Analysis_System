@@ -1,7 +1,9 @@
-# JATO Analysis System — 软件开发流程（2026-04-11）
+# JATO Analysis System — 软件开发流程（2026-07-23）
 
 > 本文档定义项目从需求到上线的完整开发流程。
 > 目标：让开发过程专业化、可审计、可复现。
+> 分支、worktree、发布协同和生产门禁的详细规则见
+> `WORKTREE_SESSION_GOVERNANCE.md`。
 
 ---
 
@@ -43,9 +45,11 @@
 
 按 `FULLSTACK_DEVELOPMENT_SPEC_2026-04-11.md` 第 4 节执行：
 
-1. 明确 contract owner（默认：后端 serializer）
-2. 后端先行 → 前端 type 对齐 → 页面实现
-3. 跨层变更前后端各至少补 1 条 unit test
+1. 从 latest remote `main` 创建独立 worktree 和 `codex/*` branch
+2. 明确 PR scope、owned files 和 shared-file owner
+3. 明确 contract owner（默认：后端 serializer）
+4. 后端先行 → 前端 type 对齐 → 页面实现
+5. 跨层变更前后端各至少补 1 条 unit test
 
 ### 2.4 测试阶段
 
@@ -61,7 +65,9 @@
 1. 按 `PR_CHECKLIST.md` 逐项勾选
 2. commit message 格式：`feat/fix/refactor(scope): 一句话描述`
 3. PR description 包含：变更目的、影响范围、验证步骤
-4. 如有新文档 → 更新 `ROADMAP.md`
+4. 声明 `Release-Group` / `Depends-On`；有依赖时按
+   `.github/RELEASE_COORDINATION.md` 添加 immutable contract
+5. 如有新文档 → 更新主入口或 `ROADMAP.md`
 
 ### 2.6 审核阶段
 
@@ -74,12 +80,20 @@
 
 ### 2.7 部署阶段
 
-按 `MANUAL_CICD.md` / `TENCENT_CLOUD_DEPLOY.md` 执行：
+治理边界按 `WORKTREE_SESSION_GOVERNANCE.md` 执行；机器发布契约以
+`.github/PRODUCTION_FRONTEND_RELEASE.md` 和 `.github/RELEASE_COORDINATION.md`
+为准：
 
-1. `git pull` on server
-2. 后端重启（systemd）
-3. 前端重新 build + nginx reload
-4. 远端 smoke check
+1. feature branch 只运行 CI/preview，不直接进入 production
+2. PR 审核后 merge 到受保护的 `main`
+3. release preflight 验证 current `main` 及未发布 PR 的 coordination contract
+4. CI 从目标 `main` 构建一次 immutable artifact
+5. production approval 后重新验证 target 仍是 current `main`
+6. `www` 和 `intl` 校验并部署同一 artifact
+7. 按审核顺序执行兼容 migration，完成双域名和关键 API smoke check
+
+服务器端不得 checkout、pull、切换或重新构建 feature branch；回滚只能使用已验证的
+production artifact。
 
 ### 2.8 验证阶段
 
@@ -97,6 +111,8 @@ Markdown_Readme/
 │   ├── ROADMAP.md                          # 唯一主索引
 │   ├── FULLSTACK_DEVELOPMENT_SPEC_*.md     # 开发规范
 │   ├── PR_CHECKLIST.md                     # PR 清单
+│   ├── 01_DevWorkflow/
+│   │   └── WORKTREE_SESSION_GOVERNANCE.md
 │   ├── TECH_PATH_*.md                      # 技术路径预研
 │   ├── STREAMLIT_VS_REACT_COMPARISON.md    # 功能对齐
 │   ├── FULLSTACK_LOCAL_DEBUG.md            # 调试指南
@@ -120,12 +136,17 @@ Markdown_Readme/
 
 ## 4. 分支策略
 
-当前采用 trunk-based + feature branch：
+当前采用受保护 `main` + 短生命周期 task branch：
 
-1. `main` 分支始终可部署
-2. 功能分支命名：`feat/<scope>-<brief>` / `fix/<scope>-<brief>`
-3. PR 合入前必须本地测试通过
-4. 不使用 `--force push` 除非与团队确认
+1. 一个 session = 一个 worktree = 一个 `codex/*` branch = 一个 PR
+2. 每个新任务从当时 latest remote `main` 开始，不维护固定长期业务 branch
+3. 原始混合观察区只读，不用于开发、提交、打包或部署
+4. `main` 始终可部署，并且是唯一生产来源
+5. feature / hotfix / integration branch 只运行 CI/preview
+6. integration branch 只用于临时冲突验证，不代替 release dependency contract
+7. 禁止直接 push `main`、force 覆盖和从旧 feature tree 发布
+
+完整规则见 `WORKTREE_SESSION_GOVERNANCE.md`。
 
 ---
 
@@ -150,7 +171,9 @@ PO 提需求后，开发者按以下规则确定文档动作：
 | 本地 | `check:frontend` 全过 | 不允许提交 |
 | 本地 | `pytest tests/unit` 全过 | 不允许提交 |
 | PR | checklist 完整勾选 | 退回修改 |
-| 部署后 | smoke check 通过 | 回滚到上一版本 |
+| PR | release coordination trailer / contract 一致 | 阻断合并 |
+| 部署 | target 为 current `main` + frozen plan + immutable artifact | 阻断上线 |
+| 部署后 | 双域名、backend、关键 API 和相邻功能 smoke check | 回滚上一已验证 artifact |
 
 ---
 
